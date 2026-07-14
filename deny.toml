@@ -1,0 +1,13 @@
+# Q-Oracle is the ONLY deny-list-EXEMPT repository (the Airlock boundary, POLICY-crypto.md §7).
+# Classical cryptography is permitted here and NOWHERE else; nothing in the organization may import
+# this repo. No code exists here before Wave F. License and advisory checks still apply.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = ["Apache-2.0", "MIT"]
+confidence-threshold = 0.9
+
