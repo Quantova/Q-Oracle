@@ -1,0 +1,9 @@
+[package]
+name = "q-codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Canonical byte-deterministic encoding for the Q-Oracle bridge fact and the Airlock envelope. Every value has exactly one valid encoding and a decoder rejects any input that is not the canonical form."
+
+[dependencies]
