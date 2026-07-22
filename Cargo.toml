@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/q-codec",
+    "crates/q-airlock",
+    "crates/q-attestor",
+    "crates/q-gateway",
+    "crates/q-watchtower",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+rust-version = "1.75"
+
+[workspace.dependencies]
+qtv-crypto = { path = "../Q-Crypto" }
+q-codec = { path = "crates/q-codec" }
+q-airlock = { path = "crates/q-airlock" }
+q-attestor = { path = "crates/q-attestor" }
+q-gateway = { path = "crates/q-gateway" }
+
+[profile.dev.package.qtv-crypto]
+opt-level = 3
