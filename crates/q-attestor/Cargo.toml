@@ -1,0 +1,16 @@
+[package]
+name = "q-attestor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The off-chain bonded operator service. A watcher confirms source-chain finality against its own trusted view, a translator produces the canonical ML-DSA attestation, node divergence triggers a safe halt, and DoS degrades to a safe halt. Signing is behind an HSM seam."
+
+[dependencies]
+q-codec = { workspace = true }
+q-airlock = { workspace = true }
+qtv-crypto = { workspace = true }
+
+[dev-dependencies]
+q-gateway = { workspace = true }
+q-airlock = { workspace = true }
