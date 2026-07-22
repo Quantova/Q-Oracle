@@ -1,0 +1,10 @@
+[package]
+name = "q-airlock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The Airlock ingress grammar. It admits exactly one ML-DSA attestation and one hash-based STARK. Any foreign artifact has no valid encoding at the boundary and is unparseable."
+
+[dependencies]
+q-codec = { workspace = true }

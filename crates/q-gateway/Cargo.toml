@@ -1,0 +1,17 @@
+[package]
+name = "q-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Executable reference model of the on-chain q-gateway contract. It verifies an ML-DSA attestation against the registered operator set, rejects the prove-nothing message, counts distinct signers against the threshold, consumes the reference before minting, and enforces per-asset and per-epoch caps, per-corridor finality, and reorg pause."
+
+[dependencies]
+q-codec = { workspace = true }
+q-airlock = { workspace = true }
+qtv-crypto = { workspace = true }
+
+[dev-dependencies]
+q-codec = { workspace = true }
+q-airlock = { workspace = true }
+qtv-crypto = { workspace = true }
