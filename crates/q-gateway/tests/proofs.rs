@@ -33,7 +33,7 @@ fn sign_over(op: &TestOp, message: &[u8], context: &[u8]) -> SignerSig {
 }
 
 fn sign_fact(op: &TestOp, fact: &BridgeFact) -> SignerSig {
-    sign_over(op, &fact.encode(), ATTEST_DOMAIN)
+    sign_over(op, &fact.attest_preimage(), ATTEST_DOMAIN)
 }
 
 fn deposit_fact(source_ref: [u8; 32], asset: [u8; 16], amount: u128) -> BridgeFact {
