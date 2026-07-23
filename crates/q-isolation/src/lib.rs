@@ -71,6 +71,14 @@ pub fn admit(bytes: &[u8]) -> Result<Crossing, Refused> {
     Ok(Crossing { kind, artifact })
 }
 
+pub fn admit_artifact(artifact: &Artifact) -> Result<Crossing, Refused> {
+    let bytes = match artifact {
+        Artifact::Attestation(envelope) => envelope.encode(),
+        Artifact::Stark(envelope) => envelope.encode(),
+    };
+    admit(&bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +173,13 @@ mod tests {
         assert_eq!(admit(&[0x00]), Err(Refused::Foreign));
         assert_eq!(admit(&[0x03, 0x03, 0x03]), Err(Refused::Foreign));
         assert_eq!(admit(&[]), Err(Refused::Foreign));
+    }
+
+    #[test]
+    fn admit_artifact_routes_each_variant_through_the_door() {
+        let crossed = admit_artifact(&Artifact::Attestation(attestation())).unwrap();
+        assert_eq!(crossed.kind, PqArtifact::MlDsaAttestation);
+        let crossed = admit_artifact(&Artifact::Stark(stark())).unwrap();
+        assert_eq!(crossed.kind, PqArtifact::HashStark);
     }
 }
