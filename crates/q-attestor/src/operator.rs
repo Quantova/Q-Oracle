@@ -113,7 +113,7 @@ impl<S: AttestationSigner> Operator<S> {
             return Err(OperatorError::AlreadySigned);
         }
 
-        let message = fact.encode();
+        let message = fact.attest_preimage();
         let signature = self.signer.sign(&message, ATTEST_DOMAIN);
         self.signed_refs.insert(lock.source_ref);
 
@@ -124,5 +124,64 @@ impl<S: AttestationSigner> Operator<S> {
                 signature: signature.to_vec(),
             },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::signer::{AttestationSigner, SoftSigner};
+    use qtv_crypto::ml_dsa::{self, SIGNATURE_BYTES};
+
+    fn ctx() -> CorridorContext {
+        CorridorContext {
+            source_chain: 1,
+            dest_chain: 9000,
+            route_id: 7,
+            required_confirmations: 6,
+        }
+    }
+
+    fn lock() -> ObservedLock {
+        ObservedLock {
+            source_chain: 1,
+            source_ref: [0x44u8; 32],
+            asset_id: [0x22u8; 16],
+            amount: 500,
+            recipient: [0x33u8; 32],
+            observed_height: 800_001,
+            confirmations: 6,
+        }
+    }
+
+    fn op() -> Operator<SoftSigner> {
+        let seed = [0x09u8; 32];
+        let mut o = Operator::new(SoftSigner::from_seed(0, &seed));
+        o.configure_corridor(ctx());
+        o
+    }
+
+    #[test]
+    fn signed_observation_verifies_over_the_attest_preimage() {
+        let mut operator = op();
+        let pk = SoftSigner::from_seed(0, &[0x09u8; 32]).public_key();
+        let signed = operator.observe_and_sign(&lock()).expect("final lock signs");
+
+        let mut sig = [0u8; SIGNATURE_BYTES];
+        sig.copy_from_slice(&signed.sig.signature);
+        let preimage = signed.fact.attest_preimage();
+        assert!(ml_dsa::verify(&pk, &preimage, &sig, ATTEST_DOMAIN));
+    }
+
+    #[test]
+    fn signature_is_bound_to_the_attest_context() {
+        let mut operator = op();
+        let pk = SoftSigner::from_seed(0, &[0x09u8; 32]).public_key();
+        let signed = operator.observe_and_sign(&lock()).expect("final lock signs");
+
+        let mut sig = [0u8; SIGNATURE_BYTES];
+        sig.copy_from_slice(&signed.sig.signature);
+        let preimage = signed.fact.attest_preimage();
+        assert!(!ml_dsa::verify(&pk, &preimage, &sig, b"QUANTOVA/Q-ORACLE/REORG/v1"));
     }
 }

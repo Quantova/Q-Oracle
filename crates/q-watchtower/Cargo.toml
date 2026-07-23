@@ -1,0 +1,11 @@
+[package]
+name = "q-watchtower"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Independent watchtowers that sit outside the operator set. Each checks that foreign escrow is at least the minted supply per origin-tagged asset and pauses the gateway automatically on any divergence."
+
+[dependencies]
+q-codec = { workspace = true }
+q-gateway = { workspace = true }
