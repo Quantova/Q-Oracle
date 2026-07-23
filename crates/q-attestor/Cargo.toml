@@ -10,7 +10,13 @@ description = "The off-chain bonded operator service. A watcher confirms source-
 q-codec = { workspace = true }
 q-airlock = { workspace = true }
 qtv-crypto = { workspace = true }
+q-prover-bridge = { path = "../q-prover-bridge" }
+q-isolation = { path = "../q-isolation" }
 
 [dev-dependencies]
 q-gateway = { workspace = true }
 q-airlock = { workspace = true }
+q-bls = { path = "../q-bls" }
+qlc-ethereum = { workspace = true }
+qlc-stark = { path = "../../../Q-Lightclient/crates/qlc-stark" }
+qtv-stark = { workspace = true }
