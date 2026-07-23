@@ -85,7 +85,7 @@ dependencies = [
  "q-airlock",
  "q-codec",
  "q-gateway",
- "qtv-crypto",
+ "qtv-crypto 0.3.0",
 ]
 
 [[package]]
@@ -105,7 +105,7 @@ name = "q-exits"
 version = "0.1.0"
 dependencies = [
  "q-codec",
- "qtv-crypto",
+ "qtv-crypto 0.3.0",
 ]
 
 [[package]]
@@ -115,7 +115,7 @@ dependencies = [
  "q-airlock",
  "q-codec",
  "q-gateway",
- "qtv-crypto",
+ "qtv-crypto 0.3.0",
 ]
 
 [[package]]
@@ -124,7 +124,17 @@ version = "0.1.0"
 dependencies = [
  "q-airlock",
  "q-codec",
- "qtv-crypto",
+ "qtv-crypto 0.3.0",
+]
+
+[[package]]
+name = "q-prover-bridge"
+version = "0.1.0"
+dependencies = [
+ "q-airlock",
+ "q-codec",
+ "qtv-crypto 0.3.0",
+ "qtv-stark",
 ]
 
 [[package]]
@@ -134,7 +144,7 @@ dependencies = [
  "q-airlock",
  "q-codec",
  "q-gateway",
- "qtv-crypto",
+ "qtv-crypto 0.3.0",
 ]
 
 [[package]]
@@ -164,6 +174,18 @@ version = "0.1.0"
 [[package]]
 name = "qtv-crypto"
 version = "0.3.0"
+
+[[package]]
+name = "qtv-crypto"
+version = "0.3.0"
+source = "git+https://github.com/Quantova/Q-Crypto.git?tag=v0.3.0#4c0bdcb7dce9d2de6f9f510b0695377321076fef"
+
+[[package]]
+name = "qtv-stark"
+version = "0.1.0"
+dependencies = [
+ "qtv-crypto 0.3.0 (git+https://github.com/Quantova/Q-Crypto.git?tag=v0.3.0)",
+]
 
 [[package]]
 name = "quote"
