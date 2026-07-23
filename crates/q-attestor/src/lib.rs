@@ -8,6 +8,18 @@ pub mod watcher;
 
 pub use aggregator::{Aggregator, AggregatorError};
 pub use operator::{HaltReason, Operator, OperatorError, OperatorState, SignedObservation};
-pub use signer::{AttestationSigner, SoftSigner};
+pub use signer::{AttestationSigner, EnclaveSigner, SigningBackend, SoftBackend, SoftSigner};
 pub use translator::translate;
-pub use watcher::{CorridorContext, FinalityPolicy, ObservedLock, Watcher, WatcherError};
+pub use watcher::{CorridorContext, FinalityPolicy, ObservedLock, Watcher, WatcherError, WatcherSet};
+
+#[cfg(test)]
+mod exports {
+    use crate::{AttestationSigner, EnclaveSigner, SoftBackend, WatcherSet};
+
+    #[test]
+    fn the_crate_root_surface_is_reachable() {
+        let signer = EnclaveSigner::new(SoftBackend::from_seed(0, &[0u8; 32]));
+        assert_eq!(signer.operator_id(), 0);
+        assert!(WatcherSet::new().chains().is_empty());
+    }
+}
