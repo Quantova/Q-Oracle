@@ -22,6 +22,7 @@ rust-version = "1.75"
 
 [workspace.dependencies]
 qtv-crypto = { path = "../Q-Crypto" }
+qlc-bitcoin = { path = "../Q-Lightclient/crates/qlc-bitcoin" }
 qlc-ethereum = { path = "../Q-Lightclient/crates/qlc-ethereum" }
 qtv-stark = { path = "../q-prover/crates/qtv-stark" }
 q-codec = { path = "crates/q-codec" }
