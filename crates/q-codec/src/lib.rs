@@ -303,6 +303,10 @@ impl BridgeFact {
             && self.observed_height == 0
     }
 
+    pub fn attest_preimage(&self) -> Vec<u8> {
+        self.encode()
+    }
+
     pub fn validate(&self) -> Result<(), CodecError> {
         if self.version != FACT_VERSION {
             return Err(CodecError::BadVersion(self.version));
@@ -423,5 +427,18 @@ mod tests {
         let mut f = sample();
         f.recipient = Recipient([0u8; 32]);
         assert_eq!(f.validate(), Err(CodecError::ZeroRecipient));
+    }
+
+    #[test]
+    fn attest_preimage_carries_the_encoded_fact() {
+        let f = sample();
+        let pre = f.attest_preimage();
+        assert!(pre.ends_with(&f.encode()));
+    }
+
+    #[test]
+    fn attest_preimage_is_deterministic() {
+        let f = sample();
+        assert_eq!(f.attest_preimage(), f.attest_preimage());
     }
 }
