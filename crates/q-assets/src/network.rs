@@ -36,10 +36,11 @@ pub enum Network {
     Filecoin,
     Celo,
     Cronos,
+    RobinhoodChain,
 }
 
 impl Network {
-    pub const ALL: [Network; 36] = [
+    pub const ALL: [Network; 37] = [
         Network::Bitcoin,
         Network::BitcoinCash,
         Network::Ethereum,
@@ -76,6 +77,7 @@ impl Network {
         Network::Filecoin,
         Network::Celo,
         Network::Cronos,
+        Network::RobinhoodChain,
     ];
 }
 
@@ -85,8 +87,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn there_are_thirty_six_origin_networks() {
-        assert_eq!(Network::ALL.len(), 36);
+    fn there_are_thirty_seven_origin_networks() {
+        assert_eq!(Network::ALL.len(), 37);
     }
 
     #[test]
