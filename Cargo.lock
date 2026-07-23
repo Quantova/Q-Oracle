@@ -55,6 +55,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "q-isolation"
+version = "0.1.0"
+dependencies = [
+ "q-airlock",
+ "q-attestor",
+ "q-codec",
+ "q-exits",
+ "qtv-crypto",
+]
+
+[[package]]
 name = "q-watchtower"
 version = "0.1.0"
 dependencies = [
