@@ -8,10 +8,7 @@ pub mod watcher;
 
 pub use aggregator::{Aggregator, AggregatorError};
 pub use operator::{HaltReason, Operator, OperatorError, OperatorState, SignedObservation};
-pub use signer::{
-    AttestationSigner, EnclaveSigner, ObjectHandle, Pkcs11Backend, Pkcs11Error, Pkcs11Module,
-    SessionHandle, SigningBackend, SlotId, SoftBackend, SoftSigner, SoftwareHsm,
-};
+pub use signer::{AttestationSigner, EnclaveSigner, SigningBackend, SoftBackend, SoftSigner};
 pub use translator::translate;
 pub use watcher::{CorridorContext, FinalityPolicy, ObservedLock, Watcher, WatcherError, WatcherSet};
 

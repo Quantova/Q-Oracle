@@ -10,6 +10,7 @@ description = "The federated corridor tier. Chains with no trustless light clien
 q-codec = { workspace = true }
 q-airlock = { workspace = true }
 q-gateway = { workspace = true }
+q-attestor = { workspace = true }
 
 [dev-dependencies]
 qtv-crypto = { workspace = true }
