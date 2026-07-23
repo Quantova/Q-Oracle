@@ -175,7 +175,7 @@ impl Gateway {
             });
         }
 
-        let message = fact.encode();
+        let message = fact.attest_preimage();
         let distinct = verify_quorum(&message, ATTEST_DOMAIN, &env.signatures, &self.operators)?;
         let threshold = self.operators.threshold();
         if distinct.len() < threshold {
@@ -239,5 +239,65 @@ impl Gateway {
 }
 
 pub fn attestation_message(fact: &BridgeFact) -> Vec<u8> {
-    fact.encode()
+    fact.attest_preimage()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use q_codec::{AssetId, Recipient, SourceRef, FACT_VERSION};
+    use qtv_crypto::ml_dsa;
+
+    fn fact() -> BridgeFact {
+        BridgeFact {
+            version: FACT_VERSION,
+            source_chain: 1,
+            dest_chain: 9000,
+            route_id: 1,
+            direction: Direction::Deposit,
+            nonce: 1,
+            source_ref: SourceRef([0x11; 32]),
+            asset_id: AssetId([0xa1; 16]),
+            amount: 500,
+            recipient: Recipient([0x55; 32]),
+            finality_depth: 6,
+            observed_height: 800_000,
+        }
+    }
+
+    fn signer(id: u32) -> (u32, ml_dsa::PublicKey, ml_dsa::SecretKey) {
+        let mut seed = [0u8; 32];
+        seed[0] = id as u8;
+        seed[31] = 0x7c;
+        let (pk, sk) = ml_dsa::keygen(&seed);
+        (id, pk, sk)
+    }
+
+    fn sign(sk: &ml_dsa::SecretKey, id: u32, f: &BridgeFact) -> SignerSig {
+        let sig = ml_dsa::sign(sk, &f.attest_preimage(), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        SignerSig {
+            operator_id: id,
+            signature: sig.to_vec(),
+        }
+    }
+
+    #[test]
+    fn verify_reads_the_preimage_the_operator_signed() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+
+        let f = fact();
+        let env = AttestationEnvelope {
+            fact: f.clone(),
+            signatures: s.iter().map(|(id, _, sk)| sign(sk, *id, &f)).collect(),
+        };
+        let receipt = gw.process_deposit(&env).expect("quorum over the preimage mints");
+        assert_eq!(receipt.amount, 500);
+    }
 }
