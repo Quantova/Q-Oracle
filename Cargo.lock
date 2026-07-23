@@ -83,9 +83,15 @@ name = "q-attestor"
 version = "0.1.0"
 dependencies = [
  "q-airlock",
+ "q-bls",
  "q-codec",
  "q-gateway",
+ "q-isolation",
+ "q-prover-bridge",
+ "qlc-ethereum",
+ "qlc-stark",
  "qtv-crypto 0.3.0",
+ "qtv-stark",
 ]
 
 [[package]]
@@ -118,6 +124,7 @@ dependencies = [
  "q-attestor",
  "q-codec",
  "q-gateway",
+ "q-isolation",
  "qtv-crypto 0.3.0",
 ]
 

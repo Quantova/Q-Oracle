@@ -12,7 +12,10 @@ pub use signer::{
     AttestationSigner, EnclaveSigner, ObjectHandle, Pkcs11Backend, Pkcs11Error, Pkcs11Module,
     SessionHandle, SigningBackend, SlotId, SoftBackend, SoftSigner, SoftwareHsm,
 };
-pub use translator::translate;
+pub use translator::{
+    attest, corridor_stark, corridor_statement, package, translate, verify_corridor_stark,
+    OutboundEnvelope,
+};
 pub use watcher::{CorridorContext, FinalityPolicy, ObservedLock, Watcher, WatcherError, WatcherSet};
 
 #[cfg(test)]

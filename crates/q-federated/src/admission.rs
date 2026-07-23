@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use q_airlock::AttestationEnvelope;
+use q_airlock::{Artifact, AttestationEnvelope};
 use q_gateway::{Gateway, GatewayError, MintReceipt};
 
 use crate::corridors::{corridors, Corridor};
@@ -8,6 +8,7 @@ use crate::sources::SourceRegistry;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FederatedError {
+    Foreign,
     NotFederated,
     UndeclaredSource(u32),
     CorrelatedSources { independent: usize, signers: usize },
@@ -27,6 +28,9 @@ pub fn admit(
     sources: &SourceRegistry,
     env: &AttestationEnvelope,
 ) -> Result<MintReceipt, FederatedError> {
+    q_isolation::admit_artifact(&Artifact::Attestation(env.clone()))
+        .map_err(|_| FederatedError::Foreign)?;
+
     if !corridor.is_federated() {
         return Err(FederatedError::NotFederated);
     }
@@ -181,6 +185,19 @@ mod tests {
                 need: 3
             }))
         );
+    }
+
+    #[test]
+    fn the_admitted_attestation_crosses_the_isolation_door() {
+        let (ops, _gw) = build();
+        let f = fact([0x15; 32]);
+        let env = AttestationEnvelope {
+            fact: f.clone(),
+            signatures: vec![attest(&ops[0], &f), attest(&ops[1], &f), attest(&ops[2], &f)],
+        };
+        let crossing =
+            q_isolation::admit_artifact(&Artifact::Attestation(env)).expect("admits as a crossing");
+        assert_eq!(crossing.kind, q_isolation::PqArtifact::MlDsaAttestation);
     }
 
     #[test]

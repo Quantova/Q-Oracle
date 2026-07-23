@@ -11,6 +11,7 @@ q-codec = { workspace = true }
 q-airlock = { workspace = true }
 q-gateway = { workspace = true }
 q-attestor = { workspace = true }
+q-isolation = { path = "../q-isolation" }
 
 [dev-dependencies]
 qtv-crypto = { workspace = true }

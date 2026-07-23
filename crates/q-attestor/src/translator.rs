@@ -1,15 +1,12 @@
 use q_airlock::{Artifact, AttestationEnvelope, SignerSig, StarkEnvelope};
 use q_codec::{
-    AssetId, BridgeFact, Direction, Recipient, SourceRef, Writer, ATTEST_DOMAIN, FACT_VERSION,
+    AssetId, BridgeFact, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION,
 };
-use qtv_crypto::sha3::sha3_256;
+use q_isolation::{admit_artifact, Crossing, Refused};
+use q_prover_bridge::{prove_statement, verify_statement, CommitmentProof, CorridorStatement};
 
 use crate::signer::AttestationSigner;
 use crate::watcher::{CorridorContext, ObservedLock};
-
-pub const CORRIDOR_STARK_STATEMENT_DOMAIN: &[u8] =
-    b"QUANTOVA/Q-ORACLE/CORRIDOR-STARK-STATEMENT/v1";
-pub const CORRIDOR_STARK_PROOF_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/CORRIDOR-STARK-PROOF/v1";
 
 pub fn translate(lock: &ObservedLock, ctx: &CorridorContext) -> BridgeFact {
     let mut nonce_bytes = [0u8; 8];
@@ -43,6 +40,12 @@ impl OutboundEnvelope {
             Artifact::Stark(self.stark.clone()),
         ]
     }
+
+    pub fn cross(&self) -> Result<[Crossing; 2], Refused> {
+        let attestation = admit_artifact(&Artifact::Attestation(self.attestation.clone()))?;
+        let stark = admit_artifact(&Artifact::Stark(self.stark.clone()))?;
+        Ok([attestation, stark])
+    }
 }
 
 pub fn attest<S: AttestationSigner>(fact: &BridgeFact, signer: &S) -> AttestationEnvelope {
@@ -57,38 +60,25 @@ pub fn attest<S: AttestationSigner>(fact: &BridgeFact, signer: &S) -> Attestatio
     }
 }
 
-pub fn corridor_stark_statement_digest(fact: &BridgeFact) -> [u8; 32] {
-    let mut w = Writer::new();
-    w.fixed(CORRIDOR_STARK_STATEMENT_DOMAIN);
-    w.fixed(&fact.attest_preimage());
-    sha3_256(&w.finish())
+pub fn corridor_statement(operator: u32, fact: &BridgeFact) -> CorridorStatement {
+    CorridorStatement::new(operator, fact.clone())
 }
 
-pub fn corridor_stark(fact: &BridgeFact) -> StarkEnvelope {
-    let statement_digest = corridor_stark_statement_digest(fact);
-    let mut w = Writer::new();
-    w.fixed(CORRIDOR_STARK_PROOF_DOMAIN);
-    w.fixed(&statement_digest);
-    StarkEnvelope {
-        statement_digest,
-        proof: sha3_256(&w.finish()).to_vec(),
-    }
+pub fn corridor_stark<S: AttestationSigner>(fact: &BridgeFact, signer: &S) -> StarkEnvelope {
+    prove_statement(&corridor_statement(signer.operator_id(), fact)).to_envelope()
 }
 
-pub fn verify_corridor_stark(fact: &BridgeFact, envelope: &StarkEnvelope) -> bool {
-    if envelope.statement_digest != corridor_stark_statement_digest(fact) {
-        return false;
-    }
-    let mut w = Writer::new();
-    w.fixed(CORRIDOR_STARK_PROOF_DOMAIN);
-    w.fixed(&envelope.statement_digest);
-    envelope.proof == sha3_256(&w.finish()).to_vec()
+pub fn verify_corridor_stark(operator: u32, fact: &BridgeFact, envelope: &StarkEnvelope) -> bool {
+    verify_statement(
+        &corridor_statement(operator, fact),
+        &CommitmentProof::from_envelope(envelope),
+    )
 }
 
 pub fn package<S: AttestationSigner>(fact: &BridgeFact, signer: &S) -> OutboundEnvelope {
     OutboundEnvelope {
         attestation: attest(fact, signer),
-        stark: corridor_stark(fact),
+        stark: corridor_stark(fact, signer),
     }
 }
 
@@ -254,31 +244,34 @@ mod tests {
     #[test]
     fn no_field_can_be_reshaped_under_the_stark() {
         let base = fact();
-        let env = package(&base, &signer());
-        assert!(verify_corridor_stark(&base, &env.stark));
+        let s = signer();
+        let env = package(&base, &s);
+        assert!(verify_corridor_stark(s.operator_id(), &base, &env.stark));
         for reshaped in reshapes() {
             assert_ne!(reshaped, base);
             assert_ne!(
-                corridor_stark_statement_digest(&reshaped),
+                corridor_statement(s.operator_id(), &reshaped).digest(),
                 env.stark.statement_digest
             );
-            assert!(!verify_corridor_stark(&reshaped, &env.stark));
+            assert!(!verify_corridor_stark(s.operator_id(), &reshaped, &env.stark));
         }
     }
 
     #[test]
     fn the_stark_proof_is_bound_to_its_statement() {
         let f = fact();
-        let env = package(&f, &signer());
-        assert!(verify_corridor_stark(&f, &env.stark));
+        let s = signer();
+        let env = package(&f, &s);
+        assert!(verify_corridor_stark(s.operator_id(), &f, &env.stark));
 
         let mut moved_digest = env.stark.clone();
         moved_digest.statement_digest[0] ^= 0x01;
-        assert!(!verify_corridor_stark(&f, &moved_digest));
+        assert!(!verify_corridor_stark(s.operator_id(), &f, &moved_digest));
 
         let mut moved_proof = env.stark.clone();
-        moved_proof.proof[0] ^= 0x01;
-        assert!(!verify_corridor_stark(&f, &moved_proof));
+        let last = moved_proof.proof.len() - 1;
+        moved_proof.proof[last] ^= 0x01;
+        assert!(!verify_corridor_stark(s.operator_id(), &f, &moved_proof));
     }
 
     #[test]
@@ -317,10 +310,11 @@ mod tests {
 
     #[test]
     fn the_choke_point_turns_a_foreign_observation_into_the_two_pq_artifacts() {
+        let s = signer();
         let translated = translate(&lock(), &ctx());
-        let env = package(&translated, &signer());
+        let env = package(&translated, &s);
 
-        assert!(verify_corridor_stark(&translated, &env.stark));
+        assert!(verify_corridor_stark(s.operator_id(), &translated, &env.stark));
         assert!(matches!(
             q_airlock::parse(&env.attestation.encode()).unwrap(),
             Artifact::Attestation(_)
@@ -329,6 +323,13 @@ mod tests {
             q_airlock::parse(&env.stark.encode()).unwrap(),
             Artifact::Stark(_)
         ));
+    }
+
+    #[test]
+    fn the_outbound_envelope_crosses_the_isolation_door_as_the_two_pq_artifacts() {
+        let crossings = package(&fact(), &signer()).cross().unwrap();
+        assert_eq!(crossings[0].kind, q_isolation::PqArtifact::MlDsaAttestation);
+        assert_eq!(crossings[1].kind, q_isolation::PqArtifact::HashStark);
     }
 
     #[test]

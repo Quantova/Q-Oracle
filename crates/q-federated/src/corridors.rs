@@ -223,6 +223,9 @@ mod tests {
 
     #[test]
     fn aligns_with_the_light_client_registry_ids_for_the_shared_names() {
+        assert_eq!(BNB_CHAIN, 3);
+        assert_eq!(POLYGON, 4);
+        assert_eq!(AVALANCHE, 5);
         assert_eq!(SOLANA, 22);
         assert_eq!(TRON, 23);
         assert_eq!(XRPL, 24);
