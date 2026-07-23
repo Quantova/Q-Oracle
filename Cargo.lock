@@ -24,16 +24,6 @@ name = "q-codec"
 version = "0.1.0"
 
 [[package]]
-name = "q-federated"
-version = "0.1.0"
-dependencies = [
- "q-airlock",
- "q-codec",
- "q-gateway",
- "qtv-crypto",
-]
-
-[[package]]
 name = "q-gateway"
 version = "0.1.0"
 dependencies = [
