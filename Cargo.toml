@@ -9,6 +9,7 @@ members = [
     "crates/q-assets",
     "crates/q-federated",
     "crates/q-exits",
+    "crates/q-isolation",
 ]
 
 [workspace.package]
