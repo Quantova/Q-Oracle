@@ -11,6 +11,7 @@ members = [
     "crates/q-exits",
     "crates/q-bls",
     "crates/q-prover-bridge",
+    "crates/q-isolation",
 ]
 
 [workspace.package]
