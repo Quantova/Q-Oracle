@@ -1,7 +1,7 @@
 use q_airlock::{parse, Artifact};
 use q_attestor::{
     Aggregator, CorridorContext, HaltReason, ObservedLock, Operator, OperatorError, OperatorState,
-    SoftSigner,
+    SignedObservation, SoftSigner, Watcher, WatcherError, WatcherSet,
 };
 use q_gateway::{Gateway, OperatorSet};
 
@@ -121,4 +121,83 @@ fn one_source_event_is_not_signed_twice_by_an_operator() {
     op.observe_and_sign(&lock(source_ref, 500, 6)).expect("first sign");
     let again = op.observe_and_sign(&lock(source_ref, 500, 6));
     assert_eq!(again, Err(OperatorError::AlreadySigned));
+}
+
+struct NodeView {
+    chain: u32,
+    locks: Vec<ObservedLock>,
+}
+
+impl Watcher for NodeView {
+    fn source_chain(&self) -> u32 {
+        self.chain
+    }
+
+    fn poll_finalized(&self) -> Result<Vec<ObservedLock>, WatcherError> {
+        Ok(self.locks.clone())
+    }
+}
+
+fn own_node(locks: Vec<ObservedLock>) -> WatcherSet {
+    let mut set = WatcherSet::new();
+    set.attach(Box::new(NodeView {
+        chain: SOURCE,
+        locks,
+    }));
+    set
+}
+
+fn sign_own_view(id: u32, view: &WatcherSet) -> Vec<SignedObservation> {
+    let mut op = make_operator(id);
+    let mut out = Vec::new();
+    for lk in view.poll(SOURCE).unwrap_or_default() {
+        if let Ok(signed) = op.observe_and_sign(&lk) {
+            out.push(signed);
+        }
+    }
+    out
+}
+
+#[test]
+fn a_forged_lock_on_a_minority_of_nodes_never_reaches_quorum() {
+    let forged = lock([0x77; 32], 500, 6);
+    let mut agg = Aggregator::new(3);
+
+    for id in [0u32, 1] {
+        let compromised = own_node(vec![forged.clone()]);
+        for signed in sign_own_view(id, &compromised) {
+            agg.add(&signed.fact, signed.sig).expect("compromised node signs the forgery");
+        }
+    }
+
+    for id in [2u32, 3, 4] {
+        let honest = own_node(vec![]);
+        for signed in sign_own_view(id, &honest) {
+            agg.add(&signed.fact, signed.sig).expect("honest node sees nothing to sign");
+        }
+    }
+
+    assert_eq!(agg.distinct(), 2);
+    assert!(!agg.ready());
+    assert!(agg.try_finalize().is_none());
+}
+
+#[test]
+fn overload_halts_and_never_takes_a_relaxed_path() {
+    let mut op = make_operator(0);
+    op.note_load(5_000, 1_000);
+    assert!(op.is_halted());
+
+    let valid_final = lock([0x78; 32], 500, 6);
+    assert_eq!(
+        op.observe_and_sign(&valid_final),
+        Err(OperatorError::Halted(HaltReason::Overload))
+    );
+
+    op.note_load(0, 1_000);
+    assert_eq!(
+        op.observe_and_sign(&valid_final),
+        Err(OperatorError::Halted(HaltReason::Overload))
+    );
+    assert_eq!(op.state(), OperatorState::Halted(HaltReason::Overload));
 }
