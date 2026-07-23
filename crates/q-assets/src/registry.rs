@@ -102,7 +102,9 @@ pub fn find(id: AssetId) -> Option<&'static AssetRecord> {
 }
 
 pub fn by_network(network: Network) -> impl Iterator<Item = &'static AssetRecord> {
-    ASSETS.iter().filter(move |a| a.id.origin() == Some(network))
+    ASSETS
+        .iter()
+        .filter(move |a| a.id.origin() == Some(network))
 }
 
 pub fn count() -> usize {
@@ -147,7 +149,9 @@ mod tests {
     fn a_network_can_host_more_than_one_asset() {
         let on_ethereum: Vec<_> = by_network(Network::Ethereum).collect();
         assert!(on_ethereum.len() > 1);
-        assert!(on_ethereum.iter().all(|a| a.id.origin() == Some(Network::Ethereum)));
+        assert!(on_ethereum
+            .iter()
+            .all(|a| a.id.origin() == Some(Network::Ethereum)));
     }
 
     #[test]
