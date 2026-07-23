@@ -9,6 +9,7 @@ members = [
     "crates/q-assets",
     "crates/q-federated",
     "crates/q-exits",
+    "crates/q-prover-bridge",
 ]
 
 [workspace.package]
@@ -19,6 +20,7 @@ rust-version = "1.75"
 
 [workspace.dependencies]
 qtv-crypto = { path = "../Q-Crypto" }
+qtv-stark = { path = "../q-prover/crates/qtv-stark" }
 q-codec = { path = "crates/q-codec" }
 q-airlock = { path = "crates/q-airlock" }
 q-attestor = { path = "crates/q-attestor" }
