@@ -71,3 +71,90 @@ impl Default for FinalityPolicy {
         FinalityPolicy::new()
     }
 }
+
+pub struct WatcherSet {
+    watchers: BTreeMap<u32, Box<dyn Watcher>>,
+}
+
+impl WatcherSet {
+    pub fn new() -> WatcherSet {
+        WatcherSet {
+            watchers: BTreeMap::new(),
+        }
+    }
+
+    pub fn attach(&mut self, watcher: Box<dyn Watcher>) {
+        self.watchers.insert(watcher.source_chain(), watcher);
+    }
+
+    pub fn chains(&self) -> Vec<u32> {
+        self.watchers.keys().copied().collect()
+    }
+
+    pub fn poll(&self, source_chain: u32) -> Result<Vec<ObservedLock>, WatcherError> {
+        match self.watchers.get(&source_chain) {
+            Some(w) => w.poll_finalized(),
+            None => Err(WatcherError::SourceUnavailable),
+        }
+    }
+}
+
+impl Default for WatcherSet {
+    fn default() -> WatcherSet {
+        WatcherSet::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockNode {
+        chain: u32,
+        locks: Vec<ObservedLock>,
+    }
+
+    impl Watcher for MockNode {
+        fn source_chain(&self) -> u32 {
+            self.chain
+        }
+
+        fn poll_finalized(&self) -> Result<Vec<ObservedLock>, WatcherError> {
+            Ok(self.locks.clone())
+        }
+    }
+
+    fn lock(chain: u32) -> ObservedLock {
+        ObservedLock {
+            source_chain: chain,
+            source_ref: [chain as u8; 32],
+            asset_id: [0x22u8; 16],
+            amount: 500,
+            recipient: [0x33u8; 32],
+            observed_height: 800_000,
+            confirmations: 6,
+        }
+    }
+
+    #[test]
+    fn each_corridor_polls_its_own_source() {
+        let mut set = WatcherSet::new();
+        set.attach(Box::new(MockNode {
+            chain: 1,
+            locks: vec![lock(1)],
+        }));
+        set.attach(Box::new(MockNode {
+            chain: 2,
+            locks: vec![lock(2)],
+        }));
+        assert_eq!(set.chains(), vec![1, 2]);
+        assert_eq!(set.poll(1).unwrap()[0].source_chain, 1);
+        assert_eq!(set.poll(2).unwrap()[0].source_chain, 2);
+    }
+
+    #[test]
+    fn an_unattached_chain_has_no_source() {
+        let set = WatcherSet::new();
+        assert_eq!(set.poll(7), Err(WatcherError::SourceUnavailable));
+    }
+}

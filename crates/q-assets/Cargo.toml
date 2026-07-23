@@ -1,0 +1,9 @@
+[package]
+name = "q-assets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The origin tagged asset registry and the per asset mint and unlock caps. Every asset is Native or Foreign with a source network and an identifier, the registry lists the native coin of each bridged network plus the major cross chain tokens, and the ledger enforces a per asset mint cap, a per asset unlock cap, a global per epoch cap, and a continuous per origin invariant that escrow never falls below minted supply."
+
+[dependencies]

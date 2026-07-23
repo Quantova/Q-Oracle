@@ -16,6 +16,7 @@ pub enum GatewayError {
     UnknownOperator(u32),
     BadSignature(u32),
     BelowThreshold { got: usize, need: usize },
+    ThinQuorum { quorum: usize, size: usize },
     ProveNothing,
     InvalidFact(CodecError),
     Unauthorized,
@@ -24,5 +25,22 @@ pub enum GatewayError {
 impl From<CodecError> for GatewayError {
     fn from(e: CodecError) -> GatewayError {
         GatewayError::InvalidFact(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codec_error_maps_to_invalid_fact() {
+        let e: GatewayError = CodecError::ZeroAmount.into();
+        assert_eq!(e, GatewayError::InvalidFact(CodecError::ZeroAmount));
+    }
+
+    #[test]
+    fn thin_quorum_reports_the_requested_size() {
+        let e = GatewayError::ThinQuorum { quorum: 3, size: 9 };
+        assert_ne!(e, GatewayError::ThinQuorum { quorum: 6, size: 9 });
     }
 }
