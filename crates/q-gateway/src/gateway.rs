@@ -11,6 +11,7 @@ pub const REORG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/REORG/v1";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CorridorConfig {
     pub confirmation_depth: u32,
+    pub quorum: usize,
     pub active: bool,
 }
 
@@ -58,6 +59,7 @@ impl Gateway {
             source_chain,
             CorridorConfig {
                 confirmation_depth,
+                quorum: 0,
                 active: true,
             },
         );
@@ -67,6 +69,33 @@ impl Gateway {
         if let Some(c) = self.corridors.get_mut(&source_chain) {
             c.active = active;
         }
+    }
+
+    pub fn set_corridor_quorum(
+        &mut self,
+        source_chain: u32,
+        quorum: usize,
+    ) -> Result<(), GatewayError> {
+        let size = self.operators.size();
+        if quorum < 2 || quorum > size || quorum.saturating_mul(3) < size.saturating_mul(2) {
+            return Err(GatewayError::ThinQuorum { quorum, size });
+        }
+        let corridor = self
+            .corridors
+            .get_mut(&source_chain)
+            .ok_or(GatewayError::CorridorNotOpen(source_chain))?;
+        corridor.quorum = quorum;
+        Ok(())
+    }
+
+    pub fn corridor_quorum(&self, source_chain: u32) -> Option<usize> {
+        self.corridors.get(&source_chain).map(|c| {
+            if c.quorum > 0 {
+                c.quorum
+            } else {
+                self.operators.threshold()
+            }
+        })
     }
 
     pub fn register_asset_cap(&mut self, asset_id: [u8; 16], cap: u128) {
@@ -175,13 +204,25 @@ impl Gateway {
             });
         }
 
+        let size = self.operators.size();
+        let required = if corridor.quorum > 0 {
+            corridor.quorum
+        } else {
+            self.operators.threshold()
+        };
+        if required == 0 || required > size {
+            return Err(GatewayError::ThinQuorum {
+                quorum: required,
+                size,
+            });
+        }
+
         let message = fact.attest_preimage();
         let distinct = verify_quorum(&message, ATTEST_DOMAIN, &env.signatures, &self.operators)?;
-        let threshold = self.operators.threshold();
-        if distinct.len() < threshold {
+        if distinct.len() < required {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
-                need: threshold,
+                need: required,
             });
         }
 
@@ -299,5 +340,62 @@ mod tests {
         };
         let receipt = gw.process_deposit(&env).expect("quorum over the preimage mints");
         assert_eq!(receipt.amount, 500);
+    }
+
+    fn nine_op_gateway(global: usize) -> (Vec<(u32, ml_dsa::PublicKey, ml_dsa::SecretKey)>, Gateway) {
+        let s: Vec<_> = (0..9).map(signer).collect();
+        let mut set = OperatorSet::new(global);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+        (s, gw)
+    }
+
+    fn envelope(
+        s: &[(u32, ml_dsa::PublicKey, ml_dsa::SecretKey)],
+        f: &BridgeFact,
+    ) -> AttestationEnvelope {
+        AttestationEnvelope {
+            fact: f.clone(),
+            signatures: s.iter().map(|(id, _, sk)| sign(sk, *id, f)).collect(),
+        }
+    }
+
+    #[test]
+    fn corridor_quorum_overrides_the_global_threshold() {
+        let (s, mut gw) = nine_op_gateway(3);
+        gw.set_corridor_quorum(1, 6).expect("two thirds is a wide margin");
+        assert_eq!(gw.corridor_quorum(1), Some(6));
+
+        let f = fact();
+        assert_eq!(
+            gw.process_deposit(&envelope(&s[0..5], &f)),
+            Err(GatewayError::BelowThreshold { got: 5, need: 6 })
+        );
+        assert_eq!(
+            gw.process_deposit(&envelope(&s[0..6], &f)).expect("wide margin mints").amount,
+            500
+        );
+    }
+
+    #[test]
+    fn a_bare_majority_corridor_quorum_is_refused() {
+        let (_s, mut gw) = nine_op_gateway(3);
+        assert_eq!(
+            gw.set_corridor_quorum(1, 5),
+            Err(GatewayError::ThinQuorum { quorum: 5, size: 9 })
+        );
+    }
+
+    #[test]
+    fn a_zero_corridor_quorum_is_refused() {
+        let (_s, mut gw) = nine_op_gateway(3);
+        assert_eq!(
+            gw.set_corridor_quorum(1, 0),
+            Err(GatewayError::ThinQuorum { quorum: 0, size: 9 })
+        );
     }
 }
