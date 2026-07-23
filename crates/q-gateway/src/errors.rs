@@ -20,6 +20,14 @@ pub enum GatewayError {
     ProveNothing,
     InvalidFact(CodecError),
     Unauthorized,
+    NoGovernanceSet,
+    TierDowngrade { from: u8, to: u8 },
+    Frozen { until: u64 },
+    WatchdogWindowTooWide { until: u64, max: u64 },
+    StaleBatch { got: u64, expected: u64 },
+    ExitExceedsMinted { minted: u128, amount: u128 },
+    ExitNotReady { now: u64, unlock: u64 },
+    UnknownExit(u64),
 }
 
 impl From<CodecError> for GatewayError {
