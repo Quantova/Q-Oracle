@@ -9,6 +9,8 @@ description = "Executable reference model of the on-chain q-exits contract. A fi
 [dependencies]
 q-codec = { workspace = true }
 qtv-crypto = { workspace = true }
+qlc-bitcoin = { workspace = true }
+qlc-ethereum = { workspace = true }
 
 [dev-dependencies]
 q-codec = { workspace = true }

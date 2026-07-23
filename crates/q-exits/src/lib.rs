@@ -14,5 +14,9 @@ pub use errors::ExitError;
 pub use exits::{
     DeskConfig, Exit, ExitDesk, ExitId, ExitState, Release, SlashOutcome, BPS_DEN,
 };
-pub use payout::{PayoutAttestation, PayoutWatcher, PAYOUT_DOMAIN, PAYOUT_VERSION};
+pub use payout::{
+    BitcoinPayoutWatcher, BitcoinReleaseProof, EvmPayoutWatcher, EvmReleaseProof,
+    PayoutAttestation, PayoutProofError, PayoutWatcher, VerifiedPayout, PAYOUT_DOMAIN,
+    PAYOUT_VERSION,
+};
 pub use vault::{Vault, VaultBook};
