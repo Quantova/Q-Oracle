@@ -4,6 +4,12 @@ use std::collections::BTreeMap;
 
 use q_gateway::Gateway;
 
+pub mod identity;
+pub mod reorg;
+
+pub use identity::WatchtowerId;
+pub use reorg::{CorridorReorgPolicy, ReorgVerdict, ReorgWatcher};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Breach {
     pub asset_id: [u8; 16],
