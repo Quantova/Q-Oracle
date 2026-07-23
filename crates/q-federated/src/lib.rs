@@ -3,6 +3,7 @@
 pub mod admission;
 pub mod corridors;
 pub mod sources;
+pub mod watch;
 
 pub use admission::{admit, install, FederatedError};
 pub use corridors::{
@@ -11,6 +12,7 @@ pub use corridors::{
     TON, TRON, XRPL, ZCASH,
 };
 pub use sources::{IndependenceReport, SourceEndpoint, SourceRegistry};
+pub use watch::{watch_and_admit, OperatorFeed, WatchError};
 
 #[cfg(test)]
 mod exports {
