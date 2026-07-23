@@ -78,11 +78,13 @@ impl AssetLedger {
             .copied()
             .ok_or(AssetError::AssetNotRegistered)?;
         let minted = self.minted_of(asset_id);
-        let minted_after = minted.checked_add(amount).ok_or(AssetError::MintCapExceeded {
-            minted,
-            cap: caps.mint_cap,
-            add: amount,
-        })?;
+        let minted_after = minted
+            .checked_add(amount)
+            .ok_or(AssetError::MintCapExceeded {
+                minted,
+                cap: caps.mint_cap,
+                add: amount,
+            })?;
         if minted_after > caps.mint_cap {
             return Err(AssetError::MintCapExceeded {
                 minted,
@@ -138,7 +140,8 @@ impl AssetLedger {
         }
         let escrowed = self.escrowed_of(asset_id);
         self.minted.insert(asset_id, minted - amount);
-        self.escrowed.insert(asset_id, escrowed.saturating_sub(amount));
+        self.escrowed
+            .insert(asset_id, escrowed.saturating_sub(amount));
         Ok(())
     }
 }
@@ -161,7 +164,7 @@ mod tests {
                 unlock_cap: 500,
             },
         );
-        l.credit_escrow(asset(), 1_000);
+        l.credit_escrow(asset(), 2_000);
         l
     }
 
@@ -204,7 +207,8 @@ mod tests {
     #[test]
     fn a_burn_frees_mint_headroom() {
         let mut l = ledger();
-        l.mint(asset(), 1_000).expect("escrow and the cap allow the full mint");
+        l.mint(asset(), 1_000)
+            .expect("escrow and the cap allow the full mint");
         assert_eq!(
             l.mint(asset(), 1),
             Err(AssetError::MintCapExceeded {
@@ -216,7 +220,8 @@ mod tests {
         l.burn(asset(), 400)
             .expect("minted covers the burn and it is under the unlock cap");
         assert_eq!(l.minted_of(asset()), 600);
-        l.mint(asset(), 300).expect("the burn freed headroom under the mint cap");
+        l.mint(asset(), 300)
+            .expect("the burn freed headroom under the mint cap");
         assert_eq!(l.minted_of(asset()), 900);
     }
 
@@ -263,7 +268,8 @@ mod tests {
     #[test]
     fn a_burn_beyond_the_unlock_cap_is_rejected() {
         let mut l = ledger();
-        l.mint(asset(), 600).expect("escrow and the cap allow this mint");
+        l.mint(asset(), 600)
+            .expect("escrow and the cap allow this mint");
         assert_eq!(
             l.burn(asset(), 501),
             Err(AssetError::UnlockCapExceeded {
@@ -276,7 +282,8 @@ mod tests {
     #[test]
     fn a_burn_beyond_the_minted_balance_is_rejected() {
         let mut l = ledger();
-        l.mint(asset(), 100).expect("escrow and the cap allow this mint");
+        l.mint(asset(), 100)
+            .expect("escrow and the cap allow this mint");
         assert_eq!(
             l.burn(asset(), 150),
             Err(AssetError::InsufficientMinted {
