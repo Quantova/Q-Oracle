@@ -1,0 +1,15 @@
+[package]
+name = "q-bls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Off-chain BLS12-381 aggregate verifier for the Ethereum sync committee seam. Backs the qlc-ethereum BlsAggregateVerifier trait with the audited blst pairing over the BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_ ciphersuite, deserializing G1 pubkeys and the G2 aggregate and running the real pairing. Classical cryptography lives here because Ethereum is verified with Ethereum's own crypto. This crate is an off-chain oracle component and is never linked into the chain, the VM, or consensus. Only the ML-DSA attestation and the hash STARK cross the Airlock."
+
+[dependencies]
+blst = "0.3.16"
+qlc-ethereum = { workspace = true }
+
+[dev-dependencies]
+blst = "0.3.16"
+qlc-ethereum = { workspace = true }
