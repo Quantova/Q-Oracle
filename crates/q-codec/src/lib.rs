@@ -304,7 +304,10 @@ impl BridgeFact {
     }
 
     pub fn attest_preimage(&self) -> Vec<u8> {
-        self.encode()
+        let mut w = Writer::new();
+        w.fixed(ATTEST_DOMAIN);
+        w.fixed(&self.encode());
+        w.finish()
     }
 
     pub fn validate(&self) -> Result<(), CodecError> {
@@ -440,5 +443,62 @@ mod tests {
     fn attest_preimage_is_deterministic() {
         let f = sample();
         assert_eq!(f.attest_preimage(), f.attest_preimage());
+    }
+
+    #[test]
+    fn attest_preimage_leads_with_the_context_and_is_longer_than_the_fact() {
+        let f = sample();
+        let pre = f.attest_preimage();
+        assert!(pre.starts_with(ATTEST_DOMAIN));
+        assert_eq!(pre.len(), ATTEST_DOMAIN.len() + FACT_ENCODED_LEN);
+    }
+
+    #[test]
+    fn every_semantic_field_moves_the_preimage() {
+        let base = sample().attest_preimage();
+
+        let mut a = sample();
+        a.source_chain = 2;
+        assert_ne!(a.attest_preimage(), base);
+
+        let mut b = sample();
+        b.dest_chain = 9001;
+        assert_ne!(b.attest_preimage(), base);
+
+        let mut c = sample();
+        c.route_id = 8;
+        assert_ne!(c.attest_preimage(), base);
+
+        let mut d = sample();
+        d.direction = Direction::ExitAck;
+        assert_ne!(d.attest_preimage(), base);
+
+        let mut e = sample();
+        e.nonce = 43;
+        assert_ne!(e.attest_preimage(), base);
+
+        let mut g = sample();
+        g.source_ref = SourceRef([8u8; 32]);
+        assert_ne!(g.attest_preimage(), base);
+
+        let mut h = sample();
+        h.asset_id = AssetId([4u8; 16]);
+        assert_ne!(h.attest_preimage(), base);
+
+        let mut i = sample();
+        i.amount = 1_000_001;
+        assert_ne!(i.attest_preimage(), base);
+
+        let mut j = sample();
+        j.recipient = Recipient([6u8; 32]);
+        assert_ne!(j.attest_preimage(), base);
+
+        let mut k = sample();
+        k.finality_depth = 13;
+        assert_ne!(k.attest_preimage(), base);
+
+        let mut l = sample();
+        l.observed_height = 880_001;
+        assert_ne!(l.attest_preimage(), base);
     }
 }
