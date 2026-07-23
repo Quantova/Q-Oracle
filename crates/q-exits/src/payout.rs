@@ -2,7 +2,8 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use q_codec::{Reader, Writer};
-use qtv_crypto::sha3::sha3_256;
+
+use crate::certificate::shake256_256;
 
 use qlc_bitcoin::{double_sha256, verify_chain, BlockHeader, MerkleStep, NetworkParams, SpvError};
 use qlc_ethereum::keccak::keccak256;
@@ -70,7 +71,7 @@ impl PayoutAttestation {
         let mut w = Writer::new();
         w.fixed(PAYOUT_DOMAIN);
         w.fixed(&self.encode());
-        sha3_256(&w.finish())
+        shake256_256(&w.finish())
     }
 
     pub fn validate(&self) -> Result<(), ExitError> {
