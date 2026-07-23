@@ -28,6 +28,14 @@ name = "q-codec"
 version = "0.1.0"
 
 [[package]]
+name = "q-exits"
+version = "0.1.0"
+dependencies = [
+ "q-codec",
+ "qtv-crypto",
+]
+
+[[package]]
 name = "q-federated"
 version = "0.1.0"
 dependencies = [
