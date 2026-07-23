@@ -4,8 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Independent watchtowers that sit outside the operator set. Each checks that foreign escrow is at least the minted supply per origin-tagged asset and pauses the gateway automatically on any divergence."
+description = "Independent watchtowers that sit outside the oracle operator set and the validator set. Each checks that foreign escrow is at least the minted supply per origin-tagged asset and watches every corridor for a reorg past its configured depth, pausing the gateway automatically on either, with no quorum from the operators required and no automatic resume."
 
 [dependencies]
 q-codec = { workspace = true }
 q-gateway = { workspace = true }
+
+[dev-dependencies]
+q-airlock = { workspace = true }
+qtv-crypto = { workspace = true }
