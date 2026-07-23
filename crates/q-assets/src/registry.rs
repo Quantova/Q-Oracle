@@ -63,9 +63,6 @@ pub const ASSETS: &[AssetRecord] = &[
     foreign(Network::Osmosis, "OSMO", 6),
     foreign(Network::Celestia, "TIA", 6),
     foreign(Network::Injective, "INJ", 18),
-    foreign(Network::Polkadot, "DOT", 10),
-    foreign(Network::Kusama, "KSM", 12),
-    foreign(Network::Bittensor, "TAO", 9),
     foreign(Network::Solana, "SOL", 9),
     foreign(Network::Solana, "USDC", 6),
     foreign(Network::Solana, "USDT", 6),
@@ -159,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn every_one_of_the_thirty_seven_networks_has_a_native_coin_registered() {
+    fn every_one_of_the_thirty_four_networks_has_a_native_coin_registered() {
         for network in Network::ALL {
             assert!(
                 by_network(network).count() >= 1,

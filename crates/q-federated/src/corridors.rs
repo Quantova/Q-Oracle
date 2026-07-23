@@ -38,22 +38,22 @@ impl TrustGrade {
     }
 }
 
-pub const SOLANA: u32 = 3;
-pub const TRON: u32 = 4;
-pub const XRPL: u32 = 9;
-pub const CARDANO: u32 = 10;
-pub const NEAR: u32 = 11;
-pub const SUI: u32 = 12;
-pub const APTOS: u32 = 13;
-pub const HEDERA: u32 = 14;
-pub const ALGORAND: u32 = 15;
-pub const TON: u32 = 16;
-pub const STELLAR: u32 = 17;
-pub const MONERO: u32 = 18;
-pub const LITECOIN: u32 = 19;
-pub const DOGECOIN: u32 = 20;
-pub const ZCASH: u32 = 21;
-pub const CCTP_USDC: u32 = 22;
+pub const SOLANA: u32 = 22;
+pub const TRON: u32 = 23;
+pub const XRPL: u32 = 24;
+pub const CARDANO: u32 = 25;
+pub const NEAR: u32 = 26;
+pub const SUI: u32 = 27;
+pub const APTOS: u32 = 28;
+pub const HEDERA: u32 = 29;
+pub const ALGORAND: u32 = 30;
+pub const TON: u32 = 31;
+pub const STELLAR: u32 = 32;
+pub const MONERO: u32 = 34;
+pub const LITECOIN: u32 = 35;
+pub const DOGECOIN: u32 = 36;
+pub const ZCASH: u32 = 37;
+pub const CCTP_USDC: u32 = 38;
 
 pub const ORIGIN_MARKER: u8 = 0x0F;
 pub const PROVISIONAL_CAP_BASE_UNITS: u128 = 1_000_000_000_000;
@@ -207,7 +207,9 @@ mod tests {
 
     #[test]
     fn aligns_with_the_light_client_registry_ids_for_the_shared_names() {
-        assert_eq!(SOLANA, 3);
-        assert_eq!(TRON, 4);
+        assert_eq!(SOLANA, 22);
+        assert_eq!(TRON, 23);
+        assert_eq!(XRPL, 24);
+        assert_eq!(STELLAR, 32);
     }
 }
