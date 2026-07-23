@@ -95,6 +95,10 @@ pub const ASSETS: &[AssetRecord] = &[
     foreign(Network::Filecoin, "FIL", 18),
     foreign(Network::Celo, "CELO", 18),
     foreign(Network::Cronos, "CRO", 8),
+    foreign(Network::RobinhoodChain, "RHC", 18),
+    foreign(Network::RobinhoodChain, "ETH", 18),
+    foreign(Network::RobinhoodChain, "USDC", 6),
+    foreign(Network::RobinhoodChain, "RWA", 18),
 ];
 
 pub fn find(id: AssetId) -> Option<&'static AssetRecord> {
@@ -155,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn every_one_of_the_thirty_six_networks_has_a_native_coin_registered() {
+    fn every_one_of_the_thirty_seven_networks_has_a_native_coin_registered() {
         for network in Network::ALL {
             assert!(
                 by_network(network).count() >= 1,
@@ -163,5 +167,18 @@ mod tests {
                 network
             );
         }
+    }
+
+    #[test]
+    fn robinhood_chain_assets_resolve_to_their_origin_network() {
+        let entries: Vec<_> = by_network(Network::RobinhoodChain).collect();
+        assert_eq!(entries.len(), 4);
+        assert!(entries
+            .iter()
+            .all(|a| a.id.origin() == Some(Network::RobinhoodChain)));
+        assert!(find(AssetId::Foreign(Network::RobinhoodChain, "RHC")).is_some());
+        assert!(find(AssetId::Foreign(Network::RobinhoodChain, "ETH")).is_some());
+        assert!(find(AssetId::Foreign(Network::RobinhoodChain, "USDC")).is_some());
+        assert!(find(AssetId::Foreign(Network::RobinhoodChain, "RWA")).is_some());
     }
 }
