@@ -10,6 +10,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "q-assets"
+version = "0.1.0"
+
+[[package]]
 name = "q-attestor"
 version = "0.1.0"
 dependencies = [

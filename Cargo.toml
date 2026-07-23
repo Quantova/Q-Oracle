@@ -6,6 +6,7 @@ members = [
     "crates/q-attestor",
     "crates/q-gateway",
     "crates/q-watchtower",
+    "crates/q-assets",
 ]
 
 [workspace.package]
