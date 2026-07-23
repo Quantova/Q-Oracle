@@ -38,6 +38,9 @@ impl TrustGrade {
     }
 }
 
+pub const BNB_CHAIN: u32 = 3;
+pub const POLYGON: u32 = 4;
+pub const AVALANCHE: u32 = 5;
 pub const SOLANA: u32 = 22;
 pub const TRON: u32 = 23;
 pub const XRPL: u32 = 24;
@@ -103,6 +106,9 @@ fn corridor(chain_id: u32, name: &'static str, confirmation_depth: u32) -> Corri
 
 pub fn corridors() -> Vec<Corridor> {
     vec![
+        corridor(BNB_CHAIN, "BNB Chain", 15),
+        corridor(POLYGON, "Polygon", 128),
+        corridor(AVALANCHE, "Avalanche", 1),
         corridor(SOLANA, "Solana", 32),
         corridor(TRON, "TRON", 19),
         corridor(XRPL, "XRP Ledger", 1),
@@ -132,8 +138,18 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn the_set_covers_sixteen_corridors() {
-        assert_eq!(corridors().len(), 16);
+    fn the_set_covers_nineteen_corridors() {
+        assert_eq!(corridors().len(), 19);
+    }
+
+    #[test]
+    fn bnb_chain_polygon_and_avalanche_keep_their_existing_canonical_ids() {
+        assert_eq!(BNB_CHAIN, 3);
+        assert_eq!(POLYGON, 4);
+        assert_eq!(AVALANCHE, 5);
+        assert_eq!(find(BNB_CHAIN).unwrap().name, "BNB Chain");
+        assert_eq!(find(POLYGON).unwrap().name, "Polygon");
+        assert_eq!(find(AVALANCHE).unwrap().name, "Avalanche");
     }
 
     #[test]

@@ -6,7 +6,7 @@ use q_codec::{
 };
 use q_federated::{
     admit, corridors, find, install, Corridor, FederatedError, SourceEndpoint, SourceRegistry,
-    Tier, TrustGrade, LITECOIN, SOLANA, TRON, ZCASH,
+    Tier, TrustGrade, AVALANCHE, BNB_CHAIN, LITECOIN, POLYGON, SOLANA, TRON, ZCASH,
 };
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -163,7 +163,7 @@ fn a_duplicate_signer_does_not_double_count() {
 #[test]
 fn every_named_corridor_is_labeled_federated_tier() {
     let all = corridors();
-    assert_eq!(all.len(), 16);
+    assert_eq!(all.len(), 19);
     for c in &all {
         assert_eq!(c.tier, Tier::Federated);
         assert_eq!(c.tier.label(), "Federated");
@@ -173,6 +173,9 @@ fn every_named_corridor_is_labeled_federated_tier() {
     }
     let names: BTreeSet<&str> = all.iter().map(|c| c.name).collect();
     for expected in [
+        "BNB Chain",
+        "Polygon",
+        "Avalanche",
         "Solana",
         "TRON",
         "XRP Ledger",
@@ -349,4 +352,81 @@ fn each_corridor_watches_its_own_independent_source() {
 
     assert_eq!(gw.minted_of_asset(&sol.origin_asset.0), 500);
     assert_eq!(gw.minted_of_asset(&trx.origin_asset.0), 400);
+}
+
+#[test]
+fn bnb_chain_polygon_and_avalanche_keep_their_existing_canonical_ids() {
+    assert_eq!(BNB_CHAIN, 3);
+    assert_eq!(POLYGON, 4);
+    assert_eq!(AVALANCHE, 5);
+    for (id, name) in [
+        (BNB_CHAIN, "BNB Chain"),
+        (POLYGON, "Polygon"),
+        (AVALANCHE, "Avalanche"),
+    ] {
+        let c = find(id).expect("the corridor is registered under its existing id");
+        assert_eq!(c.name, name);
+        assert_eq!(c.tier, Tier::Federated);
+        assert_eq!(c.grade, TrustGrade::TrustedRelayer);
+    }
+}
+
+#[test]
+fn a_distinct_signer_quorum_mints_for_bnb_chain_polygon_and_avalanche() {
+    for id in [BNB_CHAIN, POLYGON, AVALANCHE] {
+        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let mut gw = gateway(&ops, 3);
+        let sources = independent_sources(id, &ops);
+        let c = find(id).unwrap();
+        let f = deposit(&c, [id as u8; 32], 500);
+        let env = envelope(&[&ops[0], &ops[1], &ops[2]], &f);
+
+        let receipt = admit(&mut gw, &c, &sources, &env)
+            .unwrap_or_else(|e| panic!("{} independent quorum mints, got {:?}", c.name, e));
+        assert_eq!(receipt.amount, 500);
+        assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 500);
+    }
+}
+
+#[test]
+fn a_sub_quorum_does_not_mint_for_bnb_chain_polygon_and_avalanche() {
+    for id in [BNB_CHAIN, POLYGON, AVALANCHE] {
+        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let mut gw = gateway(&ops, 3);
+        let sources = independent_sources(id, &ops);
+        let c = find(id).unwrap();
+        let f = deposit(&c, [0x60 + id as u8; 32], 500);
+        let env = envelope(&[&ops[0], &ops[1]], &f);
+
+        assert_eq!(
+            admit(&mut gw, &c, &sources, &env),
+            Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 2, need: 3 })),
+            "{} must refuse a sub quorum",
+            c.name
+        );
+        assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
+    }
+}
+
+#[test]
+fn a_correlated_source_quorum_is_refused_for_bnb_chain_polygon_and_avalanche() {
+    for id in [BNB_CHAIN, POLYGON, AVALANCHE] {
+        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let mut gw = gateway(&ops, 3);
+        let mut sources = SourceRegistry::new();
+        sources.declare(id, ops[0].id, ep(0xaa));
+        sources.declare(id, ops[1].id, ep(0xaa));
+        sources.declare(id, ops[2].id, ep(0xcc));
+        let c = find(id).unwrap();
+        let f = deposit(&c, [0x70 + id as u8; 32], 500);
+        let env = envelope(&[&ops[0], &ops[1], &ops[2]], &f);
+
+        assert_eq!(
+            admit(&mut gw, &c, &sources, &env),
+            Err(FederatedError::CorrelatedSources { independent: 2, signers: 3 }),
+            "{} must refuse a correlated quorum before any mint",
+            c.name
+        );
+        assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
+    }
 }

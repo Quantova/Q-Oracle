@@ -113,6 +113,7 @@ name = "q-federated"
 version = "0.1.0"
 dependencies = [
  "q-airlock",
+ "q-attestor",
  "q-codec",
  "q-gateway",
  "qtv-crypto 0.3.0",
