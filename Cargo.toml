@@ -6,6 +6,9 @@ members = [
     "crates/q-attestor",
     "crates/q-gateway",
     "crates/q-watchtower",
+    "crates/q-assets",
+    "crates/q-federated",
+    "crates/q-exits",
 ]
 
 [workspace.package]
