@@ -1,0 +1,18 @@
+[package]
+name = "q-isolation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The conformance guard on the Airlock crossing. The single ingress toward Quantova consensus and the PQR chain admits exactly one ML-DSA attestation and one hash-based STARK, both Quantova post-quantum artifacts. The crossing type is an enum of exactly those two kinds, the classification over it is total and exhaustive, and the tag alphabet is bound at compile time, so a third crossing kind or a changed tag fails the build. A foreign signature, a foreign header, a foreign root, a foreign hash, and any foreign public key have no valid encoding at the boundary and are refused, proven by conformance tests and a fuzz sweep that never yields a crossing from foreign bytes."
+
+[dependencies]
+q-airlock = { workspace = true }
+q-codec = { workspace = true }
+
+[dev-dependencies]
+q-airlock = { workspace = true }
+q-codec = { workspace = true }
+q-attestor = { workspace = true }
+q-exits = { path = "../q-exits" }
+qtv-crypto = { workspace = true }
