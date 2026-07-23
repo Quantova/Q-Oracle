@@ -1,7 +1,13 @@
 use q_codec::{Reader, Writer};
-use qtv_crypto::sha3::sha3_256;
+use qtv_crypto::sha3::shake256;
 
 use crate::errors::ExitError;
+
+pub(crate) fn shake256_256(input: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    shake256(input, &mut out);
+    out
+}
 
 pub const EXIT_STATEMENT_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/EXIT-STATEMENT/v1";
 pub const EXIT_PROOF_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/EXIT-PROOF/v1";
@@ -62,7 +68,7 @@ impl ExitStatement {
         let mut w = Writer::new();
         w.fixed(EXIT_STATEMENT_DOMAIN);
         w.fixed(&self.encode());
-        sha3_256(&w.finish())
+        shake256_256(&w.finish())
     }
 
     pub fn validate(&self) -> Result<(), ExitError> {
@@ -126,7 +132,7 @@ impl HashStark {
         let mut w = Writer::new();
         w.fixed(EXIT_PROOF_DOMAIN);
         w.fixed(statement_digest);
-        sha3_256(&w.finish())
+        shake256_256(&w.finish())
     }
 }
 
