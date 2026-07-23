@@ -14,6 +14,16 @@ Second a slashing binding. A proof of operator equivocation, meaning two conflic
 
 Third a safety pause lane. The pause and the reorg pause entries in the gateway must reach the chain even when the mempool is congested, so the chain needs a reserved priority lane for a bridge safety transaction. Without it a griefing flood could delay a pause while a bad corridor drains.
 
+## The bond behind the freeze and the watchdog
+
+The gateway now carries an emergency freeze with automatic expiry and a one honest watchdog pause. The emergency freeze sets a frozen height by operator quorum and the watchdog freeze sets a bounded frozen height on a single operator alarm, and both lift on their own when the chain height passes the stored expiry. This is the safety bias the bridge wants, any one honest watcher can stop mints for a bounded window rather than wait for a full quorum, but the contract can only express the pause and the window. The economics that make a single alarm honest, a posted bond that a false alarm slashes, live in the same staking layer as the attester bond above. Without the bond a malicious operator can grief up to the window on every reset, so the mainnet path needs the bond decided and built by the owning stream before the watchdog window is widened.
+
+## The governance authority behind the tier ratchet
+
+The gateway raises a per corridor verification tier by a governance quorum and never lowers it, and a deposit reads its own corridor quorum from that authenticated state. The one way ratchet is expressed in the contract and proved in the reference harness. What the contract cannot decide on its own is who holds the governance guardian set that signs a tier raise and how that set hands off from a founder seeded set to on chain governance. That handoff is a founder and governance stream decision, flagged here, not improvised in this repository.
+
 ## Status and flag
 
 This is a stub. It is not implemented in this wave and it must not be improvised into chain core here. It is flagged for the founder and the chain and staking stream. The bridge is safe to run on testnet without the bond by seeding the operator set at genesis and rotating by quorum, but the trust minimized claim rests on the bond, so the mainnet path needs this hook decided and built by the owning stream first.
+
+The gateway contract at contracts/q_gateway.qs is Quanta source and the only bridge code that runs on the chain. The sole Quanta compiler is not vendored in this repository, so the semantic proof carried here is the reference harness in crates/q-gateway, which mirrors the contract behaviour one to one and runs under the workspace test suite. The reference harness is the proof of behaviour. The reentrancy inexpressible property rests on the language and the single compiler path, which is asserted at the source and not re executed here.
