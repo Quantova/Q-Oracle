@@ -70,7 +70,7 @@ fn a_verified_foreign_fact_becomes_two_pq_artifacts_and_nothing_foreign_crosses(
     assert!(!verifier.fast_aggregate_verify(&committee, &signed, &signature(AGGREGATE_ABAB_TAMPERED)));
 
     let signer = SoftSigner::from_seed(0, &[0x09u8; 32]);
-    let fact = translate(&lock(), &ctx());
+    let fact = translate(&lock(), &ctx(), 900_000);
     let env = package(&fact, &signer);
 
     let statement = corridor_statement(signer.operator_id(), &fact);
