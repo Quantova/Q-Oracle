@@ -50,6 +50,7 @@ fn deposit_fact(source_ref: [u8; 32], asset: [u8; 16], amount: u128) -> BridgeFa
         recipient: Recipient([0x55; 32]),
         finality_depth: 6,
         observed_height: 800_000,
+        expiry_height: 900_000,
     }
 }
 
@@ -106,6 +107,7 @@ fn prove_nothing_message_is_rejected() {
         recipient: Recipient([0; 32]),
         finality_depth: 0,
         observed_height: 0,
+        expiry_height: 0,
     };
     let env = attest(&[&ops[0], &ops[1], &ops[2]], &zero);
     assert_eq!(gw.process_deposit(&env), Err(GatewayError::ProveNothing));
@@ -222,7 +224,9 @@ fn per_epoch_cap_blocks_over_limit_mint_and_resets_next_epoch() {
     );
 
     gw.advance_epoch();
-    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &deposit_fact([0x33; 32], ASSET_B, 600)))
+    let mut next = deposit_fact([0x33; 32], ASSET_B, 600);
+    next.nonce = 2;
+    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &next))
         .expect("mint allowed in fresh epoch");
     assert_eq!(gw.minted_of_asset(&ASSET_B), 600);
 }
