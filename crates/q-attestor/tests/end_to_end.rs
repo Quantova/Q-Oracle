@@ -63,7 +63,7 @@ fn full_pipeline_from_watcher_to_mint() {
 
     let mut agg = Aggregator::new(3);
     for op in operators.iter_mut() {
-        let signed = op.observe_and_sign(&observed).expect("operator signs a final lock");
+        let signed = op.observe_and_sign(&observed, 900_000).expect("operator signs a final lock");
         agg.add(&signed.fact, signed.sig).expect("bundle matching facts");
     }
     assert!(agg.ready());
@@ -86,14 +86,14 @@ fn full_pipeline_from_watcher_to_mint() {
 fn node_divergence_triggers_safe_halt_not_majority_override() {
     let mut op = make_operator(0);
     let source_ref = [0x22; 32];
-    op.observe_and_sign(&lock(source_ref, 500, 6)).expect("first view signs");
+    op.observe_and_sign(&lock(source_ref, 500, 6), 900_000).expect("first view signs");
 
-    let conflicting = op.observe_and_sign(&lock(source_ref, 999, 6));
+    let conflicting = op.observe_and_sign(&lock(source_ref, 999, 6), 900_000);
     assert_eq!(conflicting, Err(OperatorError::Halted(HaltReason::Divergence)));
     assert!(op.is_halted());
     assert_eq!(op.state(), OperatorState::Halted(HaltReason::Divergence));
 
-    let later = op.observe_and_sign(&lock([0x23; 32], 100, 6));
+    let later = op.observe_and_sign(&lock([0x23; 32], 100, 6), 900_000);
     assert_eq!(later, Err(OperatorError::Halted(HaltReason::Divergence)));
 }
 
@@ -102,14 +102,14 @@ fn dos_overload_degrades_to_safe_halt() {
     let mut op = make_operator(0);
     op.note_load(10_000, 1_000);
     assert!(op.is_halted());
-    let attempt = op.observe_and_sign(&lock([0x24; 32], 500, 6));
+    let attempt = op.observe_and_sign(&lock([0x24; 32], 500, 6), 900_000);
     assert_eq!(attempt, Err(OperatorError::Halted(HaltReason::Overload)));
 }
 
 #[test]
 fn below_finality_is_not_signed() {
     let mut op = make_operator(0);
-    let attempt = op.observe_and_sign(&lock([0x25; 32], 500, 5));
+    let attempt = op.observe_and_sign(&lock([0x25; 32], 500, 5), 900_000);
     assert_eq!(attempt, Err(OperatorError::BelowFinality { got: 5, need: 6 }));
     assert!(!op.is_halted());
 }
@@ -118,8 +118,8 @@ fn below_finality_is_not_signed() {
 fn one_source_event_is_not_signed_twice_by_an_operator() {
     let mut op = make_operator(0);
     let source_ref = [0x26; 32];
-    op.observe_and_sign(&lock(source_ref, 500, 6)).expect("first sign");
-    let again = op.observe_and_sign(&lock(source_ref, 500, 6));
+    op.observe_and_sign(&lock(source_ref, 500, 6), 900_000).expect("first sign");
+    let again = op.observe_and_sign(&lock(source_ref, 500, 6), 900_000);
     assert_eq!(again, Err(OperatorError::AlreadySigned));
 }
 
@@ -151,7 +151,7 @@ fn sign_own_view(id: u32, view: &WatcherSet) -> Vec<SignedObservation> {
     let mut op = make_operator(id);
     let mut out = Vec::new();
     for lk in view.poll(SOURCE).unwrap_or_default() {
-        if let Ok(signed) = op.observe_and_sign(&lk) {
+        if let Ok(signed) = op.observe_and_sign(&lk, 900_000) {
             out.push(signed);
         }
     }
@@ -190,13 +190,13 @@ fn overload_halts_and_never_takes_a_relaxed_path() {
 
     let valid_final = lock([0x78; 32], 500, 6);
     assert_eq!(
-        op.observe_and_sign(&valid_final),
+        op.observe_and_sign(&valid_final, 900_000),
         Err(OperatorError::Halted(HaltReason::Overload))
     );
 
     op.note_load(0, 1_000);
     assert_eq!(
-        op.observe_and_sign(&valid_final),
+        op.observe_and_sign(&valid_final, 900_000),
         Err(OperatorError::Halted(HaltReason::Overload))
     );
     assert_eq!(op.state(), OperatorState::Halted(HaltReason::Overload));
