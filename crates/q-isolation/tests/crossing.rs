@@ -23,7 +23,7 @@ fn real_attestation() -> q_airlock::AttestationEnvelope {
     };
     let mut op = Operator::new(SoftSigner::from_seed(0, &[0x09u8; 32]));
     op.configure_corridor(ctx);
-    let observation = op.observe_and_sign(&lock).expect("a final lock signs");
+    let observation = op.observe_and_sign(&lock, 900_000).expect("a final lock signs");
     let mut agg = Aggregator::new(1);
     agg.add(&observation.fact, observation.sig).expect("first signature seeds the fact");
     agg.try_finalize().expect("threshold of one finalizes")
