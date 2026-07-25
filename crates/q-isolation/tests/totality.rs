@@ -40,6 +40,7 @@ fn valid_fact() -> BridgeFact {
         recipient: Recipient([5u8; 32]),
         finality_depth: 12,
         observed_height: 880_000,
+        expiry_height: 900_000,
     }
 }
 
