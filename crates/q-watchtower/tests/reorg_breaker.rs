@@ -44,6 +44,7 @@ fn deposit(source_ref: [u8; 32], amount: u128) -> BridgeFact {
         recipient: Recipient([0x66; 32]),
         finality_depth: 6,
         observed_height: 800_000,
+        expiry_height: 900_000,
     }
 }
 
