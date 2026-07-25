@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use blst::min_pk::{AggregateSignature, SecretKey};
 use q_bls::{Bls12381AggregateVerifier, ETH_SYNC_COMMITTEE_DST};
 use qlc_ethereum::beacon::{

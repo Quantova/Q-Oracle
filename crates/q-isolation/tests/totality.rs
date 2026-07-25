@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_airlock::{Artifact, AttestationEnvelope, StarkEnvelope};
 use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
 use q_isolation::{admit, PqArtifact, ATTESTATION_TAG, STARK_TAG};

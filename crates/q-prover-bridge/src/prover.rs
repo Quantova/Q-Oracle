@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_airlock::StarkEnvelope;
 use qtv_stark::codec::{decode_proof, encode_proof};
 use qtv_stark::sponge::{absorb_air, absorb_output, absorb_trace, SHAKE256_RATE};

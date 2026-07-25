@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)]
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 
 pub const ATTEST_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/ATTEST/v1";
 pub const FACT_VERSION: u8 = 1;

@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_airlock::{AttestationEnvelope, SignerSig};
 use q_codec::{AssetId, BridgeFact, CodecError, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION};
 use q_gateway::{Gateway, GatewayError, OperatorSet};

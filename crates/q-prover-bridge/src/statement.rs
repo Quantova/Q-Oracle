@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_codec::{BridgeFact, Writer};
 use qtv_stark::sponge::{absorb_output, SHAKE256_RATE};
 
