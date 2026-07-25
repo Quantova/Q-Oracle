@@ -2,7 +2,7 @@
 
 pub const ATTEST_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/ATTEST/v1";
 pub const FACT_VERSION: u8 = 1;
-pub const FACT_ENCODED_LEN: usize = 130;
+pub const FACT_ENCODED_LEN: usize = 138;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -50,6 +50,7 @@ pub struct BridgeFact {
     pub recipient: Recipient,
     pub finality_depth: u32,
     pub observed_height: u64,
+    pub expiry_height: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,6 +256,7 @@ impl BridgeFact {
         w.fixed(&self.recipient.0);
         w.u32(self.finality_depth);
         w.u64(self.observed_height);
+        w.u64(self.expiry_height);
         w.finish()
     }
 
@@ -272,6 +274,7 @@ impl BridgeFact {
         let recipient = Recipient(r.array32()?);
         let finality_depth = r.u32()?;
         let observed_height = r.u64()?;
+        let expiry_height = r.u64()?;
         r.finish()?;
         Ok(BridgeFact {
             version,
@@ -286,6 +289,7 @@ impl BridgeFact {
             recipient,
             finality_depth,
             observed_height,
+            expiry_height,
         })
     }
 
@@ -301,6 +305,7 @@ impl BridgeFact {
             && self.recipient.0 == [0u8; 32]
             && self.finality_depth == 0
             && self.observed_height == 0
+            && self.expiry_height == 0
     }
 
     pub fn attest_preimage(&self) -> Vec<u8> {
@@ -351,6 +356,7 @@ mod tests {
             recipient: Recipient([5u8; 32]),
             finality_depth: 12,
             observed_height: 880_000,
+            expiry_height: 900_000,
         }
     }
 
@@ -413,6 +419,7 @@ mod tests {
             recipient: Recipient([0u8; 32]),
             finality_depth: 0,
             observed_height: 0,
+            expiry_height: 0,
         };
         assert!(z.is_zero());
         assert!(z.validate().is_err());
@@ -500,5 +507,9 @@ mod tests {
         let mut l = sample();
         l.observed_height = 880_001;
         assert_ne!(l.attest_preimage(), base);
+
+        let mut m = sample();
+        m.expiry_height = 900_001;
+        assert_ne!(m.attest_preimage(), base);
     }
 }
