@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_airlock::{parse, Artifact};
 use q_attestor::{
     Aggregator, CorridorContext, HaltReason, ObservedLock, Operator, OperatorError, OperatorState,

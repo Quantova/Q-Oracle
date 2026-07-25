@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_airlock::{Artifact, StarkEnvelope};
 use q_attestor::watcher::{CorridorContext, ObservedLock};
 use q_attestor::{Aggregator, Operator, SoftSigner};

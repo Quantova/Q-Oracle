@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_isolation::{admit, Refused, ALL_CROSSINGS, CROSSING_KIND_COUNT};
 
 fn refused(bytes: &[u8]) {

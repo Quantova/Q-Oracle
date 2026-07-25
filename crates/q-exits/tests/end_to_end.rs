@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_exits::{
     DeskConfig, ExitCertificate, ExitDesk, ExitError, ExitProver, ExitState, ExitStatement,
     HashStark, PayoutAttestation, PayoutWatcher, EXIT_STATEMENT_VERSION, PAYOUT_VERSION,

@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use q_airlock::SignerSig;
 use q_codec::Writer;
 use q_gateway::gateway::TIER_DOMAIN;

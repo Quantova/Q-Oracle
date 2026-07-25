@@ -1,3 +1,6 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
 use blst::min_pk::{PublicKey, Signature};
 use blst::BLST_ERROR;
 use qlc_ethereum::bls::{BlsAggregateVerifier, BlsPubkey, BlsSignature};
