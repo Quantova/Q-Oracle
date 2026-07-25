@@ -36,10 +36,11 @@ pub fn watch_and_admit<S: AttestationSigner>(
     feeds: &mut [OperatorFeed<S>],
 ) -> Result<MintReceipt, WatchError> {
     let mut agg = Aggregator::new(threshold);
+    let dest_height = gateway.current_height();
     for feed in feeds.iter_mut() {
         let locks = feed.watchers.poll(corridor.chain_id).unwrap_or_default();
         for lock in locks {
-            if let Ok(signed) = feed.operator.observe_and_sign(&lock) {
+            if let Ok(signed) = feed.operator.observe_and_sign(&lock, dest_height) {
                 let _ = agg.add(&signed.fact, signed.sig);
             }
         }
