@@ -43,7 +43,7 @@ fn deposit(c: &Corridor, source_ref: [u8; 32], amount: u128) -> BridgeFact {
         version: FACT_VERSION,
         source_chain: c.chain_id,
         dest_chain: CHAIN_ID,
-        route_id: 1,
+        route_id: c.chain_id,
         direction: Direction::Deposit,
         nonce: 1,
         source_ref: SourceRef(source_ref),
@@ -52,6 +52,7 @@ fn deposit(c: &Corridor, source_ref: [u8; 32], amount: u128) -> BridgeFact {
         recipient: Recipient([0x55; 32]),
         finality_depth: c.confirmation_depth + 8,
         observed_height: 900_000,
+        expiry_height: 1_800_000,
     }
 }
 
