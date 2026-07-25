@@ -79,6 +79,7 @@ impl<S: AttestationSigner> Operator<S> {
     pub fn observe_and_sign(
         &mut self,
         lock: &ObservedLock,
+        dest_height: u64,
     ) -> Result<SignedObservation, OperatorError> {
         if let OperatorState::Halted(r) = self.state {
             return Err(OperatorError::Halted(r));
@@ -95,7 +96,7 @@ impl<S: AttestationSigner> Operator<S> {
             });
         }
 
-        let fact = translate(lock, &ctx);
+        let fact = translate(lock, &ctx, dest_height);
         let digest = sha3_256(&fact.encode());
 
         match self.seen_facts.get(&lock.source_ref) {
@@ -165,7 +166,7 @@ mod tests {
     fn signed_observation_verifies_over_the_attest_preimage() {
         let mut operator = op();
         let pk = SoftSigner::from_seed(0, &[0x09u8; 32]).public_key();
-        let signed = operator.observe_and_sign(&lock()).expect("final lock signs");
+        let signed = operator.observe_and_sign(&lock(), 900_000).expect("final lock signs");
 
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&signed.sig.signature);
@@ -177,7 +178,7 @@ mod tests {
     fn signature_is_bound_to_the_attest_context() {
         let mut operator = op();
         let pk = SoftSigner::from_seed(0, &[0x09u8; 32]).public_key();
-        let signed = operator.observe_and_sign(&lock()).expect("final lock signs");
+        let signed = operator.observe_and_sign(&lock(), 900_000).expect("final lock signs");
 
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&signed.sig.signature);
