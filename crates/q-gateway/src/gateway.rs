@@ -44,6 +44,7 @@ pub struct Gateway {
     operators: OperatorSet,
     governance: OperatorSet,
     used_refs: BTreeSet<[u8; 32]>,
+    highest_nonce: BTreeMap<(u32, u8), u64>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     per_asset_cap: BTreeMap<[u8; 16], u128>,
     epoch_cap: u128,
@@ -67,6 +68,7 @@ impl Gateway {
             operators,
             governance: OperatorSet::new(0),
             used_refs: BTreeSet::new(),
+            highest_nonce: BTreeMap::new(),
             per_asset_minted: BTreeMap::new(),
             per_asset_cap: BTreeMap::new(),
             epoch_cap,
@@ -423,6 +425,12 @@ impl Gateway {
         if fact.dest_chain != self.chain_id {
             return Err(GatewayError::WrongDestination);
         }
+        if self.current_height > fact.expiry_height {
+            return Err(GatewayError::MessageExpired {
+                now: self.current_height,
+                expiry: fact.expiry_height,
+            });
+        }
         let corridor = self
             .corridors
             .get(&fact.source_chain)
@@ -503,7 +511,18 @@ impl Gateway {
             return Err(GatewayError::ReplayedReference);
         }
 
+        let direction_key = (fact.route_id, fact.direction.tag());
+        if let Some(&high_water) = self.highest_nonce.get(&direction_key) {
+            if fact.nonce <= high_water {
+                return Err(GatewayError::StaleOrReplayedNonce {
+                    got: fact.nonce,
+                    high_water,
+                });
+            }
+        }
+
         self.used_refs.insert(fact.source_ref.0);
+        self.highest_nonce.insert(direction_key, fact.nonce);
         self.per_asset_minted.insert(fact.asset_id.0, asset_after);
         self.epoch_minted = epoch_after;
 
@@ -540,6 +559,7 @@ mod tests {
             recipient: Recipient([0x55; 32]),
             finality_depth: 6,
             observed_height: 800_000,
+            expiry_height: 900_000,
         }
     }
 
