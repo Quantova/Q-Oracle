@@ -20,6 +20,7 @@ fn light_client_fact() -> BridgeFact {
         recipient: Recipient([0x33u8; 32]),
         finality_depth: 6,
         observed_height: 880_101,
+        expiry_height: 900_101,
     }
 }
 
