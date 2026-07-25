@@ -28,6 +28,13 @@ pub enum GatewayError {
     ExitExceedsMinted { minted: u128, amount: u128 },
     ExitNotReady { now: u64, unlock: u64 },
     UnknownExit(u64),
+    /// The signed deadline has passed. The current Quantova height is already
+    /// beyond the height by which this deposit had to be admitted.
+    MessageExpired { now: u64, expiry: u64 },
+    /// The deposit nonce does not advance the corridor direction. A later
+    /// message on this route and direction was already admitted, so this one
+    /// is stale or a replay.
+    StaleOrReplayedNonce { got: u64, high_water: u64 },
 }
 
 impl From<CodecError> for GatewayError {
