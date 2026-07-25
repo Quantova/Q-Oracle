@@ -8,7 +8,14 @@ use q_prover_bridge::{prove_statement, verify_statement, CommitmentProof, Corrid
 use crate::signer::AttestationSigner;
 use crate::watcher::{CorridorContext, ObservedLock};
 
-pub fn translate(lock: &ObservedLock, ctx: &CorridorContext) -> BridgeFact {
+/// Lifetime, in Quantova (destination) blocks, granted to a translated deposit.
+/// The mint must be admitted before `dest_height + MESSAGE_TTL_BLOCKS`.
+pub const MESSAGE_TTL_BLOCKS: u64 = 7_200;
+
+/// Translate a foreign lock into a Quantova bridge fact. `dest_height` is the
+/// best-known Quantova (destination) height at attestation time and seeds the
+/// signed deadline; it must come from the destination clock, never the source.
+pub fn translate(lock: &ObservedLock, ctx: &CorridorContext, dest_height: u64) -> BridgeFact {
     let mut nonce_bytes = [0u8; 8];
     nonce_bytes.copy_from_slice(&lock.source_ref[0..8]);
     BridgeFact {
@@ -24,6 +31,7 @@ pub fn translate(lock: &ObservedLock, ctx: &CorridorContext) -> BridgeFact {
         recipient: Recipient(lock.recipient),
         finality_depth: lock.confirmations,
         observed_height: lock.observed_height,
+        expiry_height: dest_height.saturating_add(MESSAGE_TTL_BLOCKS),
     }
 }
 
@@ -123,6 +131,7 @@ mod tests {
             recipient: Recipient([5u8; 32]),
             finality_depth: 12,
             observed_height: 880_000,
+            expiry_height: 900_000,
         }
     }
 
@@ -177,19 +186,23 @@ mod tests {
         l.observed_height = 880_001;
         out.push(l);
 
+        let mut m = fact();
+        m.expiry_height = 900_001;
+        out.push(m);
+
         out
     }
 
     #[test]
     fn translation_is_byte_deterministic_across_operators() {
-        let a = translate(&lock(), &ctx());
-        let b = translate(&lock(), &ctx());
+        let a = translate(&lock(), &ctx(), 900_000);
+        let b = translate(&lock(), &ctx(), 900_000);
         assert_eq!(a.encode(), b.encode());
     }
 
     #[test]
     fn translated_fact_validates() {
-        assert!(translate(&lock(), &ctx()).validate().is_ok());
+        assert!(translate(&lock(), &ctx(), 900_000).validate().is_ok());
     }
 
     #[test]
@@ -311,7 +324,7 @@ mod tests {
     #[test]
     fn the_choke_point_turns_a_foreign_observation_into_the_two_pq_artifacts() {
         let s = signer();
-        let translated = translate(&lock(), &ctx());
+        let translated = translate(&lock(), &ctx(), 900_000);
         let env = package(&translated, &s);
 
         assert!(verify_corridor_stark(s.operator_id(), &translated, &env.stark));
