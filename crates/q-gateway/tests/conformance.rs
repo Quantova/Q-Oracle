@@ -48,6 +48,7 @@ fn deposit(source_ref: [u8; 32], amount: u128) -> BridgeFact {
         recipient: Recipient([0x55; 32]),
         finality_depth: 6,
         observed_height: 800_000,
+        expiry_height: 900_000,
     }
 }
 
@@ -79,6 +80,7 @@ fn vector_prove_nothing_message_fails() {
         recipient: Recipient([0; 32]),
         finality_depth: 0,
         observed_height: 0,
+        expiry_height: 0,
     };
     let env = AttestationEnvelope {
         fact: zero.clone(),
