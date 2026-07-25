@@ -99,6 +99,7 @@ mod tests {
             recipient: Recipient([0x55; 32]),
             finality_depth: 40,
             observed_height: 900_000,
+            expiry_height: 1_800_000,
         }
     }
 
