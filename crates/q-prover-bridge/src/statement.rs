@@ -51,6 +51,7 @@ mod tests {
             recipient: Recipient([5u8; 32]),
             finality_depth: 12,
             observed_height: 880_000,
+            expiry_height: 900_000,
         }
     }
 
@@ -138,5 +139,9 @@ mod tests {
         let mut k = statement();
         k.fact.observed_height = 880_001;
         assert_ne!(k.digest(), base);
+
+        let mut l = statement();
+        l.fact.expiry_height = 900_001;
+        assert_ne!(l.digest(), base);
     }
 }
