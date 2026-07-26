@@ -4,7 +4,6 @@
 use q_airlock::{Artifact, StarkEnvelope};
 use q_attestor::watcher::{CorridorContext, ObservedLock};
 use q_attestor::{Aggregator, Operator, SoftSigner};
-use q_exits::{DigestBinding, ExitProver, ExitStatement, EXIT_STATEMENT_VERSION};
 use q_isolation::{admit, PqArtifact};
 use qtv_crypto::ml_dsa::SIGNATURE_BYTES;
 
@@ -36,19 +35,9 @@ fn real_attestation() -> q_airlock::AttestationEnvelope {
 }
 
 fn real_stark() -> StarkEnvelope {
-    let statement = ExitStatement {
-        version: EXIT_STATEMENT_VERSION,
-        home_chain: 9000,
-        corridor: 1,
-        asset_id: [0xa1u8; 16],
-        amount: 500,
-        beneficiary: [0x55u8; 32],
-        burn_ref: [0x11u8; 32],
-        finalized_height: 4_200_000,
-    };
     StarkEnvelope {
-        statement_digest: statement.digest(),
-        proof: DigestBinding.prove(&statement),
+        statement_digest: [0x5au8; 32],
+        proof: vec![0xa5u8; 2048],
     }
 }
 

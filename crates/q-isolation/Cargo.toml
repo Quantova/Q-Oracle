@@ -17,5 +17,4 @@ q-codec = { workspace = true }
 q-airlock = { workspace = true }
 q-codec = { workspace = true }
 q-attestor = { workspace = true }
-q-exits = { path = "../q-exits" }
 qtv-crypto = { workspace = true }
