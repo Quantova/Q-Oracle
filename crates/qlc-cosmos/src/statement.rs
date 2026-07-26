@@ -3,6 +3,7 @@
 
 use crate::chain::ChainConfig;
 use crate::commit::{verify_commit, Commit, CommitError, Header};
+use crate::light::{check_anchor, LightError, TrustedState};
 use crate::proof::{extract_deposit, Deposit, ExistenceProof, ProofError};
 use crate::validator::ValidatorSet;
 use qlc_core::VerifiedEvent;
@@ -14,6 +15,7 @@ use qlc_stark::StarkStatement;
 pub enum CorridorError {
     ChainMismatch,
     MalformedAppHash,
+    Unanchored(LightError),
     Commit(CommitError),
     Proof(ProofError),
 }
@@ -69,6 +71,7 @@ pub struct TrustlessDeposit {
 
 fn verify_deposit_core(
     cfg: &ChainConfig,
+    trusted: &TrustedState,
     header: &Header,
     commit: &Commit,
     set: &ValidatorSet,
@@ -77,6 +80,7 @@ fn verify_deposit_core(
     if header.chain_id != cfg.chain_id {
         return Err(CorridorError::ChainMismatch);
     }
+    check_anchor(cfg, trusted, header, set).map_err(CorridorError::Unanchored)?;
     let signed_power = verify_commit(cfg.chain_id, header, commit, set).map_err(CorridorError::Commit)?;
 
     if header.app_hash.len() != 32 {
@@ -91,12 +95,13 @@ fn verify_deposit_core(
 
 pub fn verify_deposit(
     cfg: &ChainConfig,
+    trusted: &TrustedState,
     header: &Header,
     commit: &Commit,
     set: &ValidatorSet,
     proof: &ExistenceProof,
 ) -> Result<CorridorOutput, CorridorError> {
-    let (deposit, signed_power) = verify_deposit_core(cfg, header, commit, set, proof)?;
+    let (deposit, signed_power) = verify_deposit_core(cfg, trusted, header, commit, set, proof)?;
 
     let statement = cosmos_tendermint(
         cfg.corridor_id,
@@ -119,12 +124,13 @@ pub fn verify_deposit(
 /// amount, recipient and asset are read from the chain, never asserted by a caller.
 pub fn verify_trustless_deposit(
     cfg: &ChainConfig,
+    trusted: &TrustedState,
     header: &Header,
     commit: &Commit,
     set: &ValidatorSet,
     proof: &ExistenceProof,
 ) -> Result<TrustlessDeposit, CorridorError> {
-    let (deposit, _signed_power) = verify_deposit_core(cfg, header, commit, set, proof)?;
+    let (deposit, _signed_power) = verify_deposit_core(cfg, trusted, header, commit, set, proof)?;
     Ok(TrustlessDeposit {
         source_ref: deposit.source_ref,
         amount: deposit.amount,
@@ -159,6 +165,15 @@ mod tests {
                 pubkey: public_key_from_seed(&seed),
                 voting_power: power,
             },
+        }
+    }
+
+    fn anchor(set: &ValidatorSet) -> TrustedState {
+        TrustedState {
+            height: 0,
+            header_hash: [0u8; 32],
+            validators: set.clone(),
+            next_validators_hash: set.hash().to_vec(),
         }
     }
 
@@ -228,7 +243,7 @@ mod tests {
     #[test]
     fn a_signed_header_and_a_deposit_proof_yield_the_cosmos_statement() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let out = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
 
         assert_eq!(out.statement.kind, StatementKind::CosmosTendermint);
         assert_eq!(out.statement.corridor_id, 8);
@@ -244,7 +259,7 @@ mod tests {
     #[test]
     fn the_lowered_stark_statement_is_hash_only_and_thirty_seven_bytes() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let out = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         let lowered = lower(&out.statement);
 
         assert_eq!(lowered.kind, StatementKind::CosmosTendermint);
@@ -256,7 +271,7 @@ mod tests {
     #[test]
     fn the_statement_is_fixed_width_with_no_room_for_foreign_material() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let out = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         let encoded = out.statement.encode();
         assert_eq!(encoded.len(), ProofStatement::ENCODED_LEN);
         assert_eq!(ProofStatement::decode(&encoded), Some(out.statement));
@@ -265,7 +280,7 @@ mod tests {
     #[test]
     fn the_public_input_binds_the_amount() {
         let (header, commit, set, mut proof) = scene(&[0, 1, 2, 3]);
-        let base = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let base = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         let base_digest = public_input_digest(&base.statement);
 
         let recipient = [0x51u8; 32];
@@ -274,7 +289,7 @@ mod tests {
         let mut header2 = header.clone();
         header2.app_hash = proof.calculate_root().to_vec();
         let commit2 = resign(&header2, &set);
-        let bumped = verify_deposit(&COSMOS_HUB, &header2, &commit2, &set, &proof).unwrap();
+        let bumped = verify_deposit(&COSMOS_HUB, &anchor(&set), &header2, &commit2, &set, &proof).unwrap();
 
         assert_ne!(public_input_digest(&bumped.statement), base_digest);
     }
@@ -308,7 +323,7 @@ mod tests {
     fn a_short_commit_produces_no_statement() {
         let (header, commit, set, proof) = scene(&[0, 1]);
         assert!(matches!(
-            verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof),
+            verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
             Err(CorridorError::Commit(CommitError::NotEnoughVotingPower { .. }))
         ));
     }
@@ -318,7 +333,7 @@ mod tests {
         let (header, commit, set, mut proof) = scene(&[0, 1, 2, 3]);
         proof.value[48] ^= 0x01;
         assert_eq!(
-            verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof),
+            verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
             Err(CorridorError::Proof(ProofError::RootMismatch))
         );
     }
@@ -328,7 +343,7 @@ mod tests {
         let (mut header, _c, set, proof) = scene(&[0, 1, 2, 3]);
         header.chain_id = crate::chain::OSMOSIS.chain_id.to_string();
         let commit = resign(&header, &set);
-        let out = verify_deposit(&crate::chain::OSMOSIS, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&crate::chain::OSMOSIS, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         assert_eq!(out.statement.corridor_id, 9);
         assert_eq!(out.statement.kind, StatementKind::CosmosTendermint);
     }
@@ -336,7 +351,7 @@ mod tests {
     #[test]
     fn a_signed_header_and_a_deposit_proof_prove_trustless_end_to_end() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let proven = verify_trustless_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let proven = verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         assert_eq!(proven.amount, 7_500_000u128);
         assert_eq!(proven.recipient, [0x51u8; 32]);
         assert_eq!(proven.asset_id, *b"qATOM.atom\0\0\0\0\0\0");
@@ -348,8 +363,8 @@ mod tests {
     #[test]
     fn the_trustless_deposit_carries_the_same_values_as_the_statement() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let out = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
-        let proven = verify_trustless_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
+        let proven = verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         assert_eq!(proven.source_ref, out.statement.event.source_ref);
         assert_eq!(proven.amount, out.statement.event.amount);
         assert_eq!(proven.recipient, out.statement.event.recipient);
@@ -360,7 +375,7 @@ mod tests {
     fn a_short_commit_proves_no_trustless_deposit() {
         let (header, commit, set, proof) = scene(&[0, 1]);
         assert!(matches!(
-            verify_trustless_deposit(&COSMOS_HUB, &header, &commit, &set, &proof),
+            verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
             Err(CorridorError::Commit(CommitError::NotEnoughVotingPower { .. }))
         ));
     }
@@ -370,7 +385,7 @@ mod tests {
         let (header, commit, set, mut proof) = scene(&[0, 1, 2, 3]);
         proof.value[48] ^= 0x01;
         assert_eq!(
-            verify_trustless_deposit(&COSMOS_HUB, &header, &commit, &set, &proof),
+            verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
             Err(CorridorError::Proof(ProofError::RootMismatch))
         );
     }
@@ -380,7 +395,7 @@ mod tests {
         let (mut header, commit, set, proof) = scene(&[0, 1, 2, 3]);
         header.chain_id = "osmosis-1".to_string();
         assert_eq!(
-            verify_trustless_deposit(&COSMOS_HUB, &header, &commit, &set, &proof),
+            verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
             Err(CorridorError::ChainMismatch)
         );
     }
@@ -391,8 +406,30 @@ mod tests {
         header.app_hash = vec![0x04; 31];
         let commit = resign(&header, &set);
         assert_eq!(
-            verify_trustless_deposit(&COSMOS_HUB, &header, &commit, &set, &proof),
+            verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
             Err(CorridorError::MalformedAppHash)
         );
+    }
+
+    #[test]
+    fn a_self_generated_validator_set_is_rejected_against_the_pinned_anchor() {
+        let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
+
+        let matching = anchor(&set);
+        assert!(
+            verify_trustless_deposit(&COSMOS_HUB, &matching, &header, &commit, &set, &proof).is_ok(),
+            "the pinned validator set verifies its own signed header"
+        );
+
+        let others = ValidatorSet::new(
+            [keyed(50, 25), keyed(51, 25), keyed(52, 25), keyed(53, 25)]
+                .iter()
+                .map(|k| k.info)
+                .collect(),
+        );
+        assert!(matches!(
+            verify_trustless_deposit(&COSMOS_HUB, &anchor(&others), &header, &commit, &set, &proof),
+            Err(CorridorError::Unanchored(LightError::InsufficientOverlap { .. }))
+        ));
     }
 }
