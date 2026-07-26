@@ -27,7 +27,8 @@ use std::collections::BTreeMap;
 use q_airlock::AttestationEnvelope;
 use q_codec::BridgeFact;
 use q_qbridge::{
-    commit_deposit, verify_deposit, BitcoinProofMaterial, DepositProof, DepositRequest, Response,
+    commit_deposit, verify_deposit, BitcoinProofMaterial, BridgeState, DepositProof, DepositRequest,
+    Response,
 };
 use qlc_cosmos::commit::{Commit, Header};
 use qlc_cosmos::proof::ExistenceProof;
@@ -167,6 +168,27 @@ pub struct Ingested {
     pub durability: Durability,
 }
 
+pub(crate) fn persist_or_rollback(
+    state: &mut BridgeState,
+    store: Option<&GuardStore>,
+    rev_before: u64,
+    snapshot: &[u8],
+) -> Durability {
+    if state.gateway.guard_revision() == rev_before {
+        return Durability::NotPersisted;
+    }
+    let Some(store) = store else {
+        return Durability::NotPersisted;
+    };
+    match store.save(&state.gateway.encode_guard()) {
+        Ok(()) => Durability::Persisted,
+        Err(_) => {
+            let _ = state.gateway.rehydrate_guard(snapshot);
+            Durability::PersistFailed
+        }
+    }
+}
+
 /// Run one ingestion cycle. Poll every attached watcher and route each proven deposit through the
 /// same tested `handle` a submitted deposit takes, over the shared state behind its mutex. A source
 /// whose RPC is unavailable is skipped without stalling the others. The mint stays at the trustless
@@ -198,21 +220,12 @@ pub fn ingest_once(
                 };
                 let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
                 let rev_before = guard.gateway.guard_revision();
+                let snapshot = guard.gateway.encode_guard();
                 let response = match commit_deposit(&mut guard, plan) {
                     Ok(outcome) => Response::DepositAdmitted(outcome),
                     Err(err) => Response::Error(err),
                 };
-                let durability = if guard.gateway.guard_revision() != rev_before {
-                    match store {
-                        Some(store) => match store.save(&guard.gateway.encode_guard()) {
-                            Ok(()) => Durability::Persisted,
-                            Err(_) => Durability::PersistFailed,
-                        },
-                        None => Durability::NotPersisted,
-                    }
-                } else {
-                    Durability::NotPersisted
-                };
+                let durability = persist_or_rollback(&mut guard, store, rev_before, &snapshot);
                 (response, durability)
             }));
             if let Ok((response, durability)) = routed {
@@ -504,7 +517,7 @@ mod tests {
     }
 
     #[test]
-    fn a_watch_path_persist_failure_is_surfaced_not_swallowed() {
+    fn a_watch_path_persist_failure_rolls_back_and_the_deposit_readmits() {
         let bridge = p2pkh([0x11; 20]);
         let recipient = [0x42u8; 32];
         let raw = raw_deposit_tx(&[(250_000, bridge.clone()), (0, op_return(recipient))]);
@@ -529,18 +542,50 @@ mod tests {
             amount: 250_000,
         }));
 
-        let store = GuardStore::new("/no-such-q-oracle-dir/guard.snap");
-        let ingested = ingest_once(&state, &pool, Some(&store));
+        let failing = GuardStore::new("/no-such-q-oracle-dir/guard.snap");
+        let ingested = ingest_once(&state, &pool, Some(&failing));
         assert_eq!(ingested.len(), 1);
-        assert!(
-            matches!(ingested[0].response, Response::DepositAdmitted(_)),
-            "the deposit is admitted in memory"
-        );
         assert_eq!(
             ingested[0].durability,
             Durability::PersistFailed,
             "a durability failure on the ingestion seam is surfaced, not silently dropped"
         );
+        {
+            let guard = state.read().unwrap();
+            assert!(
+                !guard.gateway.is_reference_used(&txid),
+                "a failed persist rolls the reserved reference back so memory never leads disk"
+            );
+            assert_eq!(
+                guard.gateway.minted_of_asset(&asset_id),
+                0,
+                "a failed persist rolls the reserved mint budget back"
+            );
+        }
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!("q-oracle-watch-{}-{nanos}.snap", std::process::id()));
+        let working = GuardStore::new(path.clone());
+        let ingested = ingest_once(&state, &pool, Some(&working));
+        assert_eq!(ingested.len(), 1);
+        assert_eq!(
+            ingested[0].durability,
+            Durability::Persisted,
+            "the same deposit re-admits and persists once the store recovers"
+        );
+        {
+            let guard = state.read().unwrap();
+            assert!(
+                guard.gateway.is_reference_used(&txid),
+                "the recovered persist binds the reference authoritatively"
+            );
+            assert_eq!(guard.gateway.minted_of_asset(&asset_id), 250_000);
+        }
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]

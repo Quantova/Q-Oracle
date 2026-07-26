@@ -14,6 +14,7 @@ use q_qbridge::{
 
 use crate::json::{self, object, Json};
 use crate::persist::GuardStore;
+use crate::watch::{persist_or_rollback, Durability};
 use crate::wire::{decode_request, encode_response};
 
 pub const MAX_BODY: usize = 2 * 1024 * 1024;
@@ -340,15 +341,16 @@ fn route(
             };
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             let rev_before = guard.gateway.guard_revision();
+            let snapshot = guard.gateway.encode_guard();
             let committed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 commit_deposit(&mut guard, plan)
             }))
             .map_err(|_| RouteFail::Panicked)?;
             match committed {
-                Ok(outcome) => {
-                    persist_if_advanced(&guard, store, rev_before)?;
-                    Ok(Response::DepositAdmitted(outcome))
-                }
+                Ok(outcome) => match persist_or_rollback(&mut guard, store, rev_before, &snapshot) {
+                    Durability::PersistFailed => Err(RouteFail::PersistFailed),
+                    _ => Ok(Response::DepositAdmitted(outcome)),
+                },
                 Err(err) => Ok(Response::Error(err)),
             }
         }
