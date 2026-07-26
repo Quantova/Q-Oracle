@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read, Result as IoResult, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use q_qbridge::{handle, BridgeState};
 
@@ -18,6 +18,8 @@ pub const MAX_BODY: usize = 2 * 1024 * 1024;
 pub const MAX_HEAD: usize = 16 * 1024;
 
 pub const IO_TIMEOUT: Duration = Duration::from_secs(15);
+
+pub const REQUEST_DEADLINE: Duration = Duration::from_secs(20);
 
 pub const MAX_CONNECTIONS: usize = 512;
 
@@ -111,13 +113,14 @@ pub fn serve(listener: TcpListener, state: SharedState) {
 fn handle_connection(mut stream: TcpStream, state: SharedState) -> IoResult<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
+    let deadline = Instant::now() + REQUEST_DEADLINE;
     let mut reader = BufReader::new(stream.try_clone()?);
 
     let mut head_budget = MAX_HEAD;
-    let request_line = match read_capped_line(&mut reader, &mut head_budget) {
+    let request_line = match read_capped_line(&mut reader, &mut head_budget, deadline) {
         Ok(Some(line)) => line,
         Ok(None) => return Ok(()),
-        Err(_) => return write_error(&mut stream, 431, "head_too_large", "the request head is too large"),
+        Err(e) => return head_read_error(&mut stream, &e),
     };
     let mut parts = request_line.split_whitespace();
     let verb = parts.next().unwrap_or("").to_string();
@@ -125,12 +128,10 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> IoResult<()> 
 
     let mut content_length = 0usize;
     loop {
-        let header = match read_capped_line(&mut reader, &mut head_budget) {
+        let header = match read_capped_line(&mut reader, &mut head_budget, deadline) {
             Ok(Some(header)) => header,
             Ok(None) => break,
-            Err(_) => {
-                return write_error(&mut stream, 431, "head_too_large", "the request head is too large")
-            }
+            Err(e) => return head_read_error(&mut stream, &e),
         };
         let trimmed = header.trim_end();
         if trimmed.is_empty() {
@@ -152,7 +153,26 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> IoResult<()> 
     }
 
     let mut body = vec![0u8; content_length];
-    reader.read_exact(&mut body)?;
+    let mut filled = 0usize;
+    while filled < content_length {
+        let now = Instant::now();
+        if now >= deadline {
+            return write_error(&mut stream, 408, "timeout", "the request exceeded its time budget");
+        }
+        let remaining = deadline
+            .saturating_duration_since(now)
+            .min(IO_TIMEOUT)
+            .max(Duration::from_millis(1));
+        stream.set_read_timeout(Some(remaining)).ok();
+        match reader.read(&mut body[filled..]) {
+            Ok(0) => return Ok(()),
+            Ok(n) => filled += n,
+            Err(ref e) if is_timeout(e) => {
+                return write_error(&mut stream, 408, "timeout", "the request exceeded its time budget")
+            }
+            Err(e) => return Err(e),
+        }
+    }
     let body_text = String::from_utf8_lossy(&body);
 
     let Some(method) = path.strip_prefix("/v1/") else {
@@ -185,10 +205,35 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> IoResult<()> 
     write_response(&mut stream, 200, &encode_response(&response).render())
 }
 
-fn read_capped_line<R: BufRead>(reader: &mut R, budget: &mut usize) -> IoResult<Option<String>> {
+fn is_timeout(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+    )
+}
+
+fn head_read_error(stream: &mut TcpStream, e: &std::io::Error) -> IoResult<()> {
+    if is_timeout(e) {
+        write_error(stream, 408, "timeout", "the request exceeded its time budget")
+    } else {
+        write_error(stream, 431, "head_too_large", "the request head is too large")
+    }
+}
+
+fn read_capped_line<R: BufRead>(
+    reader: &mut R,
+    budget: &mut usize,
+    deadline: Instant,
+) -> IoResult<Option<String>> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     loop {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the request exceeded its time budget",
+            ));
+        }
         if reader.read(&mut byte)? == 0 {
             return Ok(if line.is_empty() {
                 None
@@ -253,6 +298,7 @@ fn reason(code: u16) -> &'static str {
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        408 => "Request Timeout",
         413 => "Payload Too Large",
         429 => "Too Many Requests",
         431 => "Request Header Fields Too Large",
@@ -308,7 +354,8 @@ mod tests {
         let spent = raw.len();
         let mut reader = Cursor::new(raw);
         let mut budget = MAX_HEAD;
-        let line = read_capped_line(&mut reader, &mut budget).unwrap().unwrap();
+        let far = Instant::now() + Duration::from_secs(3600);
+        let line = read_capped_line(&mut reader, &mut budget, far).unwrap().unwrap();
         assert_eq!(line, "POST /v1/list_pools HTTP/1.1\r");
         assert_eq!(budget, MAX_HEAD - spent, "every byte read draws down the budget");
     }
@@ -317,9 +364,23 @@ mod tests {
     fn a_capped_line_refuses_a_line_that_exhausts_the_budget() {
         let mut reader = Cursor::new(vec![b'a'; 100]);
         let mut budget = 16usize;
+        let far = Instant::now() + Duration::from_secs(3600);
         assert!(
-            read_capped_line(&mut reader, &mut budget).is_err(),
+            read_capped_line(&mut reader, &mut budget, far).is_err(),
             "an endless line is refused once the budget is spent"
+        );
+    }
+
+    #[test]
+    fn a_read_past_its_deadline_is_aborted() {
+        let mut reader = Cursor::new(b"POST /v1/list_pools HTTP/1.1\r\n".to_vec());
+        let mut budget = MAX_HEAD;
+        let deadline = Instant::now();
+        let err = read_capped_line(&mut reader, &mut budget, deadline).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::TimedOut,
+            "a request that overruns its wall clock budget is aborted"
         );
     }
 
