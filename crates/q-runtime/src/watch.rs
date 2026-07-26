@@ -34,10 +34,28 @@ use qlc_ethereum::TrustlessDeposit as EthereumDeposit;
 
 use crate::http::SharedState;
 
+pub const MAX_PROOFS_PER_POLL: usize = 256;
+
+pub const MAX_RAW_TX: usize = 100_000;
+
+pub const MAX_DEPOSIT_SCRIPT: usize = 512;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchError {
     SourceUnavailable,
     Rpc(String),
+}
+
+fn within_bounds(proof: &DepositProof) -> bool {
+    match proof {
+        DepositProof::Bitcoin { material, .. } => {
+            material.headers.len() <= crate::wire::MAX_HEADERS
+                && material.branch.len() <= crate::wire::MAX_BRANCH
+                && material.raw_tx.len() <= MAX_RAW_TX
+                && material.deposit_script.len() <= MAX_DEPOSIT_SCRIPT
+        }
+        _ => true,
+    }
 }
 
 /// One source chain's ingestion feed. The concrete implementation is the RPC client that pulls
@@ -117,9 +135,12 @@ pub fn ingest_once(state: &SharedState, pool: &WatcherPool) -> Vec<Ingested> {
             Ok(proofs) => proofs,
             Err(_) => continue,
         };
-        for proof in proofs {
+        for proof in proofs.into_iter().take(MAX_PROOFS_PER_POLL) {
+            if !within_bounds(&proof) {
+                continue;
+            }
             let response = {
-                let mut guard = state.lock().expect("the oracle bridge state lock is not poisoned");
+                let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
                 handle(&mut guard, Request::SubmitDeposit(DepositRequest { proof }))
             };
             ingested.push(Ingested {
@@ -321,6 +342,94 @@ mod tests {
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(SilentNode(Network::Bitcoin.id())));
         assert!(ingest_once(&state, &pool).is_empty());
+    }
+
+    struct FloodNode {
+        proofs: Vec<DepositProof>,
+    }
+
+    impl ChainWatcher for FloodNode {
+        fn source_chain(&self) -> u32 {
+            Network::Bitcoin.id()
+        }
+
+        fn poll_proven(&self) -> Result<Vec<DepositProof>, WatchError> {
+            Ok(self.proofs.clone())
+        }
+    }
+
+    fn btc_fact(txid: [u8; 32]) -> BridgeFact {
+        BridgeFact {
+            version: FACT_VERSION,
+            source_chain: Network::Bitcoin.id(),
+            dest_chain: DEST_CHAIN,
+            route_id: 1,
+            direction: Direction::Deposit,
+            nonce: 1,
+            source_ref: SourceRef(txid),
+            asset_id: AssetId(derive_asset_id(Network::Bitcoin, "BTC").0),
+            amount: 250_000,
+            recipient: Recipient([0x42; 32]),
+            finality_depth: 6,
+            observed_height: 800_000,
+            expiry_height: 900_000,
+        }
+    }
+
+    #[test]
+    fn an_oversized_ingested_bitcoin_proof_is_dropped_before_verification() {
+        let dummy = BlockHeader {
+            version: 1,
+            prev_block: [0u8; 32],
+            merkle_root: [0u8; 32],
+            timestamp: 0,
+            bits: 0,
+            nonce: 0,
+        };
+        let material = BitcoinProofMaterial {
+            headers: vec![dummy; crate::wire::MAX_HEADERS + 1],
+            start_height: 0,
+            deposit_height: 0,
+            branch: vec![],
+            raw_tx: vec![0u8; 4],
+            deposit_script: vec![],
+        };
+        let state = shared(boot());
+        let mut pool = WatcherPool::new();
+        pool.attach(Box::new(FloodNode {
+            proofs: vec![bitcoin_proof(material, btc_fact([0x11; 32]))],
+        }));
+        assert!(
+            ingest_once(&state, &pool).is_empty(),
+            "an oversized proof is refused before it reaches verification under the lock"
+        );
+    }
+
+    #[test]
+    fn a_flood_of_ingested_proofs_is_capped_per_poll() {
+        let mut proofs = Vec::new();
+        for i in 0..(MAX_PROOFS_PER_POLL + 5) {
+            let mut txid = [0u8; 32];
+            txid[0] = (i % 256) as u8;
+            txid[1] = (i / 256) as u8;
+            let material = BitcoinProofMaterial {
+                headers: vec![],
+                start_height: 0,
+                deposit_height: 0,
+                branch: vec![],
+                raw_tx: vec![0u8; 4],
+                deposit_script: vec![],
+            };
+            proofs.push(bitcoin_proof(material, btc_fact(txid)));
+        }
+        let state = shared(boot());
+        let mut pool = WatcherPool::new();
+        pool.attach(Box::new(FloodNode { proofs }));
+        assert_eq!(
+            ingest_once(&state, &pool).len(),
+            MAX_PROOFS_PER_POLL,
+            "no more than the per poll cap is routed under the lock"
+        );
     }
 
     #[test]
