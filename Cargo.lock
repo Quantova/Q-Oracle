@@ -121,6 +121,7 @@ name = "q-federated"
 version = "0.1.0"
 dependencies = [
  "q-airlock",
+ "q-assets",
  "q-attestor",
  "q-codec",
  "q-gateway",

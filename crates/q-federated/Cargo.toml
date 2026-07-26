@@ -14,10 +14,12 @@ q-codec = { workspace = true }
 q-airlock = { workspace = true }
 q-gateway = { workspace = true }
 q-attestor = { workspace = true }
+q-assets = { workspace = true }
 q-isolation = { path = "../q-isolation" }
 qlc-bitcoin = { workspace = true }
 qlc-ethereum = { workspace = true }
 qlc-cosmos = { workspace = true }
+qtv-crypto = { workspace = true }
 
 [dev-dependencies]
 qtv-crypto = { workspace = true }

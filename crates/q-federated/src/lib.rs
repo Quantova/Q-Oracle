@@ -5,11 +5,16 @@
 
 pub mod admission;
 pub mod corridors;
+pub mod pools;
 pub mod sources;
 pub mod trustless;
 pub mod watch;
 
 pub use admission::{admit, install, FederatedError};
+pub use pools::{
+    corridor_for, derive_asset_id, depth_for, grade_for, install_all, install_pool, tier_for,
+    PoolError, PoolRegistry, PoolRequest, PoolSpec,
+};
 pub use trustless::{
     admit_bitcoin_trustless, admit_cosmos_trustless, admit_ethereum_trustless, match_bitcoin_deposit,
     match_cosmos_deposit, match_ethereum_deposit, TrustlessError, TrustlessMint,
