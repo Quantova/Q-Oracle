@@ -1,0 +1,18 @@
+# Copyright 2026 Quantova Inc
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
+[package]
+name = "qlc-ethereum"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Off-chain Ethereum and EVM light client for the bridge. Altair sync committee verification of a BLS aggregate over a finalized beacon header, sync committee rotation across periods, and finality through the finalized checkpoint, plus keccak RLP and Merkle Patricia receipt extraction against the receipts root. One engine is chain parameterized by a chain id, a genesis validators root, and a fork schedule so every EVM chain and every Ethereum settled rollup reuses it. The BLS aggregate check is a seam whose concrete pairing backend lives only in Q-Oracle, isolated so nothing foreign crosses. Only the ML-DSA attestation and the hash STARK reach the Airlock."
+
+[dependencies]
+qlc-core = { path = "../../../Q-Lightclient/crates/qlc-core" }
+qlc-stark = { path = "../../../Q-Lightclient/crates/qlc-stark" }
+qlc-bitcoin = { path = "../../../Q-Lightclient/crates/qlc-bitcoin" }
+
+[dev-dependencies]
+qlc-airlock = { path = "../../../Q-Lightclient/crates/qlc-airlock" }
