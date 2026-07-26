@@ -22,6 +22,7 @@ use qlc_stark::StarkStatement;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EthError {
     NotBeaconChain,
+    InvalidParticipationLength { got: usize, expected: usize },
     InsufficientParticipation { got: usize, needed: usize },
     WrongPeriod,
     BadFinalityProof,
@@ -165,6 +166,13 @@ fn verify_sync_aggregate(
     verifier: &dyn BlsAggregateVerifier,
 ) -> Result<(), EthError> {
     let committee = select_committee(store, signature_slot)?;
+    let expected = store.config.sync_committee_size;
+    if committee.pubkeys.len() != expected || sync_aggregate.participation.len() != expected {
+        return Err(EthError::InvalidParticipationLength {
+            got: sync_aggregate.participation.len(),
+            expected,
+        });
+    }
     let participants = sync_aggregate.participants();
     let needed = store.config.supermajority_threshold();
     if participants < needed {
@@ -611,6 +619,22 @@ mod tests {
             Err(EthError::InsufficientParticipation {
                 got: 300,
                 needed: 342
+            })
+        );
+    }
+
+    #[test]
+    fn a_participation_vector_padded_past_the_committee_is_refused() {
+        let mut participation = vec![false; 512];
+        participation[0] = true;
+        participation.extend(std::iter::repeat(true).take(341));
+        let f = build_fixture(7_000_000_000_000_000_000u128, participation);
+        assert!(f.update.sync_aggregate.participants() >= 342);
+        assert_eq!(
+            verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::InvalidParticipationLength {
+                got: 853,
+                expected: 512
             })
         );
     }
