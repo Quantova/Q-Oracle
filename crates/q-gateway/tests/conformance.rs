@@ -7,6 +7,8 @@ use q_gateway::gateway::REORG_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const CHAIN_ID: u32 = 9000;
 const SOURCE: u32 = 1;
 const ASSET: [u8; 16] = [0xa1; 16];
@@ -34,7 +36,7 @@ fn sign_ctx(op: &Op, message: &[u8], context: &[u8]) -> SignerSig {
 }
 
 fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-    sign_ctx(op, &fact.attest_preimage(), ATTEST_DOMAIN)
+    sign_ctx(op, &fact.attest_preimage(DEST_ID), ATTEST_DOMAIN)
 }
 
 fn deposit(source_ref: [u8; 32], amount: u128) -> BridgeFact {
@@ -56,14 +58,51 @@ fn deposit(source_ref: [u8; 32], amount: u128) -> BridgeFact {
 }
 
 fn gateway(ops: &[Op], threshold: usize) -> Gateway {
+    gateway_with(ops, threshold, DEST_ID)
+}
+
+fn gateway_with(ops: &[Op], threshold: usize, dest_chain_id: u64) -> Gateway {
     let mut set = OperatorSet::new(threshold);
     for op in ops {
         set.register(op.id, op.pk);
     }
-    let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000);
+    let mut gw = Gateway::new(CHAIN_ID, dest_chain_id, set, 1_000_000);
     gw.register_corridor(SOURCE, 6);
     gw.register_asset_cap(ASSET, 1_000);
     gw
+}
+
+fn attest_with(op: &Op, fact: &BridgeFact, dest_chain_id: u64) -> SignerSig {
+    sign_ctx(op, &fact.attest_preimage(dest_chain_id), ATTEST_DOMAIN)
+}
+
+#[test]
+fn a_quorum_signed_for_one_chain_id_is_refused_by_a_sibling_gateway() {
+    let ops: Vec<Op> = (0..4).map(mk).collect();
+    let chain_a = DEST_ID;
+    let chain_b = DEST_ID ^ (1u64 << 40);
+    assert_eq!(chain_a as u32, chain_b as u32, "the two siblings share the low 32 bits");
+    let f = deposit([0x77; 32], 500);
+    let env = AttestationEnvelope {
+        fact: f.clone(),
+        signatures: vec![
+            attest_with(&ops[0], &f, chain_a),
+            attest_with(&ops[1], &f, chain_a),
+            attest_with(&ops[2], &f, chain_a),
+        ],
+    };
+    let mut matching = gateway_with(&ops, 3, chain_a);
+    assert_eq!(
+        matching.process_deposit(&env).expect("the matching destination chain id mints").amount,
+        500
+    );
+    let mut sibling = gateway_with(&ops, 3, chain_b);
+    assert_eq!(
+        sibling.process_deposit(&env),
+        Err(GatewayError::BadSignature(0)),
+        "a sibling chain sharing the u32 destination refuses the replayed quorum"
+    );
+    assert_eq!(sibling.minted_of_asset(&ASSET), 0);
 }
 
 #[test]
@@ -144,7 +183,7 @@ fn vector_signature_under_a_foreign_context_does_not_count() {
         signatures: vec![
             attest(&ops[0], &f),
             attest(&ops[1], &f),
-            sign_ctx(&ops[2], &f.attest_preimage(), REORG_DOMAIN),
+            sign_ctx(&ops[2], &f.attest_preimage(DEST_ID), REORG_DOMAIN),
         ],
     };
     assert_eq!(gw.process_deposit(&env), Err(GatewayError::BadSignature(2)));

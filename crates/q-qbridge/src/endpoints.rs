@@ -367,6 +367,8 @@ fn deposit_status(state: &BridgeState, request: &DepositStatusRequest) -> Deposi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use q_airlock::SignerSig;
     use q_codec::{
         AssetId, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION,
@@ -388,7 +390,7 @@ mod tests {
     }
 
     fn empty_state(threshold: usize) -> BridgeState {
-        BridgeState::new(Gateway::new(DEST, OperatorSet::new(threshold), 1_000_000_000_000))
+        BridgeState::new(Gateway::new(DEST, DEST_ID, OperatorSet::new(threshold), 1_000_000_000_000))
     }
 
     struct Op {
@@ -406,7 +408,7 @@ mod tests {
     }
 
     fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),
@@ -622,7 +624,7 @@ mod tests {
 
     #[test]
     fn listing_by_an_unknown_network_is_an_error_and_listing_all_returns_the_seed_set() {
-        let mut state = BridgeState::seeded(Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000));
+        let mut state = BridgeState::seeded(Gateway::new(DEST, DEST_ID, OperatorSet::new(0), 1_000_000_000_000));
         let bad = handle(
             &mut state,
             Request::ListPools(ListPoolsRequest { network_id: Some(44) }),
@@ -641,7 +643,7 @@ mod tests {
         for op in &ops {
             set.register(op.id, op.pk);
         }
-        let mut state = BridgeState::new(Gateway::new(DEST, set, 1_000_000_000_000));
+        let mut state = BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000));
         let view = match handle(
             &mut state,
             Request::CreatePool(pool_request(Network::Solana.id(), "SOL")),
@@ -787,7 +789,7 @@ mod tests {
         for op in &ops {
             set.register(op.id, op.pk);
         }
-        let mut state = BridgeState::new(Gateway::new(DEST, set, 1_000_000_000_000));
+        let mut state = BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000));
         let view = match handle(
             &mut state,
             Request::CreatePool(pool_request(Network::Solana.id(), "SOL")),

@@ -62,6 +62,8 @@ pub fn admit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use crate::corridors::{find, SOLANA};
     use crate::sources::SourceEndpoint;
     use q_airlock::SignerSig;
@@ -107,7 +109,7 @@ mod tests {
     }
 
     fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),
@@ -124,7 +126,7 @@ mod tests {
         for op in &ops {
             set.register(op.id, op.pk);
         }
-        let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000_000_000);
+        let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000_000_000);
         install(&mut gw);
         (ops, gw)
     }

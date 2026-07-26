@@ -7,6 +7,8 @@ use q_gateway::gateway::TIER_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const CHAIN_ID: u32 = 9000;
 const SOURCE: u32 = 1;
 
@@ -44,7 +46,7 @@ fn build(operators: &[Signer], governance: &[Signer], gov_threshold: usize) -> G
     for op in operators {
         ops.register(op.id, op.pk);
     }
-    let mut gw = Gateway::new(CHAIN_ID, ops, 1_000_000);
+    let mut gw = Gateway::new(CHAIN_ID, DEST_ID, ops, 1_000_000);
     gw.register_corridor(SOURCE, 6);
     let mut gov = OperatorSet::new(gov_threshold);
     for g in governance {
@@ -141,7 +143,7 @@ fn a_gateway_with_no_governance_set_upgrades_nothing() {
     for op in &operators {
         ops.register(op.id, op.pk);
     }
-    let mut gw = Gateway::new(CHAIN_ID, ops, 1_000_000);
+    let mut gw = Gateway::new(CHAIN_ID, DEST_ID, ops, 1_000_000);
     gw.register_corridor(SOURCE, 6);
 
     let governance: Vec<Signer> = (10..14).map(|i| mk(i, 0x6E)).collect();

@@ -310,6 +310,8 @@ pub fn install_all(gateway: &mut Gateway, registry: &PoolRegistry) {
 mod tests {
     use super::*;
 
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
     fn request(network_id: u32, identifier: &str) -> PoolRequest {
         PoolRequest {
             network_id,
@@ -563,7 +565,7 @@ mod tests {
         let spec = registry
             .create_pool(&request(Network::Bitcoin.id(), "BTC"))
             .expect("bitcoin pool lists");
-        let mut gateway = Gateway::new(9000, OperatorSet::new(0), 1_000_000_000_000);
+        let mut gateway = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
         install_pool(&mut gateway, &spec);
         assert_eq!(gateway.asset_cap(&spec.asset_id.0), Some(spec.per_asset_cap));
         assert!(gateway.corridor_tier(Network::Bitcoin.id()).is_some());

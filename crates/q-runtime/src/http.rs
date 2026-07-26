@@ -324,6 +324,8 @@ fn reason(code: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use q_gateway::{Gateway, OperatorSet};
     use std::io::Cursor;
 
@@ -401,7 +403,7 @@ mod tests {
     fn serve_seeded() -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let gateway = Gateway::new(9000, OperatorSet::new(0), 1_000_000_000_000);
+        let gateway = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
         let state: SharedState = Arc::new(Mutex::new(BridgeState::seeded(gateway)));
         serve(listener, state);
         port
@@ -463,7 +465,7 @@ mod tests {
     fn a_poisoned_state_lock_still_serves_the_next_request() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        let gateway = Gateway::new(9000, OperatorSet::new(0), 1_000_000_000_000);
+        let gateway = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
         let state: SharedState = Arc::new(Mutex::new(BridgeState::seeded(gateway)));
 
         let poisoner = state.clone();

@@ -60,6 +60,8 @@ pub fn watch_and_admit<S: AttestationSigner>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use crate::corridors::{find, BNB_CHAIN};
     use crate::sources::SourceEndpoint;
     use q_attestor::{CorridorContext, ObservedLock, SoftSigner, Watcher, WatcherError};
@@ -119,6 +121,7 @@ mod tests {
         operator.configure_corridor(CorridorContext {
             source_chain: c.chain_id,
             dest_chain: CHAIN_ID,
+            dest_chain_id: DEST_ID,
             route_id: 1,
             required_confirmations: c.confirmation_depth,
         });
@@ -130,7 +133,7 @@ mod tests {
         for id in ids {
             set.register(*id, public_key(*id));
         }
-        let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000_000_000);
+        let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000_000_000);
         crate::admission::install(&mut gw);
         gw
     }

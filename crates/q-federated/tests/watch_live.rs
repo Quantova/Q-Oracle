@@ -9,6 +9,8 @@ use q_federated::{
 use q_gateway::{Gateway, OperatorSet};
 use qtv_crypto::ml_dsa;
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const CHAIN_ID: u32 = 9000;
 
 fn seed_for(id: u32) -> [u8; 32] {
@@ -62,6 +64,7 @@ fn feed_for(id: u32, c: &Corridor, source_ref: [u8; 32], amount: u128) -> Operat
     operator.configure_corridor(CorridorContext {
         source_chain: c.chain_id,
         dest_chain: CHAIN_ID,
+        dest_chain_id: DEST_ID,
         route_id: 1,
         required_confirmations: c.confirmation_depth,
     });
@@ -73,7 +76,7 @@ fn gateway(ids: &[u32], threshold: usize) -> Gateway {
     for id in ids {
         set.register(*id, public_key(*id));
     }
-    let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000_000_000);
+    let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000_000_000);
     install(&mut gw);
     gw
 }
