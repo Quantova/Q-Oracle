@@ -21,8 +21,6 @@ impl OperatorSet {
         }
     }
 
-    /// Register an operator's key. A pubkey already held under a different operator id is refused,
-    /// so no single key can occupy two quorum slots. Returns `false` when the key is rejected.
     pub fn register(&mut self, operator_id: u32, pubkey: PublicKey) -> bool {
         if self
             .pubkeys

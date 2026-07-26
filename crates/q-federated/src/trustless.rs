@@ -67,8 +67,6 @@ pub fn match_bitcoin_deposit(
     if fact.recipient.0 != proven.recipient {
         return Err(TrustlessError::RecipientMismatch);
     }
-    // A Bitcoin SPV proof carries no asset, so the fact cannot be trusted to name one. The corridor
-    // is pinned to its native coin and only that asset may mint, whatever the fact claims.
     if fact.asset_id.0 != corridor.origin_asset.0 {
         return Err(TrustlessError::AssetMismatch);
     }
@@ -88,11 +86,6 @@ pub fn match_bitcoin_deposit(
     })
 }
 
-/// The trustless admission path, run alongside the federated `admit`. It clears the fact-match
-/// gate, then authoritatively binds the source reference against replay and reserves the per-asset
-/// and epoch budget on the gateway, committing only when every check passes. The on-chain token
-/// mint stays downstream, gated on the corridor's STARK verified on chain, and reconciles against
-/// this reservation.
 pub fn admit_bitcoin_trustless(
     gateway: &mut Gateway,
     corridor: &Corridor,
@@ -104,9 +97,6 @@ pub fn admit_bitcoin_trustless(
     Ok(mint)
 }
 
-/// Authoritatively commit the admission: bind the source reference against replay and reserve the
-/// per-asset and epoch budget on the gateway. A repeat of the same reference or a deposit past a cap
-/// is refused, and the reserved total is advanced only when it admits, so caps actually bind.
 fn apply_replay_and_cap(gateway: &mut Gateway, mint: &TrustlessMint) -> Result<(), TrustlessError> {
     gateway
         .admit_trustless(mint.asset_id, mint.source_ref, mint.amount)
@@ -170,9 +160,6 @@ pub fn match_ethereum_deposit(
     })
 }
 
-/// The trustless admission path for an Ethereum corridor. It clears the fact-match gate, then
-/// authoritatively binds the reference and reserves the per-asset and epoch budget on the gateway,
-/// as the Bitcoin path documents. The on-chain token mint stays downstream on the corridor's STARK.
 pub fn admit_ethereum_trustless(
     gateway: &mut Gateway,
     corridor: &Corridor,
@@ -234,9 +221,6 @@ pub fn match_cosmos_deposit(
     })
 }
 
-/// The trustless admission path for a Cosmos corridor. It clears the fact-match gate, then
-/// authoritatively binds the reference and reserves the per-asset and epoch budget on the gateway,
-/// as the Bitcoin path documents. The on-chain token mint stays downstream on the corridor's STARK.
 pub fn admit_cosmos_trustless(
     gateway: &mut Gateway,
     corridor: &Corridor,

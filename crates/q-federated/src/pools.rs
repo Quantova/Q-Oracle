@@ -18,8 +18,6 @@ pub const MAX_DECIMALS: u8 = 36;
 pub const MIN_CAP: u128 = 1;
 pub const MAX_CAP: u128 = u128::MAX >> 1;
 pub const DEFAULT_CONFIRMATION_DEPTH: u32 = 32;
-/// The most pools the permissionless registry will hold. Creation stays open to any client, but the
-/// registry cannot be grown without bound behind the global mutex, and squatting is capped here.
 pub const MAX_POOLS: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,9 +53,6 @@ pub fn tier_for(network: Network) -> Tier {
     }
 }
 
-/// The one asset a proof-backed corridor is allowed to mint. A Bitcoin, Ethereum or Cosmos proof
-/// carries the network's native coin, so the corridor is pinned to that native pool asset and cannot
-/// be steered by a fact onto some other token listed on the same network.
 pub fn native_asset(network: Network) -> Option<AssetId> {
     let identifier = match network {
         Network::Bitcoin => "BTC",

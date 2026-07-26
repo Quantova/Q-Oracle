@@ -15,9 +15,6 @@ pub struct VerifiedChain {
     headers: Vec<BlockHeader>,
 }
 
-/// A pinned trust root for the Bitcoin chain: a block known good at a given height, plus the minimum
-/// cumulative work a chain descending from it must carry. It comes from config or genesis, never from
-/// the submitted proof, so a chain a caller supplies has to descend from a checkpoint it did not pick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checkpoint {
     pub height: u32,
@@ -26,8 +23,6 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
-    /// A checkpoint that anchors a chain to its own start with no work floor. For tests and fixtures
-    /// that exercise the chain machinery rather than the trust root.
     pub fn accepting(chain: &VerifiedChain) -> Checkpoint {
         Checkpoint {
             height: chain.start_height,
@@ -128,9 +123,6 @@ pub fn heavier<'a>(a: &'a VerifiedChain, b: &'a VerifiedChain) -> &'a VerifiedCh
 }
 
 impl VerifiedChain {
-    /// Require this chain to descend from a pinned checkpoint and to carry the checkpoint's minimum
-    /// cumulative work. The checkpoint block must appear in the chain at its height with its hash, so
-    /// a chain a caller mined off some other history is refused, and a low-work chain cannot pass.
     pub fn anchored_to(&self, checkpoint: &Checkpoint) -> Result<(), SpvError> {
         let header = self
             .header_at(checkpoint.height)

@@ -17,9 +17,6 @@ pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
 
-/// The smallest quorum that is a two-thirds supermajority of `size` and is never below two. A
-/// corridor with no explicit quorum falls back to this floor so it can never admit on a bare
-/// majority or a lone signer.
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
     two_thirds.max(2)
@@ -421,11 +418,6 @@ impl Gateway {
         Ok(ticket)
     }
 
-    /// Authoritatively admit a proof-backed deposit whose light-client proof the caller has already
-    /// verified. The reference is bound against replay and the per-asset and epoch budgets are
-    /// reserved, and all three are committed only when every check passes. This is the accounting the
-    /// on-chain mint reconciles against, so a repeat of the same reference or a deposit past a cap is
-    /// refused here rather than silently re-admitted.
     pub fn admit_trustless(
         &mut self,
         asset_id: [u8; 16],
