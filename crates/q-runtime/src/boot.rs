@@ -186,7 +186,7 @@ mod tests {
         let checkpoint = Checkpoint {
             height: 0,
             hash: headers[0].block_hash(),
-            min_work: U256::ZERO,
+            min_work: U256::ONE,
         };
         let material = BitcoinProofMaterial {
             headers,

@@ -326,7 +326,7 @@ mod tests {
         let checkpoint = Checkpoint {
             height: 0,
             hash: crafted_chain(txid)[0].block_hash(),
-            min_work: U256::ZERO,
+            min_work: U256::ONE,
         };
 
         let state = shared(boot());
