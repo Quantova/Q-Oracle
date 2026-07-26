@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::net::{TcpListener, ToSocketAddrs};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -10,6 +11,7 @@ use q_gateway::{Gateway, OperatorSet};
 use q_qbridge::BridgeState;
 
 use crate::http::{serve, SharedState};
+use crate::persist::GuardStore;
 
 /// The Quantova destination chain the oracle mints against.
 pub const DEST_CHAIN: u32 = 9000;
@@ -59,14 +61,35 @@ pub fn shared(state: BridgeState) -> SharedState {
 
 /// Bind, boot a fully seeded state, and serve the endpoints, parking the calling thread while the
 /// accept loop runs. The authoritative on-chain mint stays at the trustless deposit seam.
-pub fn run<A: ToSocketAddrs>(addr: A) -> std::io::Result<()> {
-    run_with(addr, shared(boot()))
+pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Result<()> {
+    let store = snapshot.map(|path| GuardStore::new(path));
+    let state = restore(&store)?;
+    run_with(addr, shared(state), store.map(Arc::new))
+}
+
+pub(crate) fn restore(store: &Option<GuardStore>) -> std::io::Result<BridgeState> {
+    let mut state = boot();
+    if let Some(store) = store {
+        if let Some(bytes) = store.load()? {
+            state.gateway.rehydrate_guard(&bytes).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("the guard snapshot is corrupt and was refused: {e:?}"),
+                )
+            })?;
+        }
+    }
+    Ok(state)
 }
 
 /// Serve a supplied shared state, for a runtime booted with configured operators and sources.
-pub fn run_with<A: ToSocketAddrs>(addr: A, state: SharedState) -> std::io::Result<()> {
+pub fn run_with<A: ToSocketAddrs>(
+    addr: A,
+    state: SharedState,
+    store: Option<Arc<GuardStore>>,
+) -> std::io::Result<()> {
     let listener = TcpListener::bind(addr)?;
-    serve(listener, state);
+    serve(listener, state, store);
     loop {
         thread::park();
     }
@@ -328,5 +351,58 @@ mod tests {
             }
             other => panic!("expected a trustless admission, got {other:?}"),
         }
+    }
+
+    fn temp_snapshot(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!("q-oracle-boot-{tag}-{}-{nanos}.snap", std::process::id()));
+        path
+    }
+
+    #[test]
+    fn a_simulated_restart_reloads_the_guard_and_keeps_the_replay_window_closed() {
+        let path = temp_snapshot("restart");
+        let store = GuardStore::new(path.clone());
+        let asset = derive_asset_id(Network::Bitcoin, "BTC").0;
+
+        let mut state = boot();
+        state
+            .gateway
+            .admit_trustless(asset, [0x11; 32], 1, Network::Bitcoin.id())
+            .expect("a seeded corridor admits the reference");
+        store.save(&state.gateway.encode_guard()).expect("the admission is persisted");
+        drop(state);
+
+        let restored = restore(&Some(store)).expect("a present snapshot rehydrates the guard");
+        assert!(
+            restored.gateway.is_reference_used(&[0x11; 32]),
+            "the reserved reference survives the restart"
+        );
+        assert_eq!(restored.gateway.minted_of_asset(&asset), 1);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_corrupt_snapshot_refuses_to_start_rather_than_serving_an_empty_guard() {
+        let path = temp_snapshot("corrupt");
+        std::fs::write(&path, b"\xff\xff\xff not a guard snapshot").unwrap();
+        let result = restore(&Some(GuardStore::new(path.clone())));
+        let err = match result {
+            Ok(_) => panic!("a corrupt snapshot must fail closed rather than start"),
+            Err(err) => err,
+        };
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn an_absent_snapshot_starts_a_fresh_guard() {
+        let path = temp_snapshot("absent");
+        let restored = restore(&Some(GuardStore::new(path))).expect("first run starts fresh");
+        assert!(!restored.gateway.is_reference_used(&[0x11; 32]));
     }
 }

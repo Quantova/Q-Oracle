@@ -17,12 +17,14 @@
 pub mod boot;
 pub mod http;
 pub mod json;
+pub mod persist;
 pub mod watch;
 pub mod wire;
 
 pub use boot::{
     boot, boot_with, declare_operator_source, run, run_with, shared, DEFAULT_EPOCH_CAP, DEST_CHAIN,
 };
+pub use persist::GuardStore;
 pub use http::{serve, SharedState, MAX_BODY, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_HEAD};
 pub use json::Json;
 pub use watch::{

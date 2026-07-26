@@ -35,6 +35,7 @@ use qlc_cosmos::validator::ValidatorSet;
 use qlc_ethereum::{DepositProof as EthDepositProof, LightClientUpdate};
 
 use crate::http::SharedState;
+use crate::persist::{advanced, GuardStore};
 
 pub const MAX_PROOFS_PER_POLL: usize = 256;
 
@@ -148,7 +149,11 @@ pub struct Ingested {
 /// same tested `handle` a submitted deposit takes, over the shared state behind its mutex. A source
 /// whose RPC is unavailable is skipped without stalling the others. The mint stays at the trustless
 /// seam; nothing here admits without the admission path the proof's tier already enforces.
-pub fn ingest_once(state: &SharedState, pool: &WatcherPool) -> Vec<Ingested> {
+pub fn ingest_once(
+    state: &SharedState,
+    pool: &WatcherPool,
+    store: Option<&GuardStore>,
+) -> Vec<Ingested> {
     let mut ingested = Vec::new();
     for source_chain in pool.chains() {
         let proofs = match pool.poll(source_chain) {
@@ -161,7 +166,13 @@ pub fn ingest_once(state: &SharedState, pool: &WatcherPool) -> Vec<Ingested> {
             }
             let response = {
                 let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
-                handle(&mut guard, Request::SubmitDeposit(DepositRequest { proof }))
+                let response = handle(&mut guard, Request::SubmitDeposit(DepositRequest { proof }));
+                if advanced(&response) {
+                    if let Some(store) = store {
+                        let _ = store.save(&guard.gateway.encode_guard());
+                    }
+                }
+                response
             };
             ingested.push(Ingested {
                 source_chain,
@@ -332,7 +343,7 @@ mod tests {
             amount: 250_000,
         }));
 
-        let ingested = ingest_once(&state, &pool);
+        let ingested = ingest_once(&state, &pool, None);
         assert_eq!(ingested.len(), 1);
         assert_eq!(ingested[0].source_chain, Network::Bitcoin.id());
         match &ingested[0].response {
@@ -361,7 +372,7 @@ mod tests {
         let state = shared(boot());
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(SilentNode(Network::Bitcoin.id())));
-        assert!(ingest_once(&state, &pool).is_empty());
+        assert!(ingest_once(&state, &pool, None).is_empty());
     }
 
     struct FloodNode {
@@ -420,7 +431,7 @@ mod tests {
             proofs: vec![bitcoin_proof(material, btc_fact([0x11; 32]))],
         }));
         assert!(
-            ingest_once(&state, &pool).is_empty(),
+            ingest_once(&state, &pool, None).is_empty(),
             "an oversized proof is refused before it reaches verification under the lock"
         );
     }
@@ -446,7 +457,7 @@ mod tests {
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(FloodNode { proofs }));
         assert_eq!(
-            ingest_once(&state, &pool).len(),
+            ingest_once(&state, &pool, None).len(),
             MAX_PROOFS_PER_POLL,
             "no more than the per poll cap is routed under the lock"
         );
