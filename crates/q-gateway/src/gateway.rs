@@ -69,6 +69,7 @@ pub struct Gateway {
     exit_delay: u64,
     next_exit_id: u64,
     pending_exits: BTreeMap<u64, ExitTicket>,
+    guard_revision: u64,
 }
 
 impl Gateway {
@@ -94,11 +95,20 @@ impl Gateway {
             exit_delay: 0,
             next_exit_id: 0,
             pending_exits: BTreeMap::new(),
+            guard_revision: 0,
         }
     }
 
     pub fn set_governance(&mut self, governance: OperatorSet) {
         self.governance = governance;
+    }
+
+    pub fn guard_revision(&self) -> u64 {
+        self.guard_revision
+    }
+
+    fn touch_guard(&mut self) {
+        self.guard_revision = self.guard_revision.wrapping_add(1);
     }
 
     pub fn set_exit_delay(&mut self, exit_delay: u64) {
@@ -184,23 +194,28 @@ impl Gateway {
 
     pub fn pause_all(&mut self) {
         self.global_pause = true;
+        self.touch_guard();
     }
 
     pub fn unpause_all(&mut self) {
         self.global_pause = false;
+        self.touch_guard();
     }
 
     pub fn pause_source_direct(&mut self, source_chain: u32) {
         self.paused_sources.insert(source_chain);
+        self.touch_guard();
     }
 
     pub fn unpause_source(&mut self, source_chain: u32) {
         self.paused_sources.remove(&source_chain);
+        self.touch_guard();
     }
 
     pub fn advance_epoch(&mut self) {
         self.current_epoch += 1;
         self.epoch_minted = 0;
+        self.touch_guard();
     }
 
     pub fn current_epoch(&self) -> u64 {
@@ -249,6 +264,7 @@ impl Gateway {
             });
         }
         self.paused_sources.insert(source_chain);
+        self.touch_guard();
         Ok(())
     }
 
@@ -303,6 +319,7 @@ impl Gateway {
         }
         if until_height > self.frozen_until {
             self.frozen_until = until_height;
+            self.touch_guard();
         }
         Ok(())
     }
@@ -330,6 +347,7 @@ impl Gateway {
         )?;
         if until_height > self.frozen_until {
             self.frozen_until = until_height;
+            self.touch_guard();
         }
         Ok(())
     }
@@ -374,6 +392,7 @@ impl Gateway {
             });
         }
         self.corridor_cursor.insert(source_chain, cursor + 1);
+        self.touch_guard();
         Ok(())
     }
 
@@ -402,6 +421,7 @@ impl Gateway {
             unlock_height,
         };
         self.pending_exits.insert(exit_id, ticket.clone());
+        self.touch_guard();
         Ok(ticket)
     }
 
@@ -437,6 +457,7 @@ impl Gateway {
         let minted = *self.per_asset_minted.get(&ticket.asset_id).unwrap_or(&0);
         self.per_asset_minted
             .insert(ticket.asset_id, minted.saturating_add(ticket.amount));
+        self.touch_guard();
         Ok(ticket)
     }
 
@@ -495,6 +516,7 @@ impl Gateway {
         self.used_refs.insert(source_ref);
         self.per_asset_minted.insert(asset_id, asset_after);
         self.epoch_minted = epoch_after;
+        self.touch_guard();
         Ok(())
     }
 
@@ -621,6 +643,7 @@ impl Gateway {
         self.highest_nonce.insert(direction_key, fact.nonce);
         self.per_asset_minted.insert(fact.asset_id.0, asset_after);
         self.epoch_minted = epoch_after;
+        self.touch_guard();
 
         Ok(MintReceipt {
             asset_id: fact.asset_id.0,
@@ -1048,6 +1071,30 @@ mod tests {
         assert_eq!(
             gw.finalize_exit(ticket.exit_id),
             Err(GatewayError::UnknownExit(ticket.exit_id))
+        );
+    }
+
+    #[test]
+    fn the_guard_revision_advances_on_a_pause_and_a_mint_but_not_on_a_read() {
+        let (s, mut gw) = nine_op_gateway(3);
+        let start = gw.guard_revision();
+        let _ = gw.asset_cap(&[0xa1; 16]);
+        assert_eq!(
+            gw.guard_revision(),
+            start,
+            "a read leaves the guard revision unchanged"
+        );
+
+        gw.pause_all();
+        let after_pause = gw.guard_revision();
+        assert!(after_pause > start, "a pause advances the guard revision");
+        gw.unpause_all();
+
+        let f = fact();
+        gw.process_deposit(&envelope(&s[0..6], &f)).expect("a supermajority admits");
+        assert!(
+            gw.guard_revision() > after_pause,
+            "an admission advances the guard revision so the runtime persists it"
         );
     }
 

@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use q_airlock::AttestationEnvelope;
 use q_codec::BridgeFact;
 use q_qbridge::{
-    handle, BitcoinProofMaterial, DepositProof, DepositRequest, Request, Response,
+    commit_deposit, verify_deposit, BitcoinProofMaterial, DepositProof, DepositRequest, Response,
 };
 use qlc_cosmos::commit::{Commit, Header};
 use qlc_cosmos::proof::ExistenceProof;
@@ -35,7 +35,7 @@ use qlc_cosmos::validator::ValidatorSet;
 use qlc_ethereum::{DepositProof as EthDepositProof, LightClientUpdate};
 
 use crate::http::SharedState;
-use crate::persist::{advanced, GuardStore};
+use crate::persist::GuardStore;
 
 pub const MAX_PROOFS_PER_POLL: usize = 256;
 
@@ -187,11 +187,23 @@ pub fn ingest_once(
             if !within_bounds(&proof) {
                 continue;
             }
+            let request = DepositRequest { proof };
             let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
-                let response =
-                    handle(&mut guard, Request::SubmitDeposit(DepositRequest { proof }));
-                let durability = if advanced(&response) {
+                let plan = {
+                    let guard = state.read().unwrap_or_else(|e| e.into_inner());
+                    verify_deposit(&guard, &request)
+                };
+                let plan = match plan {
+                    Ok(plan) => plan,
+                    Err(err) => return (Response::Error(err), Durability::NotPersisted),
+                };
+                let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+                let rev_before = guard.gateway.guard_revision();
+                let response = match commit_deposit(&mut guard, plan) {
+                    Ok(outcome) => Response::DepositAdmitted(outcome),
+                    Err(err) => Response::Error(err),
+                };
+                let durability = if guard.gateway.guard_revision() != rev_before {
                     match store {
                         Some(store) => match store.save(&guard.gateway.encode_guard()) {
                             Ok(()) => Durability::Persisted,
@@ -364,7 +376,7 @@ mod tests {
 
         let state = shared(boot());
         state
-            .lock()
+            .write()
             .unwrap()
             .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6 });
         let mut pool = WatcherPool::new();
@@ -388,7 +400,7 @@ mod tests {
             other => panic!("expected a trustless admission, got {other:?}"),
         }
 
-        let guard = state.lock().unwrap();
+        let guard = state.read().unwrap();
         assert!(
             guard.gateway.is_reference_used(&txid),
             "the ingestion seam binds the reference authoritatively"
@@ -506,7 +518,7 @@ mod tests {
         };
         let state = shared(boot());
         state
-            .lock()
+            .write()
             .unwrap()
             .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6 });
         let mut pool = WatcherPool::new();

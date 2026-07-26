@@ -3,7 +3,7 @@
 
 use std::net::{TcpListener, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::thread;
 
 use q_federated::SourceEndpoint;
@@ -56,7 +56,7 @@ pub fn declare_operator_source(
 
 /// Wrap a bridge state for sharing across the server's connection threads.
 pub fn shared(state: BridgeState) -> SharedState {
-    Arc::new(Mutex::new(state))
+    Arc::new(RwLock::new(state))
 }
 
 /// Bind, boot a fully seeded state, and serve the endpoints, parking the calling thread while the
