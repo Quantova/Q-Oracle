@@ -4,7 +4,7 @@
 use q_airlock::{Artifact, StarkEnvelope};
 use q_attestor::watcher::{CorridorContext, ObservedLock};
 use q_attestor::{Aggregator, Operator, SoftSigner};
-use q_exits::{ExitProver, ExitStatement, HashStark, EXIT_STATEMENT_VERSION};
+use q_exits::{DigestBinding, ExitProver, ExitStatement, EXIT_STATEMENT_VERSION};
 use q_isolation::{admit, PqArtifact};
 use qtv_crypto::ml_dsa::SIGNATURE_BYTES;
 
@@ -48,7 +48,7 @@ fn real_stark() -> StarkEnvelope {
     };
     StarkEnvelope {
         statement_digest: statement.digest(),
-        proof: HashStark.prove(&statement),
+        proof: DigestBinding.prove(&statement),
     }
 }
 

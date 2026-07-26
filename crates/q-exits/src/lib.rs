@@ -10,7 +10,7 @@ pub mod payout;
 pub mod vault;
 
 pub use certificate::{
-    ExitCertificate, ExitProver, ExitStatement, ExitVerifier, HashStark, EXIT_PROOF_DOMAIN,
+    ExitCertificate, ExitProver, ExitStatement, ExitVerifier, DigestBinding, EXIT_PROOF_DOMAIN,
     EXIT_STATEMENT_DOMAIN, EXIT_STATEMENT_VERSION,
 };
 pub use errors::ExitError;

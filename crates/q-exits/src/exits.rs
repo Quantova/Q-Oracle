@@ -201,7 +201,7 @@ impl<V: ExitVerifier> ExitDesk<V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::certificate::{ExitProver, ExitStatement, HashStark, EXIT_STATEMENT_VERSION};
+    use crate::certificate::{ExitProver, ExitStatement, DigestBinding, EXIT_STATEMENT_VERSION};
     use crate::payout::{PayoutAttestation, PAYOUT_VERSION};
 
     fn cfg() -> DeskConfig {
@@ -228,7 +228,7 @@ mod tests {
 
     fn cert(burn: u8) -> ExitCertificate {
         let s = statement(burn);
-        let proof = HashStark.prove(&s);
+        let proof = DigestBinding.prove(&s);
         ExitCertificate {
             statement: s,
             proof,
@@ -248,22 +248,22 @@ mod tests {
         }
     }
 
-    fn desk() -> ExitDesk<HashStark> {
-        ExitDesk::new(cfg(), HashStark).unwrap()
+    fn desk() -> ExitDesk<DigestBinding> {
+        ExitDesk::new(cfg(), DigestBinding).unwrap()
     }
 
     #[test]
     fn an_undercollateralized_config_is_refused() {
         let mut c = cfg();
         c.secure_bps = 10_000;
-        assert_eq!(ExitDesk::new(c, HashStark).err(), Some(ExitError::UnsafeParams));
+        assert_eq!(ExitDesk::new(c, DigestBinding).err(), Some(ExitError::UnsafeParams));
     }
 
     #[test]
     fn a_premium_above_the_secure_ratio_is_refused() {
         let mut c = cfg();
         c.premium_bps = 16_000;
-        assert_eq!(ExitDesk::new(c, HashStark).err(), Some(ExitError::UnsafeParams));
+        assert_eq!(ExitDesk::new(c, DigestBinding).err(), Some(ExitError::UnsafeParams));
     }
 
     #[test]
@@ -312,7 +312,7 @@ mod tests {
         let mut s = statement(0x11);
         s.home_chain = 5;
         let c = ExitCertificate {
-            proof: HashStark.prove(&s),
+            proof: DigestBinding.prove(&s),
             statement: s,
         };
         assert_eq!(

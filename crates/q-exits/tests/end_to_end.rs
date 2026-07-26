@@ -3,7 +3,7 @@
 
 use q_exits::{
     DeskConfig, ExitCertificate, ExitDesk, ExitError, ExitProver, ExitState, ExitStatement,
-    HashStark, PayoutAttestation, PayoutWatcher, EXIT_STATEMENT_VERSION, PAYOUT_VERSION,
+    DigestBinding, PayoutAttestation, PayoutWatcher, EXIT_STATEMENT_VERSION, PAYOUT_VERSION,
 };
 
 const HOME: u32 = 9000;
@@ -36,7 +36,7 @@ fn finalized_burn(burn_ref: [u8; 32]) -> ExitStatement {
 
 fn certificate(burn_ref: [u8; 32]) -> ExitCertificate {
     let statement = finalized_burn(burn_ref);
-    let proof = HashStark.prove(&statement);
+    let proof = DigestBinding.prove(&statement);
     ExitCertificate { statement, proof }
 }
 
@@ -69,22 +69,22 @@ fn a_burn_produces_a_certificate_bound_to_the_finalized_burn() {
     let statement = finalized_burn([0x11; 32]);
     let cert = ExitCertificate {
         statement: statement.clone(),
-        proof: HashStark.prove(&statement),
+        proof: DigestBinding.prove(&statement),
     };
-    assert_eq!(cert.verify(&HashStark), Ok(()));
+    assert_eq!(cert.verify(&DigestBinding), Ok(()));
 
     let mut moved = cert.clone();
     moved.statement.amount = AMOUNT + 1;
-    assert_eq!(moved.verify(&HashStark), Err(ExitError::UnboundProof));
+    assert_eq!(moved.verify(&DigestBinding), Err(ExitError::UnboundProof));
 
     let mut reburned = cert;
     reburned.statement.burn_ref = [0x22; 32];
-    assert_eq!(reburned.verify(&HashStark), Err(ExitError::UnboundProof));
+    assert_eq!(reburned.verify(&DigestBinding), Err(ExitError::UnboundProof));
 }
 
 #[test]
 fn a_vault_that_proves_the_payout_within_the_window_is_released() {
-    let mut desk = ExitDesk::new(config(), HashStark).unwrap();
+    let mut desk = ExitDesk::new(config(), DigestBinding).unwrap();
     desk.register_vault(1, 2_000);
     let id = desk.open_exit(&certificate([0x11; 32]), 1, 10).unwrap();
     assert_eq!(desk.locked_collateral(1), 1_500);
@@ -106,7 +106,7 @@ fn a_vault_that_proves_the_payout_within_the_window_is_released() {
 
 #[test]
 fn a_vault_that_fails_to_prove_within_the_window_is_slashed_and_the_user_is_paid_a_premium() {
-    let mut desk = ExitDesk::new(config(), HashStark).unwrap();
+    let mut desk = ExitDesk::new(config(), DigestBinding).unwrap();
     desk.register_vault(1, 2_000);
     let id = desk.open_exit(&certificate([0x11; 32]), 1, 10).unwrap();
 
@@ -131,7 +131,7 @@ fn a_vault_that_fails_to_prove_within_the_window_is_slashed_and_the_user_is_paid
 
 #[test]
 fn the_collateral_ratio_is_enforced_at_issuance_and_a_thin_vault_is_rejected() {
-    let mut desk = ExitDesk::new(config(), HashStark).unwrap();
+    let mut desk = ExitDesk::new(config(), DigestBinding).unwrap();
     desk.register_vault(7, 1_499);
     assert_eq!(
         desk.open_exit(&certificate([0x11; 32]), 7, 10),
@@ -151,7 +151,7 @@ fn the_collateral_ratio_is_enforced_at_issuance_and_a_thin_vault_is_rejected() {
 
 #[test]
 fn a_replayed_exit_certificate_cannot_double_spend() {
-    let mut desk = ExitDesk::new(config(), HashStark).unwrap();
+    let mut desk = ExitDesk::new(config(), DigestBinding).unwrap();
     desk.register_vault(1, 10_000);
     let first = desk.open_exit(&certificate([0x11; 32]), 1, 10).unwrap();
     assert_eq!(desk.locked_collateral(1), 1_500);
