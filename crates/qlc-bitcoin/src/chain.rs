@@ -23,6 +23,7 @@ pub struct Checkpoint {
 }
 
 impl Checkpoint {
+    #[cfg(test)]
     pub fn accepting(chain: &VerifiedChain) -> Checkpoint {
         Checkpoint {
             height: chain.start_height,
@@ -349,6 +350,15 @@ mod tests {
             min_work: U256::from_u64(u64::MAX),
         };
         assert_eq!(chain.anchored_to(&too_light), Err(SpvError::InsufficientWork));
+    }
+
+    #[test]
+    fn the_test_only_accepting_checkpoint_anchors_its_own_chain_with_zero_work() {
+        let chain = verify_chain(&early_chain(), 0, &BITCOIN).unwrap();
+        let checkpoint = Checkpoint::accepting(&chain);
+        assert_eq!(checkpoint.height, chain.start_height);
+        assert_eq!(checkpoint.min_work, U256::ZERO);
+        assert!(chain.anchored_to(&checkpoint).is_ok());
     }
 
     #[test]
