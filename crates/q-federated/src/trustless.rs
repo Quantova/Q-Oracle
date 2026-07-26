@@ -66,6 +66,11 @@ pub fn match_bitcoin_deposit(
     if fact.recipient.0 != proven.recipient {
         return Err(TrustlessError::RecipientMismatch);
     }
+    // A Bitcoin SPV proof carries no asset, so the fact cannot be trusted to name one. The corridor
+    // is pinned to its native coin and only that asset may mint, whatever the fact claims.
+    if fact.asset_id.0 != corridor.origin_asset.0 {
+        return Err(TrustlessError::AssetMismatch);
+    }
     if proven.confirmations < corridor.confirmation_depth {
         return Err(TrustlessError::InsufficientConfirmations {
             have: proven.confirmations,
@@ -73,7 +78,7 @@ pub fn match_bitcoin_deposit(
         });
     }
     Ok(TrustlessMint {
-        asset_id: fact.asset_id.0,
+        asset_id: corridor.origin_asset.0,
         recipient: proven.recipient,
         amount: proven.amount,
         source_ref: proven.txid,
@@ -338,6 +343,32 @@ mod tests {
             match_bitcoin_deposit(&c, &p, &f),
             Err(TrustlessError::NotProofBacked)
         );
+    }
+
+    #[test]
+    fn a_bitcoin_deposit_naming_a_non_btc_asset_is_refused() {
+        let c = corridor(Tier::ProofBacked);
+        let txid = [0x11u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = proven(txid, 250_000, recipient, 6);
+        let mut f = fact_for(&c, txid, 250_000, recipient);
+        f.asset_id = AssetId([0x99u8; 16]);
+        assert_eq!(
+            match_bitcoin_deposit(&c, &p, &f),
+            Err(TrustlessError::AssetMismatch),
+            "a btc proof may not mint an attacker-listed bitcoin-network token"
+        );
+    }
+
+    #[test]
+    fn the_bitcoin_mint_asset_is_the_corridor_native_asset_not_the_fact() {
+        let c = corridor(Tier::ProofBacked);
+        let txid = [0x11u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = proven(txid, 250_000, recipient, 6);
+        let f = fact_for(&c, txid, 250_000, recipient);
+        let mint = match_bitcoin_deposit(&c, &p, &f).expect("the canonical btc asset mints");
+        assert_eq!(mint.asset_id, c.origin_asset.0);
     }
 
     #[test]
