@@ -480,7 +480,7 @@ impl PayoutWatcher for EvmPayoutWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::certificate::{ExitCertificate, ExitProver, HashStark, EXIT_STATEMENT_VERSION};
+    use crate::certificate::{ExitCertificate, ExitProver, DigestBinding, EXIT_STATEMENT_VERSION};
     use crate::exits::{DeskConfig, ExitDesk, ExitState};
     use qlc_bitcoin::{BITCOIN, U256};
 
@@ -532,7 +532,7 @@ mod tests {
     fn certificate(statement: &ExitStatement) -> ExitCertificate {
         ExitCertificate {
             statement: statement.clone(),
-            proof: HashStark.prove(statement),
+            proof: DigestBinding.prove(statement),
         }
     }
 
@@ -774,7 +774,7 @@ mod tests {
         let attestation = watcher.confirm(&s).expect("the verified payout covers the exit");
         assert!(attestation.covers(&s));
 
-        let mut desk = ExitDesk::new(config(), HashStark).unwrap();
+        let mut desk = ExitDesk::new(config(), DigestBinding).unwrap();
         desk.register_vault(1, 2_000);
         let id = desk.open_exit(&certificate(&s), 1, 10).unwrap();
         let release = desk.settle(id, &attestation, 60).unwrap();
@@ -793,7 +793,7 @@ mod tests {
         let attestation = watcher.confirm(&s).expect("the verified receipt covers the exit");
         assert!(attestation.covers(&s));
 
-        let mut desk = ExitDesk::new(config(), HashStark).unwrap();
+        let mut desk = ExitDesk::new(config(), DigestBinding).unwrap();
         desk.register_vault(1, 2_000);
         let id = desk.open_exit(&certificate(&s), 1, 10).unwrap();
         let release = desk.settle(id, &attestation, 60).unwrap();
@@ -962,7 +962,7 @@ mod tests {
         assert_eq!(encoded.len(), PAYOUT_ENCODED_LEN);
         assert_eq!(PayoutAttestation::decode(&encoded).unwrap(), attestation);
 
-        let mut desk = ExitDesk::new(config(), HashStark).unwrap();
+        let mut desk = ExitDesk::new(config(), DigestBinding).unwrap();
         desk.register_vault(1, 2_000);
         let id = desk.open_exit(&certificate(&s), 1, 10).unwrap();
         desk.settle(id, &attestation, 60).unwrap();

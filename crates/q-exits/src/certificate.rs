@@ -128,9 +128,9 @@ impl ExitCertificate {
     }
 }
 
-pub struct HashStark;
+pub struct DigestBinding;
 
-impl HashStark {
+impl DigestBinding {
     pub fn bind(statement_digest: &[u8; 32]) -> [u8; 32] {
         let mut w = Writer::new();
         w.fixed(EXIT_PROOF_DOMAIN);
@@ -139,15 +139,15 @@ impl HashStark {
     }
 }
 
-impl ExitProver for HashStark {
+impl ExitProver for DigestBinding {
     fn prove(&self, statement: &ExitStatement) -> Vec<u8> {
-        HashStark::bind(&statement.digest()).to_vec()
+        DigestBinding::bind(&statement.digest()).to_vec()
     }
 }
 
-impl ExitVerifier for HashStark {
+impl ExitVerifier for DigestBinding {
     fn verify(&self, statement_digest: &[u8; 32], proof: &[u8]) -> bool {
-        proof.len() == EXIT_PROOF_LEN && proof == HashStark::bind(statement_digest)
+        proof.len() == EXIT_PROOF_LEN && proof == DigestBinding::bind(statement_digest)
     }
 }
 
@@ -245,9 +245,9 @@ mod tests {
         let s = statement();
         let cert = ExitCertificate {
             statement: s.clone(),
-            proof: HashStark.prove(&s),
+            proof: DigestBinding.prove(&s),
         };
-        assert_eq!(cert.verify(&HashStark), Ok(()));
+        assert_eq!(cert.verify(&DigestBinding), Ok(()));
     }
 
     #[test]
@@ -255,10 +255,10 @@ mod tests {
         let s = statement();
         let mut cert = ExitCertificate {
             statement: s.clone(),
-            proof: HashStark.prove(&s),
+            proof: DigestBinding.prove(&s),
         };
         cert.statement.amount = 501;
-        assert_eq!(cert.verify(&HashStark), Err(ExitError::UnboundProof));
+        assert_eq!(cert.verify(&DigestBinding), Err(ExitError::UnboundProof));
     }
 
     #[test]
@@ -268,9 +268,9 @@ mod tests {
         other.burn_ref = [0x99; 32];
         let cert = ExitCertificate {
             statement: s,
-            proof: HashStark.prove(&other),
+            proof: DigestBinding.prove(&other),
         };
-        assert_eq!(cert.verify(&HashStark), Err(ExitError::UnboundProof));
+        assert_eq!(cert.verify(&DigestBinding), Err(ExitError::UnboundProof));
     }
 
     #[test]
@@ -280,6 +280,6 @@ mod tests {
             statement: s,
             proof: Vec::new(),
         };
-        assert_eq!(cert.verify(&HashStark), Err(ExitError::UnboundProof));
+        assert_eq!(cert.verify(&DigestBinding), Err(ExitError::UnboundProof));
     }
 }
