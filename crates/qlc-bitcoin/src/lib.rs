@@ -4,6 +4,7 @@
 
 
 pub mod chain;
+pub mod deposit;
 pub mod params;
 pub mod tx;
 pub mod retarget;
@@ -16,6 +17,7 @@ pub use chain::{
     bits_expectation, check_retarget_boundary, heavier, verify_chain, ConfirmedDeposit,
     VerifiedChain,
 };
+pub use deposit::{verify_trustless_deposit, TrustlessDeposit};
 pub use params::{network_params, Network, NetworkParams, BITCOIN, BITCOIN_CASH};
 pub use retarget::compute_retarget;
 pub use sha256::{double_sha256, sha256};
