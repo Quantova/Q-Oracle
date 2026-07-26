@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::chain::ChainConfig;
-use crate::commit::{verify_commit, Commit, CommitError, Header};
+use crate::commit::{tally_signed_power, verify_commit, Commit, CommitError, Header};
 use crate::validator::{overlap_meets, ValidatorSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +19,7 @@ pub enum LightError {
     NotProgressing,
     UntrustedValidatorSet,
     InsufficientOverlap { overlap: u128, trusted_total: u128 },
+    InsufficientTrustedSignatures { signed: u128, trusted_total: u128 },
     NotAdjacent,
     NextValidatorMismatch,
     Commit(CommitError),
@@ -35,6 +36,22 @@ fn check_header(cfg: &ChainConfig, trusted: &TrustedState, new_header: &Header, 
         return Err(LightError::UntrustedValidatorSet);
     }
     Ok(())
+}
+
+pub fn check_trusting_commit(
+    cfg: &ChainConfig,
+    trusted: &TrustedState,
+    new_header: &Header,
+    new_commit: &Commit,
+) -> Result<(), LightError> {
+    let signed = tally_signed_power(cfg.chain_id, new_header, new_commit, &trusted.validators)
+        .map_err(LightError::Commit)?;
+    let trusted_total = trusted.validators.total_power();
+    if signed * (cfg.overlap_denominator as u128) > trusted_total * (cfg.overlap_numerator as u128) {
+        Ok(())
+    } else {
+        Err(LightError::InsufficientTrustedSignatures { signed, trusted_total })
+    }
 }
 
 fn adopt(new_header: &Header, new_set: &ValidatorSet) -> TrustedState {
@@ -63,6 +80,7 @@ pub fn verify_transition(
     }
 
     verify_commit(cfg.chain_id, new_header, new_commit, new_set).map_err(LightError::Commit)?;
+    check_trusting_commit(cfg, trusted, new_header, new_commit)?;
 
     Ok(adopt(new_header, new_set))
 }
@@ -266,6 +284,32 @@ mod tests {
             verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &old),
             Err(LightError::ChainMismatch)
         );
+    }
+
+    #[test]
+    fn a_superset_signed_only_by_intruders_does_not_transition() {
+        let a = keyed(1, 40);
+        let b = keyed(2, 40);
+        let c = keyed(3, 20);
+        let trusted_set = make_set(&[&a, &b, &c]);
+        let x = keyed(9, 1000);
+        let y = keyed(10, 1000);
+        let forged = make_set(&[&a, &b, &c, &x, &y]);
+        let trusted = trusted_from(100, &trusted_set, &trusted_set);
+        let header = header_for(150, &forged, &forged);
+        let commit = signed_commit(&header, &[&x, &y]);
+
+        assert_eq!(
+            verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &forged),
+            Err(LightError::InsufficientTrustedSignatures { signed: 0, trusted_total: 100 })
+        );
+
+        let d = keyed(4, 20);
+        let new = make_set(&[&a, &b, &d]);
+        let header2 = header_for(150, &new, &new);
+        let commit2 = signed_commit(&header2, &[&a, &b, &d]);
+        let ok = verify_transition(&COSMOS_HUB, &trusted, &header2, &commit2, &new).unwrap();
+        assert_eq!(ok.height, 150);
     }
 
     #[test]
