@@ -74,7 +74,9 @@ pub fn verify_chain(
         if h.target() > pow_limit {
             return Err(SpvError::TargetBelowFloor { index: i });
         }
-        let height = start_height + i as u32;
+        let height = start_height
+            .checked_add(i as u32)
+            .ok_or(SpvError::HeightOverflow)?;
         if i > 0 {
             let prev = &headers[i - 1];
             if h.prev_block != prev.block_hash() {
@@ -85,9 +87,12 @@ pub fn verify_chain(
         work = work.wrapping_add(&block_work(h.bits));
     }
     let last = headers[headers.len() - 1];
+    let tip_height = start_height
+        .checked_add(headers.len() as u32 - 1)
+        .ok_or(SpvError::HeightOverflow)?;
     Ok(VerifiedChain {
         start_height,
-        tip_height: start_height + (headers.len() as u32 - 1),
+        tip_height,
         tip_hash: last.block_hash(),
         work,
         headers: headers.to_vec(),
@@ -285,6 +290,31 @@ mod tests {
             verify_chain(&[trivial], 0, &BITCOIN),
             Err(SpvError::TargetBelowFloor { index: 0 }),
             "a header easier than the network pow limit cannot forge a chain"
+        );
+    }
+
+    #[test]
+    fn a_start_height_near_the_u32_ceiling_errors_instead_of_wrapping() {
+        let easy = NetworkParams { pow_limit_bits: 0x207f_ffff, ..BITCOIN };
+        let mined = |root: [u8; 32]| {
+            let mut h = BlockHeader {
+                version: 1,
+                prev_block: [0u8; 32],
+                merkle_root: root,
+                timestamp: 1_700_000_000,
+                bits: 0x207f_ffff,
+                nonce: 0,
+            };
+            while !h.meets_pow() {
+                h.nonce = h.nonce.wrapping_add(1);
+            }
+            h
+        };
+        let headers = vec![mined([0x11; 32]), mined([0x22; 32])];
+        assert_eq!(
+            verify_chain(&headers, u32::MAX, &easy),
+            Err(SpvError::HeightOverflow),
+            "a proof-supplied start height at the u32 ceiling must error not wrap"
         );
     }
 
