@@ -36,6 +36,7 @@ q-codec = { path = "crates/q-codec" }
 q-airlock = { path = "crates/q-airlock" }
 q-attestor = { path = "crates/q-attestor" }
 q-gateway = { path = "crates/q-gateway" }
+q-assets = { path = "crates/q-assets" }
 
 [profile.dev.package.qtv-crypto]
 opt-level = 3
