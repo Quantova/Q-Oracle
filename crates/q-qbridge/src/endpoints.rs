@@ -10,9 +10,28 @@ use q_federated::{
     SourceRegistry, Tier, TrustlessError, TrustlessMint,
 };
 use q_gateway::{Gateway, MintReceipt};
-use qlc_bitcoin::TrustlessDeposit as BitcoinDeposit;
+use qlc_bitcoin::{
+    verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, MerkleStep, NetworkParams,
+    SpvError,
+};
 use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
 use qlc_ethereum::TrustlessDeposit as EthereumDeposit;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BitcoinProofMaterial {
+    pub headers: Vec<BlockHeader>,
+    pub start_height: u32,
+    pub deposit_height: u32,
+    pub branch: Vec<MerkleStep>,
+    pub raw_tx: Vec<u8>,
+    pub deposit_script: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BitcoinAnchor {
+    pub checkpoint: Checkpoint,
+    pub params: NetworkParams,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListPoolsRequest {
@@ -33,7 +52,7 @@ pub struct DepositRequest {
 #[allow(clippy::large_enum_variant)]
 pub enum DepositProof {
     Federated(AttestationEnvelope),
-    Bitcoin { proven: BitcoinDeposit, fact: BridgeFact },
+    Bitcoin { material: BitcoinProofMaterial, fact: BridgeFact },
     Ethereum { proven: EthereumDeposit, fact: BridgeFact },
     Cosmos { proven: CosmosDeposit, fact: BridgeFact },
 }
@@ -116,6 +135,8 @@ pub enum ApiError {
     PoolNotRegistered([u8; 16]),
     AssetNetworkMismatch { fact_network: u32, pool_network: u32 },
     ProofTierMismatch,
+    NoAnchor(u32),
+    BitcoinSpv(SpvError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +153,7 @@ pub struct BridgeState {
     pub pools: PoolRegistry,
     pub gateway: Gateway,
     pub sources: SourceRegistry,
+    pub bitcoin_anchor: Option<BitcoinAnchor>,
 }
 
 impl BridgeState {
@@ -140,6 +162,7 @@ impl BridgeState {
             pools: PoolRegistry::new(),
             gateway,
             sources: SourceRegistry::new(),
+            bitcoin_anchor: None,
         }
     }
 
@@ -150,7 +173,12 @@ impl BridgeState {
             pools,
             gateway,
             sources: SourceRegistry::new(),
+            bitcoin_anchor: None,
         }
+    }
+
+    pub fn set_bitcoin_anchor(&mut self, anchor: BitcoinAnchor) {
+        self.bitcoin_anchor = Some(anchor);
     }
 }
 
@@ -218,8 +246,27 @@ fn dispatch_deposit(
                 .map_err(ApiError::Federated)?;
             Ok(DepositOutcome::Minted(receipt))
         }
-        (Tier::ProofBacked, Network::Bitcoin, DepositProof::Bitcoin { proven, fact }) => {
-            let mint = admit_bitcoin_trustless(&mut state.gateway, &corridor, proven, fact)
+        (Tier::ProofBacked, Network::Bitcoin, DepositProof::Bitcoin { material, fact }) => {
+            let (params, checkpoint) = {
+                let anchor = state
+                    .bitcoin_anchor
+                    .as_ref()
+                    .ok_or(ApiError::NoAnchor(Network::Bitcoin.id()))?;
+                (anchor.params, anchor.checkpoint.clone())
+            };
+            let chain = verify_chain(&material.headers, material.start_height, &params)
+                .map_err(ApiError::BitcoinSpv)?;
+            let proven = verify_trustless_deposit(
+                &chain,
+                &params,
+                &checkpoint,
+                material.deposit_height,
+                &material.branch,
+                &material.raw_tx,
+                &material.deposit_script,
+            )
+            .map_err(ApiError::BitcoinSpv)?;
+            let mint = admit_bitcoin_trustless(&mut state.gateway, &corridor, &proven, fact)
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
@@ -311,6 +358,122 @@ mod tests {
             finality_depth: 40,
             observed_height: 900_000,
             expiry_height: 1_800_000,
+        }
+    }
+
+    use qlc_bitcoin::tx::Transaction;
+    use qlc_bitcoin::{Network as BtcNetwork, SpvError, U256};
+
+    const EASY: NetworkParams = NetworkParams {
+        network: BtcNetwork::Bitcoin,
+        name: "Crafted",
+        magic: [0xfa, 0xbf, 0xb5, 0xda],
+        pow_limit_bits: 0x207f_ffff,
+        target_timespan: 1_209_600,
+        target_spacing: 600,
+        confirmation_depth: 6,
+    };
+
+    fn p2pkh(hash160: [u8; 20]) -> Vec<u8> {
+        let mut s = vec![0x76, 0xa9, 0x14];
+        s.extend_from_slice(&hash160);
+        s.extend_from_slice(&[0x88, 0xac]);
+        s
+    }
+
+    fn op_return(recipient: [u8; 32]) -> Vec<u8> {
+        let mut s = vec![0x6a, 0x20];
+        s.extend_from_slice(&recipient);
+        s
+    }
+
+    fn raw_deposit_tx(outputs: &[(u64, Vec<u8>)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.push(0x01);
+        out.extend_from_slice(&[0u8; 36]);
+        out.push(0x00);
+        out.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        out.push(outputs.len() as u8);
+        for (value, script) in outputs {
+            out.extend_from_slice(&value.to_le_bytes());
+            out.push(script.len() as u8);
+            out.extend_from_slice(script);
+        }
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out
+    }
+
+    fn mine(prev_block: [u8; 32], merkle_root: [u8; 32]) -> BlockHeader {
+        let mut header = BlockHeader {
+            version: 1,
+            prev_block,
+            merkle_root,
+            timestamp: 1_700_000_000,
+            bits: EASY.pow_limit_bits,
+            nonce: 0,
+        };
+        while !header.meets_pow() {
+            header.nonce = header.nonce.wrapping_add(1);
+        }
+        header
+    }
+
+    fn bitcoin_deposit(
+        bridge: &[u8],
+        recipient: [u8; 32],
+        amount: u64,
+    ) -> (BitcoinProofMaterial, BitcoinAnchor, [u8; 32]) {
+        let raw = raw_deposit_tx(&[(amount, bridge.to_vec()), (0, op_return(recipient))]);
+        let txid = Transaction::parse(&raw).unwrap().txid();
+        let mut headers = vec![mine([0u8; 32], txid)];
+        let mut prev = headers[0].block_hash();
+        for i in 0..5u8 {
+            let block = mine(prev, [i + 1; 32]);
+            prev = block.block_hash();
+            headers.push(block);
+        }
+        let checkpoint = Checkpoint {
+            height: 0,
+            hash: headers[0].block_hash(),
+            min_work: U256::ZERO,
+        };
+        let material = BitcoinProofMaterial {
+            headers,
+            start_height: 0,
+            deposit_height: 0,
+            branch: vec![],
+            raw_tx: raw,
+            deposit_script: bridge.to_vec(),
+        };
+        (material, BitcoinAnchor { checkpoint, params: EASY }, txid)
+    }
+
+    fn bitcoin_fact(asset: [u8; 16], txid: [u8; 32], recipient: [u8; 32], amount: u128) -> BridgeFact {
+        BridgeFact {
+            version: FACT_VERSION,
+            source_chain: Network::Bitcoin.id(),
+            dest_chain: DEST,
+            route_id: 1,
+            direction: Direction::Deposit,
+            nonce: 1,
+            source_ref: SourceRef(txid),
+            asset_id: AssetId(asset),
+            amount,
+            recipient: Recipient(recipient),
+            finality_depth: 6,
+            observed_height: 800_000,
+            expiry_height: 900_000,
+        }
+    }
+
+    fn bitcoin_pool(state: &mut BridgeState) -> PoolView {
+        match handle(
+            state,
+            Request::CreatePool(pool_request(Network::Bitcoin.id(), "BTC")),
+        ) {
+            Response::PoolCreated(view) => view,
+            other => panic!("expected PoolCreated, got {:?}", other),
         }
     }
 
@@ -459,45 +622,18 @@ mod tests {
     }
 
     #[test]
-    fn a_bitcoin_deposit_is_routed_to_the_trustless_seam_and_is_admitted_not_minted() {
+    fn a_bitcoin_deposit_with_valid_anchored_material_is_verified_server_side_and_admitted() {
         let mut state = empty_state(0);
-        let view = match handle(
-            &mut state,
-            Request::CreatePool(pool_request(Network::Bitcoin.id(), "BTC")),
-        ) {
-            Response::PoolCreated(view) => view,
-            other => panic!("expected PoolCreated, got {:?}", other),
-        };
-        let txid = [0x11u8; 32];
+        let view = bitcoin_pool(&mut state);
+        let bridge = p2pkh([0x11; 20]);
         let recipient = [0x42u8; 32];
-        let proven = BitcoinDeposit {
-            txid,
-            amount: 250_000,
-            recipient,
-            confirmations: 6,
-        };
-        let fact = BridgeFact {
-            version: FACT_VERSION,
-            source_chain: Network::Bitcoin.id(),
-            dest_chain: DEST,
-            route_id: 1,
-            direction: Direction::Deposit,
-            nonce: 1,
-            source_ref: SourceRef(txid),
-            asset_id: AssetId(view.asset_id),
-            amount: 250_000,
-            recipient: Recipient(recipient),
-            finality_depth: 6,
-            observed_height: 800_000,
-            expiry_height: 900_000,
-        };
+        let (material, anchor, txid) = bitcoin_deposit(&bridge, recipient, 250_000);
+        state.set_bitcoin_anchor(anchor);
+        let fact = bitcoin_fact(view.asset_id, txid, recipient, 250_000);
         let response = handle(
             &mut state,
             Request::SubmitDeposit(DepositRequest {
-                proof: DepositProof::Bitcoin {
-                    proven,
-                    fact: fact.clone(),
-                },
+                proof: DepositProof::Bitcoin { material, fact },
             }),
         );
         match response {
@@ -517,11 +653,61 @@ mod tests {
         );
         match status {
             Response::Status(view) => {
-                assert!(view.minted, "the trustless admission binds the reference authoritatively");
+                assert!(view.minted, "the server-verified admission binds the reference");
                 assert_eq!(view.asset_minted_total, 250_000);
             }
             other => panic!("expected Status, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn a_bitcoin_deposit_that_does_not_verify_against_the_pinned_checkpoint_is_rejected() {
+        let mut state = empty_state(0);
+        let view = bitcoin_pool(&mut state);
+        let bridge = p2pkh([0x11; 20]);
+        let recipient = [0x42u8; 32];
+        let (material, _anchor, txid) = bitcoin_deposit(&bridge, recipient, 250_000);
+        let foreign = BitcoinAnchor {
+            checkpoint: Checkpoint {
+                height: 0,
+                hash: [0x99u8; 32],
+                min_work: U256::ZERO,
+            },
+            params: EASY,
+        };
+        state.set_bitcoin_anchor(foreign);
+        let fact = bitcoin_fact(view.asset_id, txid, recipient, 250_000);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Bitcoin { material, fact },
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Error(ApiError::BitcoinSpv(SpvError::CheckpointMismatch))
+        );
+        assert_eq!(state.gateway.minted_of_asset(&view.asset_id), 0);
+    }
+
+    #[test]
+    fn a_bitcoin_deposit_with_no_pinned_anchor_is_refused() {
+        let mut state = empty_state(0);
+        let view = bitcoin_pool(&mut state);
+        let bridge = p2pkh([0x11; 20]);
+        let recipient = [0x42u8; 32];
+        let (material, _anchor, txid) = bitcoin_deposit(&bridge, recipient, 250_000);
+        let fact = bitcoin_fact(view.asset_id, txid, recipient, 250_000);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Bitcoin { material, fact },
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Error(ApiError::NoAnchor(Network::Bitcoin.id()))
+        );
     }
 
     #[test]
@@ -539,21 +725,14 @@ mod tests {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
         };
-        let bitcoin_shaped = BitcoinDeposit {
-            txid: [0x11; 32],
-            amount: 500,
-            recipient: [0x42; 32],
-            confirmations: 40,
-        };
+        let bridge = p2pkh([0x11; 20]);
+        let (material, _anchor, _txid) = bitcoin_deposit(&bridge, [0x42; 32], 500);
         let mut fact = federated_fact(view.asset_id, [0x11; 32]);
         fact.finality_depth = 40;
         let response = handle(
             &mut state,
             Request::SubmitDeposit(DepositRequest {
-                proof: DepositProof::Bitcoin {
-                    proven: bitcoin_shaped,
-                    fact,
-                },
+                proof: DepositProof::Bitcoin { material, fact },
             }),
         );
         assert_eq!(response, Response::Error(ApiError::ProofTierMismatch));
