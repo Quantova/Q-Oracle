@@ -423,7 +423,24 @@ impl Gateway {
         asset_id: [u8; 16],
         source_ref: [u8; 32],
         amount: u128,
+        source_chain: u32,
     ) -> Result<(), GatewayError> {
+        if self.global_pause {
+            return Err(GatewayError::GlobalPause);
+        }
+        if self.current_height < self.frozen_until {
+            return Err(GatewayError::Frozen {
+                until: self.frozen_until,
+            });
+        }
+        if self.paused_sources.contains(&source_chain) {
+            return Err(GatewayError::SourcePaused(source_chain));
+        }
+        if let Some(corridor) = self.corridors.get(&source_chain) {
+            if !corridor.active {
+                return Err(GatewayError::CorridorInactive(source_chain));
+            }
+        }
         if self.used_refs.contains(&source_ref) {
             return Err(GatewayError::ReplayedReference);
         }
@@ -772,6 +789,60 @@ mod tests {
                 .amount,
             500
         );
+    }
+
+    #[test]
+    fn the_trustless_admit_honors_the_same_freeze_and_pause_guards_as_a_deposit() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+
+        gw.pause_all();
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1),
+            Err(GatewayError::GlobalPause)
+        );
+        gw.unpause_all();
+
+        gw.pause_source_direct(1);
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1),
+            Err(GatewayError::SourcePaused(1))
+        );
+        gw.unpause_source(1);
+
+        gw.set_corridor_active(1, false);
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1),
+            Err(GatewayError::CorridorInactive(1))
+        );
+        gw.set_corridor_active(1, true);
+
+        let until = 5_000u64;
+        let mut w = Writer::new();
+        w.u64(until);
+        let message = w.finish();
+        let sigs: Vec<SignerSig> = s
+            .iter()
+            .map(|(id, _, sk)| SignerSig {
+                operator_id: *id,
+                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32]).unwrap().to_vec(),
+            })
+            .collect();
+        gw.emergency_freeze(until, &sigs).expect("a quorum freezes");
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1),
+            Err(GatewayError::Frozen { until })
+        );
+
+        gw.advance_to(until);
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1), Ok(()));
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
     }
 
     #[test]

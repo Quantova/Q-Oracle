@@ -99,7 +99,7 @@ pub fn admit_bitcoin_trustless(
 
 fn apply_replay_and_cap(gateway: &mut Gateway, mint: &TrustlessMint) -> Result<(), TrustlessError> {
     gateway
-        .admit_trustless(mint.asset_id, mint.source_ref, mint.amount)
+        .admit_trustless(mint.asset_id, mint.source_ref, mint.amount, mint.source_chain)
         .map_err(|e| match e {
             GatewayError::ReplayedReference => TrustlessError::ReplayedReference,
             GatewayError::AssetNotRegistered => TrustlessError::AssetNotRegistered,
