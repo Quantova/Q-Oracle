@@ -45,12 +45,12 @@ impl ValidatorSet {
         ValidatorSet { validators }
     }
 
-    pub fn total_power(&self) -> u64 {
+    pub fn total_power(&self) -> u128 {
         let mut total: u128 = 0;
         for v in &self.validators {
             total += v.voting_power as u128;
         }
-        total as u64
+        total
     }
 
     pub fn hash(&self) -> [u8; 32] {
@@ -63,23 +63,23 @@ impl ValidatorSet {
     }
 }
 
-pub fn has_two_thirds(signed_power: u64, total_power: u64) -> bool {
-    (signed_power as u128) * 3 > (total_power as u128) * 2
+pub fn has_two_thirds(signed_power: u128, total_power: u128) -> bool {
+    signed_power * 3 > total_power * 2
 }
 
-pub fn overlap_power(old: &ValidatorSet, new: &ValidatorSet) -> u64 {
+pub fn overlap_power(old: &ValidatorSet, new: &ValidatorSet) -> u128 {
     let mut overlap: u128 = 0;
     for v in &old.validators {
         if new.get_by_address(&v.address()).is_some() {
             overlap += v.voting_power as u128;
         }
     }
-    overlap as u64
+    overlap
 }
 
 pub fn overlap_meets(old: &ValidatorSet, new: &ValidatorSet, numerator: u64, denominator: u64) -> bool {
-    let overlap = overlap_power(old, new) as u128;
-    overlap * (denominator as u128) > (old.total_power() as u128) * (numerator as u128)
+    let overlap = overlap_power(old, new);
+    overlap * (denominator as u128) > old.total_power() * (numerator as u128)
 }
 
 pub fn two_thirds_overlap(old: &ValidatorSet, new: &ValidatorSet) -> bool {
@@ -108,6 +108,14 @@ mod tests {
     fn total_power_sums_the_set() {
         let set = ValidatorSet::new(vec![validator(1, 10), validator(2, 20), validator(3, 30)]);
         assert_eq!(set.total_power(), 60);
+    }
+
+    #[test]
+    fn total_power_beyond_u64_does_not_wrap_and_defeat_the_two_thirds_gate() {
+        let half = 1u64 << 63;
+        let set = ValidatorSet::new(vec![validator(1, half), validator(2, half)]);
+        assert_eq!(set.total_power(), (half as u128) * 2);
+        assert!(!has_two_thirds(1, set.total_power()));
     }
 
     #[test]

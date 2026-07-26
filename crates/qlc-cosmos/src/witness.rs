@@ -46,7 +46,7 @@ fn digest_of(statement: &ProofStatement, facts: &CosmosCheckedFacts) -> [u8; 32]
 pub fn prove_ready_witness(out: &CorridorOutput) -> ProveReadyWitness {
     let facts = CosmosCheckedFacts {
         header_height: out.event.height,
-        signed_power: out.signed_power,
+        signed_power: out.signed_power.min(u64::MAX as u128) as u64,
     };
     let public_input_digest = digest_of(&out.statement, &facts);
     ProveReadyWitness {

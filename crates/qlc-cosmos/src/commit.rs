@@ -114,7 +114,7 @@ pub struct Commit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitError {
     HeaderMismatch,
-    NotEnoughVotingPower { signed: u64, total: u64 },
+    NotEnoughVotingPower { signed: u128, total: u128 },
 }
 
 pub fn verify_commit(
@@ -122,12 +122,12 @@ pub fn verify_commit(
     header: &Header,
     commit: &Commit,
     set: &ValidatorSet,
-) -> Result<u64, CommitError> {
+) -> Result<u128, CommitError> {
     if commit.block_id.hash != header.hash() {
         return Err(CommitError::HeaderMismatch);
     }
     let total = set.total_power();
-    let mut signed: u64 = 0;
+    let mut signed: u128 = 0;
     let mut counted: Vec<[u8; 20]> = Vec::new();
 
     for sig in &commit.signatures {
@@ -156,7 +156,7 @@ pub fn verify_commit(
         let mut signature = [0u8; 64];
         signature.copy_from_slice(&sig.signature);
         if verify(&validator.pubkey, &message, &signature) {
-            signed += validator.voting_power;
+            signed += validator.voting_power as u128;
             counted.push(sig.validator_address);
         }
     }

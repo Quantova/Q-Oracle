@@ -24,7 +24,7 @@ pub enum CorridorError {
 pub struct CorridorOutput {
     pub statement: ProofStatement,
     pub event: VerifiedEvent,
-    pub signed_power: u64,
+    pub signed_power: u128,
 }
 
 fn event_claim(deposit: &Deposit) -> EventClaim {
@@ -76,7 +76,7 @@ fn verify_deposit_core(
     commit: &Commit,
     set: &ValidatorSet,
     proof: &ExistenceProof,
-) -> Result<(Deposit, u64), CorridorError> {
+) -> Result<(Deposit, u128), CorridorError> {
     if header.chain_id != cfg.chain_id {
         return Err(CorridorError::ChainMismatch);
     }

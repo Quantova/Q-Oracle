@@ -18,7 +18,7 @@ pub enum LightError {
     ChainMismatch,
     NotProgressing,
     UntrustedValidatorSet,
-    InsufficientOverlap { overlap: u64, trusted_total: u64 },
+    InsufficientOverlap { overlap: u128, trusted_total: u128 },
     NotAdjacent,
     NextValidatorMismatch,
     Commit(CommitError),
