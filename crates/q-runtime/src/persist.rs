@@ -5,8 +5,6 @@ use std::fs::{self, File};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use q_qbridge::Response;
-
 pub struct GuardStore {
     path: PathBuf,
 }
@@ -49,15 +47,9 @@ impl GuardStore {
     }
 }
 
-pub(crate) fn advanced(response: &Response) -> bool {
-    matches!(response, Response::DepositAdmitted(_))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use q_gateway::MintReceipt;
-    use q_qbridge::{DepositOutcome, PoolView};
 
     fn temp_path(tag: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -83,17 +75,5 @@ mod tests {
             "the temp file is renamed away, not left behind"
         );
         fs::remove_file(&path).ok();
-    }
-
-    #[test]
-    fn only_a_deposit_admission_advances_the_guard() {
-        let admitted = Response::DepositAdmitted(DepositOutcome::Minted(MintReceipt {
-            asset_id: [0; 16],
-            recipient: [0; 32],
-            amount: 1,
-            source_ref: [0; 32],
-        }));
-        assert!(advanced(&admitted));
-        assert!(!advanced(&Response::Pools(Vec::<PoolView>::new())));
     }
 }

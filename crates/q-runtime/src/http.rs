@@ -4,14 +4,16 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Result as IoResult, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use q_qbridge::{handle, BridgeState};
+use q_qbridge::{
+    commit_deposit, handle, handle_read, verify_deposit, BridgeState, Request, Response,
+};
 
 use crate::json::{self, object, Json};
-use crate::persist::{advanced, GuardStore};
+use crate::persist::GuardStore;
 use crate::wire::{decode_request, encode_response};
 
 pub const MAX_BODY: usize = 2 * 1024 * 1024;
@@ -26,9 +28,10 @@ pub const MAX_CONNECTIONS: usize = 512;
 
 pub const MAX_CONNECTIONS_PER_IP: usize = 32;
 
-/// The shared bridge state every connection dispatches against. One mutex guards the whole
-/// dispatcher so the tested `handle` runs serially under concurrent load.
-pub type SharedState = Arc<Mutex<BridgeState>>;
+/// The shared bridge state every connection dispatches against. A read-write lock guards it so read
+/// RPCs and the heavy read-only half of a deposit run concurrently under a shared lock, and only the
+/// short mutating commit takes the exclusive lock.
+pub type SharedState = Arc<RwLock<BridgeState>>;
 
 enum Admit {
     Ok,
@@ -215,25 +218,92 @@ fn handle_connection(
         }
     };
 
-    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(&mut guard, request)));
-    let response = match outcome {
+    let response = match route(&state, store.as_deref(), request) {
         Ok(response) => response,
-        Err(_) => {
-            drop(guard);
-            return write_error(&mut stream, 500, "internal_error", "the request handler failed");
+        Err(RouteFail::Panicked) => {
+            return write_error(&mut stream, 500, "internal_error", "the request handler failed")
+        }
+        Err(RouteFail::PersistFailed) => {
+            return write_error(
+                &mut stream,
+                500,
+                "internal_error",
+                "the admission could not be persisted",
+            )
         }
     };
-    if advanced(&response) {
-        if let Some(store) = store.as_ref() {
+    write_response(&mut stream, 200, &encode_response(&response).render())
+}
+
+enum RouteFail {
+    Panicked,
+    PersistFailed,
+}
+
+fn persist_if_advanced(
+    guard: &BridgeState,
+    store: Option<&GuardStore>,
+    rev_before: u64,
+) -> Result<(), RouteFail> {
+    if guard.gateway.guard_revision() != rev_before {
+        if let Some(store) = store {
             if store.save(&guard.gateway.encode_guard()).is_err() {
-                drop(guard);
-                return write_error(&mut stream, 500, "internal_error", "the admission could not be persisted");
+                return Err(RouteFail::PersistFailed);
             }
         }
     }
-    drop(guard);
-    write_response(&mut stream, 200, &encode_response(&response).render())
+    Ok(())
+}
+
+fn route(
+    state: &SharedState,
+    store: Option<&GuardStore>,
+    request: Request,
+) -> Result<Response, RouteFail> {
+    {
+        let guard = state.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(response) = handle_read(&guard, &request) {
+            return Ok(response);
+        }
+    }
+    match request {
+        Request::SubmitDeposit(deposit) => {
+            let verified = {
+                let guard = state.read().unwrap_or_else(|e| e.into_inner());
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    verify_deposit(&guard, &deposit)
+                }))
+                .map_err(|_| RouteFail::Panicked)?
+            };
+            let plan = match verified {
+                Ok(plan) => plan,
+                Err(err) => return Ok(Response::Error(err)),
+            };
+            let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+            let rev_before = guard.gateway.guard_revision();
+            let committed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                commit_deposit(&mut guard, plan)
+            }))
+            .map_err(|_| RouteFail::Panicked)?;
+            match committed {
+                Ok(outcome) => {
+                    persist_if_advanced(&guard, store, rev_before)?;
+                    Ok(Response::DepositAdmitted(outcome))
+                }
+                Err(err) => Ok(Response::Error(err)),
+            }
+        }
+        other => {
+            let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+            let rev_before = guard.gateway.guard_revision();
+            let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                handle(&mut guard, other)
+            }))
+            .map_err(|_| RouteFail::Panicked)?;
+            persist_if_advanced(&guard, store, rev_before)?;
+            Ok(response)
+        }
+    }
 }
 
 fn is_timeout(e: &std::io::Error) -> bool {
@@ -422,7 +492,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let gateway = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
-        let state: SharedState = Arc::new(Mutex::new(BridgeState::seeded(gateway)));
+        let state: SharedState = Arc::new(RwLock::new(BridgeState::seeded(gateway)));
         serve(listener, state, None);
         port
     }
@@ -484,11 +554,11 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let gateway = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
-        let state: SharedState = Arc::new(Mutex::new(BridgeState::seeded(gateway)));
+        let state: SharedState = Arc::new(RwLock::new(BridgeState::seeded(gateway)));
 
         let poisoner = state.clone();
         let _ = thread::spawn(move || {
-            let _held = poisoner.lock().unwrap();
+            let _held = poisoner.write().unwrap();
             panic!("poison the bridge state lock");
         })
         .join();

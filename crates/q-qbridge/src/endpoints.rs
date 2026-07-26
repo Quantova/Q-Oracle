@@ -6,8 +6,8 @@ use q_assets::Network;
 use q_codec::BridgeFact;
 use q_federated::{
     admit, admit_bitcoin_trustless, admit_cosmos_trustless, admit_ethereum_trustless, corridor_for,
-    install_all, install_pool, FederatedError, PoolError, PoolRegistry, PoolRequest, PoolSpec,
-    SourceRegistry, Tier, TrustlessError, TrustlessMint,
+    install_all, install_pool, Corridor, FederatedError, PoolError, PoolRegistry, PoolRequest,
+    PoolSpec, SourceRegistry, Tier, TrustlessError, TrustlessMint,
 };
 use q_gateway::{Gateway, MintReceipt};
 use qlc_bitcoin::{
@@ -254,14 +254,25 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
     }
 }
 
-fn dispatch_deposit(
-    state: &mut BridgeState,
-    request: DepositRequest,
-) -> Result<DepositOutcome, ApiError> {
-    let source_chain = request.proof.fact().source_chain;
-    let asset_id = request.proof.fact().asset_id.0;
-    let network =
-        Network::from_id(source_chain).ok_or(ApiError::UnknownNetwork(source_chain))?;
+pub struct DepositPlan {
+    corridor: Corridor,
+    kind: PlanKind,
+}
+
+enum PlanKind {
+    Federated(AttestationEnvelope),
+    Bitcoin { proven: qlc_bitcoin::TrustlessDeposit, fact: BridgeFact },
+    Ethereum { proven: qlc_ethereum::TrustlessDeposit, fact: BridgeFact },
+    Cosmos { proven: qlc_cosmos::TrustlessDeposit, fact: BridgeFact },
+}
+
+fn resolve_corridor(
+    state: &BridgeState,
+    proof: &DepositProof,
+) -> Result<(Tier, Network, Corridor), ApiError> {
+    let source_chain = proof.fact().source_chain;
+    let asset_id = proof.fact().asset_id.0;
+    let network = Network::from_id(source_chain).ok_or(ApiError::UnknownNetwork(source_chain))?;
     let (tier, pool_network, cap) = {
         let spec = state
             .pools
@@ -275,13 +286,13 @@ fn dispatch_deposit(
             pool_network: pool_network.id(),
         });
     }
-    let corridor = corridor_for(network, cap);
-    match (tier, network, &request.proof) {
-        (Tier::Federated, _, DepositProof::Federated(env)) => {
-            let receipt = admit(&mut state.gateway, &corridor, &state.sources, env)
-                .map_err(ApiError::Federated)?;
-            Ok(DepositOutcome::Minted(receipt))
-        }
+    Ok((tier, network, corridor_for(network, cap)))
+}
+
+pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<DepositPlan, ApiError> {
+    let (tier, network, corridor) = resolve_corridor(state, &request.proof)?;
+    let kind = match (tier, network, &request.proof) {
+        (Tier::Federated, _, DepositProof::Federated(env)) => PlanKind::Federated(env.clone()),
         (Tier::ProofBacked, Network::Bitcoin, DepositProof::Bitcoin { material, fact }) => {
             let (params, checkpoint) = {
                 let anchor = state
@@ -305,23 +316,17 @@ fn dispatch_deposit(
                 &material.deposit_script,
             )
             .map_err(ApiError::BitcoinSpv)?;
-            let mint = admit_bitcoin_trustless(&mut state.gateway, &corridor, &proven, fact)
-                .map_err(ApiError::Trustless)?;
-            Ok(DepositOutcome::AdmittedPendingChainMint(mint))
+            PlanKind::Bitcoin { proven, fact: fact.clone() }
         }
         (Tier::ProofBacked, Network::Ethereum, DepositProof::Ethereum { update, deposit, fact }) => {
-            let proven = {
-                let store = state
-                    .ethereum_store
-                    .as_ref()
-                    .ok_or(ApiError::NoAnchor(Network::Ethereum.id()))?;
-                let verifier = q_bls::Bls12381AggregateVerifier::new();
-                qlc_ethereum::verify_trustless_deposit(store, update, deposit, &verifier)
-                    .map_err(ApiError::EthereumVerify)?
-            };
-            let mint = admit_ethereum_trustless(&mut state.gateway, &corridor, &proven, fact)
-                .map_err(ApiError::Trustless)?;
-            Ok(DepositOutcome::AdmittedPendingChainMint(mint))
+            let store = state
+                .ethereum_store
+                .as_ref()
+                .ok_or(ApiError::NoAnchor(Network::Ethereum.id()))?;
+            let verifier = q_bls::Bls12381AggregateVerifier::new();
+            let proven = qlc_ethereum::verify_trustless_deposit(store, update, deposit, &verifier)
+                .map_err(ApiError::EthereumVerify)?;
+            PlanKind::Ethereum { proven, fact: fact.clone() }
         }
         (
             Tier::ProofBacked,
@@ -334,26 +339,86 @@ fn dispatch_deposit(
                 fact,
             },
         ) => {
-            let proven = {
-                let anchor = state
-                    .cosmos_anchor
-                    .as_ref()
-                    .ok_or(ApiError::NoAnchor(Network::Cosmos.id()))?;
-                qlc_cosmos::verify_trustless_deposit(
-                    &anchor.config,
-                    &anchor.trusted,
-                    header,
-                    commit,
-                    validators,
-                    proof,
-                )
-                .map_err(ApiError::CosmosVerify)?
-            };
-            let mint = admit_cosmos_trustless(&mut state.gateway, &corridor, &proven, fact)
+            let anchor = state
+                .cosmos_anchor
+                .as_ref()
+                .ok_or(ApiError::NoAnchor(Network::Cosmos.id()))?;
+            let proven = qlc_cosmos::verify_trustless_deposit(
+                &anchor.config,
+                &anchor.trusted,
+                header,
+                commit,
+                validators,
+                proof,
+            )
+            .map_err(ApiError::CosmosVerify)?;
+            PlanKind::Cosmos { proven, fact: fact.clone() }
+        }
+        _ => return Err(ApiError::ProofTierMismatch),
+    };
+    Ok(DepositPlan { corridor, kind })
+}
+
+pub fn commit_deposit(
+    state: &mut BridgeState,
+    plan: DepositPlan,
+) -> Result<DepositOutcome, ApiError> {
+    let DepositPlan { corridor, kind } = plan;
+    match kind {
+        PlanKind::Federated(env) => {
+            let receipt = admit(&mut state.gateway, &corridor, &state.sources, &env)
+                .map_err(ApiError::Federated)?;
+            Ok(DepositOutcome::Minted(receipt))
+        }
+        PlanKind::Bitcoin { proven, fact } => {
+            let mint = admit_bitcoin_trustless(&mut state.gateway, &corridor, &proven, &fact)
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
-        _ => Err(ApiError::ProofTierMismatch),
+        PlanKind::Ethereum { proven, fact } => {
+            let mint = admit_ethereum_trustless(&mut state.gateway, &corridor, &proven, &fact)
+                .map_err(ApiError::Trustless)?;
+            Ok(DepositOutcome::AdmittedPendingChainMint(mint))
+        }
+        PlanKind::Cosmos { proven, fact } => {
+            let mint = admit_cosmos_trustless(&mut state.gateway, &corridor, &proven, &fact)
+                .map_err(ApiError::Trustless)?;
+            Ok(DepositOutcome::AdmittedPendingChainMint(mint))
+        }
+    }
+}
+
+fn dispatch_deposit(
+    state: &mut BridgeState,
+    request: DepositRequest,
+) -> Result<DepositOutcome, ApiError> {
+    let plan = verify_deposit(state, &request)?;
+    commit_deposit(state, plan)
+}
+
+pub fn handle_read(state: &BridgeState, request: &Request) -> Option<Response> {
+    match request {
+        Request::ListPools(request) => {
+            let views: Vec<PoolView> = match request.network_id {
+                Some(id) => match Network::from_id(id) {
+                    Some(network) => state
+                        .pools
+                        .by_network(network)
+                        .into_iter()
+                        .map(PoolView::from)
+                        .collect(),
+                    None => return Some(Response::Error(ApiError::UnknownNetwork(id))),
+                },
+                None => state.pools.all().map(PoolView::from).collect(),
+            };
+            Some(Response::Pools(views))
+        }
+        Request::GetPool(request) => Some(match state.pools.get(&request.asset_id) {
+            Some(spec) => Response::Pool(PoolView::from(spec)),
+            None => Response::Error(ApiError::PoolNotRegistered(request.asset_id)),
+        }),
+        Request::DepositStatus(request) => Some(Response::Status(deposit_status(state, request))),
+        _ => None,
     }
 }
 
