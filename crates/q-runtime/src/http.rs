@@ -48,7 +48,7 @@ struct LimiterInner {
 
 impl Limiter {
     fn try_admit(&self, ip: IpAddr, total_cap: usize, per_ip_cap: usize) -> Admit {
-        let mut inner = self.inner.lock().expect("the oracle limiter lock is not poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if inner.total >= total_cap {
             return Admit::TotalFull;
         }
@@ -62,7 +62,7 @@ impl Limiter {
     }
 
     fn release(&self, ip: IpAddr) {
-        let mut inner = self.inner.lock().expect("the oracle limiter lock is not poisoned");
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(count) = inner.per_ip.get_mut(&ip) {
             *count -= 1;
             if *count == 0 {
@@ -103,11 +103,22 @@ pub fn serve(listener: TcpListener, state: SharedState) {
             let state = state.clone();
             let limiter = limiter.clone();
             thread::spawn(move || {
+                let _slot = SlotGuard { limiter, ip };
                 let _ = handle_connection(stream, state);
-                limiter.release(ip);
             });
         }
     });
+}
+
+struct SlotGuard {
+    limiter: Arc<Limiter>,
+    ip: IpAddr,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        self.limiter.release(self.ip);
+    }
 }
 
 fn handle_connection(mut stream: TcpStream, state: SharedState) -> IoResult<()> {
@@ -198,11 +209,13 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> IoResult<()> 
         }
     };
 
-    let response = {
-        let mut guard = state.lock().expect("the oracle bridge state lock is not poisoned");
-        handle(&mut guard, request)
-    };
-    write_response(&mut stream, 200, &encode_response(&response).render())
+    let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(&mut guard, request)));
+    drop(guard);
+    match outcome {
+        Ok(response) => write_response(&mut stream, 200, &encode_response(&response).render()),
+        Err(_) => write_error(&mut stream, 500, "internal_error", "the request handler failed"),
+    }
 }
 
 fn is_timeout(e: &std::io::Error) -> bool {
@@ -302,6 +315,7 @@ fn reason(code: u16) -> &'static str {
         413 => "Payload Too Large",
         429 => "Too Many Requests",
         431 => "Request Header Fields Too Large",
+        500 => "Internal Server Error",
         503 => "Service Unavailable",
         _ => "OK",
     }
@@ -443,5 +457,47 @@ mod tests {
         let port = serve_seeded();
         let response = round_trip(port, "GET /v1/list_pools HTTP/1.1\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 405"), "{response}");
+    }
+
+    #[test]
+    fn a_poisoned_state_lock_still_serves_the_next_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let gateway = Gateway::new(9000, OperatorSet::new(0), 1_000_000_000_000);
+        let state: SharedState = Arc::new(Mutex::new(BridgeState::seeded(gateway)));
+
+        let poisoner = state.clone();
+        let _ = thread::spawn(move || {
+            let _held = poisoner.lock().unwrap();
+            panic!("poison the bridge state lock");
+        })
+        .join();
+
+        serve(listener, state);
+        let response = round_trip(
+            port,
+            "POST /v1/list_pools HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "a recovered lock still answers, got {response}"
+        );
+    }
+
+    #[test]
+    fn a_panicking_connection_thread_releases_its_slot() {
+        let limiter = Arc::new(Limiter::default());
+        let peer = ip(9);
+        assert!(matches!(limiter.try_admit(peer, 100, 1), Admit::Ok));
+        let held = limiter.clone();
+        let _ = thread::spawn(move || {
+            let _slot = SlotGuard { limiter: held, ip: peer };
+            panic!("the connection handler unwound");
+        })
+        .join();
+        assert!(
+            matches!(limiter.try_admit(peer, 100, 1), Admit::Ok),
+            "the per address slot is freed when the thread unwinds"
+        );
     }
 }
