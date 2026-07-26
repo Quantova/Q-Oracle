@@ -12,7 +12,13 @@ pub enum Network {
     Avalanche = 5,
     Arbitrum = 6,
     Optimism = 7,
+    Base = 8,
     Fantom = 9,
+    Linea = 10,
+    Scroll = 11,
+    Mantle = 12,
+    ZkSync = 13,
+    VeChain = 14,
     Celo = 15,
     Cosmos = 16,
     Osmosis = 17,
@@ -38,10 +44,12 @@ pub enum Network {
     Zcash = 37,
     Filecoin = 39,
     Cronos = 40,
+    Hyperliquid = 41,
+    Bittensor = 42,
 }
 
 impl Network {
-    pub const ALL: [Network; 34] = [
+    pub const ALL: [Network; 43] = [
         Network::Bitcoin,
         Network::BitcoinCash,
         Network::Ethereum,
@@ -50,7 +58,13 @@ impl Network {
         Network::Avalanche,
         Network::Arbitrum,
         Network::Optimism,
+        Network::Base,
         Network::Fantom,
+        Network::Linea,
+        Network::Scroll,
+        Network::Mantle,
+        Network::ZkSync,
+        Network::VeChain,
         Network::Celo,
         Network::Cosmos,
         Network::Osmosis,
@@ -76,6 +90,8 @@ impl Network {
         Network::Zcash,
         Network::Filecoin,
         Network::Cronos,
+        Network::Hyperliquid,
+        Network::Bittensor,
     ];
 
     pub fn id(self) -> u32 {
@@ -96,7 +112,13 @@ impl Network {
             Network::Avalanche => "Avalanche",
             Network::Arbitrum => "Arbitrum",
             Network::Optimism => "Optimism",
+            Network::Base => "Base",
             Network::Fantom => "Fantom",
+            Network::Linea => "Linea",
+            Network::Scroll => "Scroll",
+            Network::Mantle => "Mantle",
+            Network::ZkSync => "zkSync Era",
+            Network::VeChain => "VeChain",
             Network::Celo => "Celo",
             Network::Cosmos => "Cosmos",
             Network::Osmosis => "Osmosis",
@@ -122,6 +144,8 @@ impl Network {
             Network::Zcash => "Zcash",
             Network::Filecoin => "Filecoin",
             Network::Cronos => "Cronos",
+            Network::Hyperliquid => "Hyperliquid",
+            Network::Bittensor => "Bittensor",
         }
     }
 }
@@ -132,8 +156,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn there_are_thirty_four_origin_networks() {
-        assert_eq!(Network::ALL.len(), 34);
+    fn there_are_forty_three_origin_networks() {
+        assert_eq!(Network::ALL.len(), 43);
     }
 
     #[test]
@@ -157,7 +181,7 @@ mod tests {
 
     #[test]
     fn an_id_outside_the_registry_resolves_to_nothing() {
-        assert_eq!(Network::from_id(8), None);
+        assert_eq!(Network::from_id(44), None);
         assert_eq!(Network::from_id(999), None);
     }
 

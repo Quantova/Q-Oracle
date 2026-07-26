@@ -18,7 +18,7 @@ pub const DEST_CHAIN: u32 = 9000;
 pub const DEFAULT_EPOCH_CAP: u128 = 1_000_000_000_000_000_000_000_000;
 
 /// Build a fully seeded bridge state. Every enumerated foreign asset is a live pool and every pool
-/// installs its corridor and per-asset cap on the gateway, so all thirty-four chains and every asset
+/// installs its corridor and per-asset cap on the gateway, so all forty-three chains and every asset
 /// are a live corridor the moment the runtime is up. The operator set is empty, which serves reads
 /// and the proof-backed trustless path out of the box and safely refuses federated mints until an
 /// operator quorum and its independent sources are declared.

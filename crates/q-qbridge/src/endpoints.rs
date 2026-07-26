@@ -392,9 +392,9 @@ mod tests {
         let mut state = BridgeState::seeded(Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000));
         let bad = handle(
             &mut state,
-            Request::ListPools(ListPoolsRequest { network_id: Some(8) }),
+            Request::ListPools(ListPoolsRequest { network_id: Some(44) }),
         );
-        assert_eq!(bad, Response::Error(ApiError::UnknownNetwork(8)));
+        assert_eq!(bad, Response::Error(ApiError::UnknownNetwork(44)));
         match handle(&mut state, Request::ListPools(ListPoolsRequest { network_id: None })) {
             Response::Pools(pools) => assert_eq!(pools.len(), state.pools.len()),
             other => panic!("expected Pools, got {:?}", other),
@@ -610,7 +610,7 @@ mod tests {
         );
 
         let mut unknown = federated_fact([0xee; 16], [0x12; 32]);
-        unknown.source_chain = 8;
+        unknown.source_chain = 44;
         let env = AttestationEnvelope {
             fact: unknown,
             signatures: vec![],
@@ -621,6 +621,6 @@ mod tests {
                 proof: DepositProof::Federated(env),
             }),
         );
-        assert_eq!(response, Response::Error(ApiError::UnknownNetwork(8)));
+        assert_eq!(response, Response::Error(ApiError::UnknownNetwork(44)));
     }
 }

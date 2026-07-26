@@ -363,8 +363,8 @@ mod tests {
     fn an_unknown_network_is_rejected() {
         let mut registry = PoolRegistry::new();
         assert_eq!(
-            registry.create_pool(&request(8, "GHO")),
-            Err(PoolError::UnknownNetwork(8))
+            registry.create_pool(&request(44, "GHO")),
+            Err(PoolError::UnknownNetwork(44))
         );
         assert_eq!(
             registry.create_pool(&request(999, "GHO")),
@@ -518,7 +518,7 @@ mod tests {
             Err(PoolError::DuplicatePool)
         );
         let spec = registry
-            .create_pool(&request(Network::Ethereum.id(), "PEPE"))
+            .create_pool(&request(Network::Ethereum.id(), "GHO"))
             .expect("a brand new ethereum token lists");
         assert_eq!(spec.tier, Tier::ProofBacked);
         assert_eq!(spec.network, Network::Ethereum);
