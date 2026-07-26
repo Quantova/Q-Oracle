@@ -178,12 +178,14 @@ fn decompress(bytes: &[u8; 32]) -> Option<Point> {
     Some(Point::from_affine(x, y))
 }
 
+#[cfg(any(test, feature = "test-util"))]
 fn clamp(scalar_bytes: &mut [u8; 32]) {
     scalar_bytes[0] &= 248;
     scalar_bytes[31] &= 127;
     scalar_bytes[31] |= 64;
 }
 
+#[cfg(any(test, feature = "test-util"))]
 pub fn public_key_from_seed(seed: &[u8; 32]) -> [u8; 32] {
     let h = sha512(seed);
     let mut a_bytes = [0u8; 32];
@@ -193,6 +195,7 @@ pub fn public_key_from_seed(seed: &[u8; 32]) -> [u8; 32] {
     scalar_mul(&a, &base()).compress()
 }
 
+#[cfg(any(test, feature = "test-util"))]
 pub fn sign(seed: &[u8; 32], message: &[u8]) -> [u8; 64] {
     let h = sha512(seed);
     let mut a_bytes = [0u8; 32];
