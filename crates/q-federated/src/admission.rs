@@ -119,7 +119,7 @@ mod tests {
     }
 
     fn build() -> (Vec<Op>, Gateway) {
-        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let ops: Vec<Op> = (0..4).map(mk).collect();
         let mut set = OperatorSet::new(3);
         for op in &ops {
             set.register(op.id, op.pk);

@@ -55,7 +55,7 @@ fn gateway(ops: &[Op]) -> Gateway {
 
 #[test]
 fn the_cursor_advances_one_batch_at_a_time() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     assert_eq!(gw.corridor_cursor(SOURCE), 0);
 
@@ -68,7 +68,7 @@ fn the_cursor_advances_one_batch_at_a_time() {
 
 #[test]
 fn a_replayed_batch_index_is_rejected() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.accept_batch(SOURCE, 0, &quorum(&ops, SOURCE, 0)).expect("batch zero");
 
@@ -81,7 +81,7 @@ fn a_replayed_batch_index_is_rejected() {
 
 #[test]
 fn an_out_of_order_batch_is_rejected() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.accept_batch(SOURCE, 0, &quorum(&ops, SOURCE, 0)).expect("batch zero");
 
@@ -93,7 +93,7 @@ fn an_out_of_order_batch_is_rejected() {
 
 #[test]
 fn a_batch_below_quorum_does_not_advance_the_cursor() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     let two: Vec<SignerSig> = ops[0..2].iter().map(|op| sign_batch(op, SOURCE, 0)).collect();
     assert_eq!(
@@ -105,7 +105,7 @@ fn a_batch_below_quorum_does_not_advance_the_cursor() {
 
 #[test]
 fn a_batch_on_an_unopened_corridor_is_rejected() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     assert_eq!(
         gw.accept_batch(7, 0, &quorum(&ops, 7, 0)),
@@ -115,7 +115,7 @@ fn a_batch_on_an_unopened_corridor_is_rejected() {
 
 #[test]
 fn each_corridor_keeps_its_own_cursor() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.register_corridor(9, 6);
 

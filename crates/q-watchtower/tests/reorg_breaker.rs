@@ -70,7 +70,7 @@ fn reorg_watcher(id: u32, max_depth: u32) -> ReorgWatcher {
 
 #[test]
 fn a_single_watchtower_pauses_a_corridor_and_a_paused_corridor_rejects_mints() {
-    let ops: Vec<Op> = (0..5).map(mk_op).collect();
+    let ops: Vec<Op> = (0..4).map(mk_op).collect();
     let mut gw = gateway(&ops, 3);
     let watcher = reorg_watcher(1, 6);
 
@@ -118,7 +118,7 @@ fn a_reorg_past_the_configured_depth_pauses_the_route_a_shallow_one_does_not() {
 
 #[test]
 fn an_independent_watchtower_pause_is_honored_when_the_oracle_set_stays_silent() {
-    let ops: Vec<Op> = (0..5).map(mk_op).collect();
+    let ops: Vec<Op> = (0..4).map(mk_op).collect();
     let mut gw = gateway(&ops, 3);
     let watcher = reorg_watcher(3, 6);
 
@@ -135,7 +135,7 @@ fn an_independent_watchtower_pause_is_honored_when_the_oracle_set_stays_silent()
 
 #[test]
 fn a_resume_is_required_to_unpause_and_is_not_automatic() {
-    let ops: Vec<Op> = (0..5).map(mk_op).collect();
+    let ops: Vec<Op> = (0..4).map(mk_op).collect();
     let mut gw = gateway(&ops, 3);
     let watcher = reorg_watcher(4, 6);
 
@@ -162,7 +162,7 @@ fn a_resume_is_required_to_unpause_and_is_not_automatic() {
 
 #[test]
 fn one_honest_watchtower_is_enough_even_if_another_stays_silent() {
-    let ops: Vec<Op> = (0..5).map(mk_op).collect();
+    let ops: Vec<Op> = (0..4).map(mk_op).collect();
     let mut gw = gateway(&ops, 3);
 
     let honest = reorg_watcher(5, 6);

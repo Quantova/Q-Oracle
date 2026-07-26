@@ -92,7 +92,7 @@ fn independent_sources(corridor: u32, ops: &[Op]) -> SourceRegistry {
 
 #[test]
 fn a_distinct_signer_quorum_over_the_canonical_fact_mints() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let sources = independent_sources(SOLANA, &ops);
     let c = find(SOLANA).unwrap();
@@ -129,7 +129,7 @@ fn a_wide_two_thirds_corridor_quorum_holds() {
 
 #[test]
 fn a_sub_quorum_does_not_mint() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let sources = independent_sources(SOLANA, &ops);
     let c = find(SOLANA).unwrap();
@@ -145,7 +145,7 @@ fn a_sub_quorum_does_not_mint() {
 
 #[test]
 fn a_duplicate_signer_does_not_double_count() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let sources = independent_sources(SOLANA, &ops);
     let c = find(SOLANA).unwrap();
@@ -203,7 +203,7 @@ fn every_named_corridor_is_labeled_federated_tier() {
 
 #[test]
 fn an_operator_on_a_shared_source_is_distinguishable_from_independent_sources() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let c = find(SOLANA).unwrap();
     let signers: BTreeSet<u32> = [0u32, 1, 2].into_iter().collect();
 
@@ -240,7 +240,7 @@ fn an_operator_on_a_shared_source_is_distinguishable_from_independent_sources() 
 
 #[test]
 fn only_an_ml_dsa_attestation_over_the_canonical_preimage_counts() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let sources = independent_sources(SOLANA, &ops);
     let c = find(SOLANA).unwrap();
@@ -286,7 +286,7 @@ fn the_federated_deposit_crosses_as_an_attestation_never_a_stark() {
 
 #[test]
 fn assets_are_origin_tagged_per_corridor() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
 
     let ltc = find(LITECOIN).unwrap();
@@ -308,7 +308,7 @@ fn assets_are_origin_tagged_per_corridor() {
 
 #[test]
 fn caps_are_enforced_in_base_units_never_usd() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let c = find(SOLANA).unwrap();
     gw.register_asset_cap(c.origin_asset.0, 1_000);
@@ -333,7 +333,7 @@ fn caps_are_enforced_in_base_units_never_usd() {
 
 #[test]
 fn each_corridor_watches_its_own_independent_source() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
 
     let sol = find(SOLANA).unwrap();
@@ -378,7 +378,7 @@ fn bnb_chain_polygon_and_avalanche_keep_their_existing_canonical_ids() {
 #[test]
 fn a_distinct_signer_quorum_mints_for_bnb_chain_polygon_and_avalanche() {
     for id in [BNB_CHAIN, POLYGON, AVALANCHE] {
-        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let ops: Vec<Op> = (0..4).map(mk).collect();
         let mut gw = gateway(&ops, 3);
         let sources = independent_sources(id, &ops);
         let c = find(id).unwrap();
@@ -395,7 +395,7 @@ fn a_distinct_signer_quorum_mints_for_bnb_chain_polygon_and_avalanche() {
 #[test]
 fn a_sub_quorum_does_not_mint_for_bnb_chain_polygon_and_avalanche() {
     for id in [BNB_CHAIN, POLYGON, AVALANCHE] {
-        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let ops: Vec<Op> = (0..4).map(mk).collect();
         let mut gw = gateway(&ops, 3);
         let sources = independent_sources(id, &ops);
         let c = find(id).unwrap();
@@ -415,7 +415,7 @@ fn a_sub_quorum_does_not_mint_for_bnb_chain_polygon_and_avalanche() {
 #[test]
 fn a_correlated_source_quorum_is_refused_for_bnb_chain_polygon_and_avalanche() {
     for id in [BNB_CHAIN, POLYGON, AVALANCHE] {
-        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let ops: Vec<Op> = (0..4).map(mk).collect();
         let mut gw = gateway(&ops, 3);
         let mut sources = SourceRegistry::new();
         sources.declare(id, ops[0].id, ep(0xaa));
