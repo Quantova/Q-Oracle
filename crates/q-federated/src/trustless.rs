@@ -129,34 +129,34 @@ pub fn match_ethereum_deposit(
             fact: fact.source_chain,
         });
     }
-    if fact.source_ref.0 != proven.source_ref {
+    if fact.source_ref.0 != proven.source_ref() {
         return Err(TrustlessError::ReferenceMismatch);
     }
-    if fact.amount != proven.amount {
+    if fact.amount != proven.amount() {
         return Err(TrustlessError::AmountMismatch {
-            proven: proven.amount,
+            proven: proven.amount(),
             fact: fact.amount,
         });
     }
-    if fact.recipient.0 != proven.recipient {
+    if fact.recipient.0 != proven.recipient() {
         return Err(TrustlessError::RecipientMismatch);
     }
-    if fact.asset_id.0 != proven.asset_id {
+    if fact.asset_id.0 != proven.asset_id() {
         return Err(TrustlessError::AssetMismatch);
     }
-    if proven.finality_depth < corridor.confirmation_depth {
+    if proven.finality_depth() < corridor.confirmation_depth {
         return Err(TrustlessError::InsufficientConfirmations {
-            have: proven.finality_depth,
+            have: proven.finality_depth(),
             need: corridor.confirmation_depth,
         });
     }
     Ok(TrustlessMint {
-        asset_id: proven.asset_id,
-        recipient: proven.recipient,
-        amount: proven.amount,
-        source_ref: proven.source_ref,
+        asset_id: proven.asset_id(),
+        recipient: proven.recipient(),
+        amount: proven.amount(),
+        source_ref: proven.source_ref(),
         source_chain: corridor.chain_id,
-        confirmations: proven.finality_depth,
+        confirmations: proven.finality_depth(),
     })
 }
 
@@ -190,34 +190,34 @@ pub fn match_cosmos_deposit(
             fact: fact.source_chain,
         });
     }
-    if fact.source_ref.0 != proven.source_ref {
+    if fact.source_ref.0 != proven.source_ref() {
         return Err(TrustlessError::ReferenceMismatch);
     }
-    if fact.amount != proven.amount {
+    if fact.amount != proven.amount() {
         return Err(TrustlessError::AmountMismatch {
-            proven: proven.amount,
+            proven: proven.amount(),
             fact: fact.amount,
         });
     }
-    if fact.recipient.0 != proven.recipient {
+    if fact.recipient.0 != proven.recipient() {
         return Err(TrustlessError::RecipientMismatch);
     }
-    if fact.asset_id.0 != proven.asset_id {
+    if fact.asset_id.0 != proven.asset_id() {
         return Err(TrustlessError::AssetMismatch);
     }
-    if proven.confirmations < corridor.confirmation_depth {
+    if proven.confirmations() < corridor.confirmation_depth {
         return Err(TrustlessError::InsufficientConfirmations {
-            have: proven.confirmations,
+            have: proven.confirmations(),
             need: corridor.confirmation_depth,
         });
     }
     Ok(TrustlessMint {
-        asset_id: proven.asset_id,
-        recipient: proven.recipient,
-        amount: proven.amount,
-        source_ref: proven.source_ref,
+        asset_id: proven.asset_id(),
+        recipient: proven.recipient(),
+        amount: proven.amount(),
+        source_ref: proven.source_ref(),
         source_chain: corridor.chain_id,
-        confirmations: proven.confirmations,
+        confirmations: proven.confirmations(),
     })
 }
 
@@ -537,14 +537,7 @@ mod tests {
         asset: [u8; 16],
         finality: u32,
     ) -> EthereumDeposit {
-        EthereumDeposit {
-            source_ref,
-            amount,
-            recipient,
-            asset_id: asset,
-            block_number: 20_000_000,
-            finality_depth: finality,
-        }
+        EthereumDeposit::new_for_test(source_ref, amount, recipient, asset, 20_000_000, finality)
     }
 
     fn cosmos_proven(
@@ -554,14 +547,7 @@ mod tests {
         asset: [u8; 16],
         confs: u32,
     ) -> CosmosDeposit {
-        CosmosDeposit {
-            source_ref,
-            amount,
-            recipient,
-            asset_id: asset,
-            height: 18_500_000,
-            confirmations: confs,
-        }
+        CosmosDeposit::new_for_test(source_ref, amount, recipient, asset, 18_500_000, confs)
     }
 
     fn fact_with_asset(

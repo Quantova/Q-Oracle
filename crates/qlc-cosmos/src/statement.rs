@@ -61,12 +61,57 @@ pub fn lower(statement: &ProofStatement) -> StarkStatement {
 /// signed. Nothing here is taken on a relayer's word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrustlessDeposit {
-    pub source_ref: [u8; 32],
-    pub amount: u128,
-    pub recipient: [u8; 32],
-    pub asset_id: [u8; 16],
-    pub height: u64,
-    pub confirmations: u32,
+    source_ref: [u8; 32],
+    amount: u128,
+    recipient: [u8; 32],
+    asset_id: [u8; 16],
+    height: u64,
+    confirmations: u32,
+}
+
+impl TrustlessDeposit {
+    pub fn source_ref(&self) -> [u8; 32] {
+        self.source_ref
+    }
+
+    pub fn amount(&self) -> u128 {
+        self.amount
+    }
+
+    pub fn recipient(&self) -> [u8; 32] {
+        self.recipient
+    }
+
+    pub fn asset_id(&self) -> [u8; 16] {
+        self.asset_id
+    }
+
+    pub fn height(&self) -> u64 {
+        self.height
+    }
+
+    pub fn confirmations(&self) -> u32 {
+        self.confirmations
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn new_for_test(
+        source_ref: [u8; 32],
+        amount: u128,
+        recipient: [u8; 32],
+        asset_id: [u8; 16],
+        height: u64,
+        confirmations: u32,
+    ) -> TrustlessDeposit {
+        TrustlessDeposit {
+            source_ref,
+            amount,
+            recipient,
+            asset_id,
+            height,
+            confirmations,
+        }
+    }
 }
 
 fn verify_deposit_core(
@@ -358,6 +403,18 @@ mod tests {
         assert_eq!(proven.height, 18_500_000);
         assert_eq!(proven.confirmations, COSMOS_HUB.confirmation_depth);
         assert_ne!(proven.source_ref, [0u8; 32]);
+    }
+
+    #[test]
+    fn a_trustless_deposit_is_only_readable_through_the_verifier_output() {
+        let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
+        let proven =
+            verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
+        assert_eq!(proven.amount(), 7_500_000u128);
+        assert_eq!(proven.recipient(), [0x51u8; 32]);
+        assert_eq!(proven.asset_id(), *b"qATOM.atom\0\0\0\0\0\0");
+        assert_eq!(proven.confirmations(), COSMOS_HUB.confirmation_depth);
+        assert_ne!(proven.source_ref(), [0u8; 32]);
     }
 
     #[test]

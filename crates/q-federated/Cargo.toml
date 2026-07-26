@@ -25,4 +25,5 @@ qtv-crypto = { workspace = true }
 qtv-crypto = { workspace = true }
 q-codec = { workspace = true }
 q-airlock = { workspace = true }
-qlc-cosmos = { workspace = true }
+qlc-cosmos = { workspace = true, features = ["test-util"] }
+qlc-ethereum = { workspace = true, features = ["test-util"] }
