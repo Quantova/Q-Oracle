@@ -101,6 +101,10 @@ fn beacon_forks() -> Vec<Fork> {
             epoch: 269568,
             version: ForkVersion([0x04, 0x00, 0x00, 0x00]),
         },
+        Fork {
+            epoch: MAINNET_ELECTRA_EPOCH,
+            version: ForkVersion([0x05, 0x00, 0x00, 0x00]),
+        },
     ]
 }
 
@@ -292,7 +296,26 @@ mod tests {
         assert_eq!(eth.fork_version_at_epoch(0), ForkVersion([0, 0, 0, 0]));
         assert_eq!(eth.fork_version_at_epoch(74240), ForkVersion([1, 0, 0, 0]));
         assert_eq!(eth.fork_version_at_epoch(200000), ForkVersion([3, 0, 0, 0]));
-        assert_eq!(eth.fork_version_at_epoch(999999), ForkVersion([4, 0, 0, 0]));
+        assert_eq!(eth.fork_version_at_epoch(300000), ForkVersion([4, 0, 0, 0]));
+        assert_eq!(eth.fork_version_at_epoch(999999), ForkVersion([5, 0, 0, 0]));
+    }
+
+    #[test]
+    fn a_post_electra_slot_resolves_to_the_electra_fork_version() {
+        let eth = ethereum();
+        assert_eq!(
+            eth.fork_version_at_epoch(MAINNET_ELECTRA_EPOCH - 1),
+            ForkVersion([4, 0, 0, 0])
+        );
+        assert_eq!(
+            eth.fork_version_at_epoch(MAINNET_ELECTRA_EPOCH),
+            ForkVersion([5, 0, 0, 0])
+        );
+        let post_electra_slot = MAINNET_ELECTRA_EPOCH * eth.slots_per_epoch + 100;
+        assert_eq!(
+            eth.fork_version_at_slot(post_electra_slot),
+            ForkVersion([5, 0, 0, 0])
+        );
     }
 
     #[test]
