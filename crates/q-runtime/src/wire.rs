@@ -15,6 +15,10 @@ use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
 
 use crate::json::{from_hex, object, to_hex, Json};
 
+pub const MAX_HEADERS: usize = 2048;
+
+pub const MAX_BRANCH: usize = 64;
+
 /// Every rejection the wire raises before the dispatcher is reached. A transport frame that names no
 /// method is a not-found, everything else the request layer refuses is a bad request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +252,9 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
             let headers_json = field(j, "headers")?
                 .as_array()
                 .ok_or(WireError::BadType("headers"))?;
+            if headers_json.len() > MAX_HEADERS {
+                return Err(WireError::BadField("headers"));
+            }
             let mut headers = Vec::with_capacity(headers_json.len());
             for h in headers_json {
                 let bytes = as_hex(h, "headers")?;
@@ -256,6 +263,9 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
             let branch_json = field(j, "branch")?
                 .as_array()
                 .ok_or(WireError::BadType("branch"))?;
+            if branch_json.len() > MAX_BRANCH {
+                return Err(WireError::BadField("branch"));
+            }
             let mut branch = Vec::with_capacity(branch_json.len());
             for s in branch_json {
                 branch.push(MerkleStep {
@@ -1208,6 +1218,36 @@ mod tests {
         assert_eq!(
             decode_request("no_such_method", &object(vec![])),
             Err(WireError::UnknownMethod("no_such_method".to_string()))
+        );
+    }
+
+    #[test]
+    fn an_oversized_bitcoin_headers_array_is_rejected_before_allocation() {
+        let headers = Json::Array(vec![Json::str(""); MAX_HEADERS + 1]);
+        let body = object(vec![(
+            "proof",
+            object(vec![("kind", Json::str("bitcoin")), ("headers", headers)]),
+        )]);
+        assert_eq!(
+            decode_request("submit_deposit", &body),
+            Err(WireError::BadField("headers"))
+        );
+    }
+
+    #[test]
+    fn an_oversized_bitcoin_branch_array_is_rejected_before_allocation() {
+        let branch = Json::Array(vec![Json::Null; MAX_BRANCH + 1]);
+        let body = object(vec![(
+            "proof",
+            object(vec![
+                ("kind", Json::str("bitcoin")),
+                ("headers", Json::Array(vec![])),
+                ("branch", branch),
+            ]),
+        )]);
+        assert_eq!(
+            decode_request("submit_deposit", &body),
+            Err(WireError::BadField("branch"))
         );
     }
 
