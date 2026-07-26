@@ -36,7 +36,7 @@ fn keyed(byte: u8, power: u64) -> Keyed {
 
 fn deposit_proof(recipient: [u8; 32], asset: [u8; 16], amount: u128) -> ExistenceProof {
     ExistenceProof {
-        key: b"transfer/deposit/0x1a2b".to_vec(),
+        key: b"bridge/deposits/0x1a2b".to_vec(),
         value: encode_deposit_value(&recipient, &asset, amount),
         leaf: LeafOp {
             prefix: vec![0x00, 0x02, 0x00],

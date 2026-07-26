@@ -98,7 +98,7 @@ mod tests {
         let asset_id = *b"qATOM.atom\0\0\0\0\0\0";
         let amount: u128 = 7_500_000u128;
         ExistenceProof {
-            key: b"transfer/deposit/0x1a2b".to_vec(),
+            key: b"bridge/deposits/0x1a2b".to_vec(),
             value: encode_deposit_value(&recipient, &asset_id, amount),
             leaf: LeafOp { prefix: vec![0x00, 0x02, 0x00] },
             path: vec![

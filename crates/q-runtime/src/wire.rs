@@ -1064,6 +1064,17 @@ fn light_err_json(e: &LightError) -> Json {
                 ("trusted_total", u128s(*trusted_total)),
             ],
         ),
+        LightError::InsufficientTrustedSignatures {
+            signed,
+            trusted_total,
+        } => tagged(
+            "light",
+            "insufficient_trusted_signatures",
+            vec![
+                ("signed", u128s(*signed)),
+                ("trusted_total", u128s(*trusted_total)),
+            ],
+        ),
         LightError::NotAdjacent => tagged("light", "not_adjacent", vec![]),
         LightError::NextValidatorMismatch => tagged("light", "next_validator_mismatch", vec![]),
         LightError::Commit(c) => {
@@ -1079,6 +1090,10 @@ fn light_err_from(j: &Json) -> Result<LightError, WireError> {
         "untrusted_validator_set" => Ok(LightError::UntrustedValidatorSet),
         "insufficient_overlap" => Ok(LightError::InsufficientOverlap {
             overlap: as_u128(field(j, "overlap")?, "overlap")?,
+            trusted_total: as_u128(field(j, "trusted_total")?, "trusted_total")?,
+        }),
+        "insufficient_trusted_signatures" => Ok(LightError::InsufficientTrustedSignatures {
+            signed: as_u128(field(j, "signed")?, "signed")?,
             trusted_total: as_u128(field(j, "trusted_total")?, "trusted_total")?,
         }),
         "not_adjacent" => Ok(LightError::NotAdjacent),
@@ -1114,6 +1129,8 @@ fn proof_err_json(e: &ProofError) -> Json {
     match e {
         ProofError::RootMismatch => tagged("proof", "root_mismatch", vec![]),
         ProofError::BadValueLength => tagged("proof", "bad_value_length", vec![]),
+        ProofError::MalformedProofOp => tagged("proof", "malformed_proof_op", vec![]),
+        ProofError::ForeignStoreKey => tagged("proof", "foreign_store_key", vec![]),
     }
 }
 
@@ -1121,6 +1138,8 @@ fn proof_err_from(j: &Json) -> Result<ProofError, WireError> {
     match code_of(j)? {
         "root_mismatch" => Ok(ProofError::RootMismatch),
         "bad_value_length" => Ok(ProofError::BadValueLength),
+        "malformed_proof_op" => Ok(ProofError::MalformedProofOp),
+        "foreign_store_key" => Ok(ProofError::ForeignStoreKey),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }
@@ -1948,8 +1967,20 @@ mod tests {
                 total: 100,
             },
         ))));
+        round_response(Response::Error(ApiError::CosmosVerify(
+            CorridorError::Unanchored(LightError::InsufficientTrustedSignatures {
+                signed: 0,
+                trusted_total: 100,
+            }),
+        )));
         round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Proof(
             ProofError::RootMismatch,
+        ))));
+        round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Proof(
+            ProofError::ForeignStoreKey,
+        ))));
+        round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Proof(
+            ProofError::MalformedProofOp,
         ))));
     }
 
