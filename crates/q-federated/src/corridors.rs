@@ -6,12 +6,14 @@ use q_codec::AssetId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     Federated,
+    ProofBacked,
 }
 
 impl Tier {
     pub fn label(self) -> &'static str {
         match self {
             Tier::Federated => "Federated",
+            Tier::ProofBacked => "ProofBacked",
         }
     }
 
@@ -19,24 +21,30 @@ impl Tier {
         matches!(self, Tier::Federated)
     }
 
+    pub fn is_proof_backed(self) -> bool {
+        matches!(self, Tier::ProofBacked)
+    }
+
     pub fn verifies_foreign_on_chain(self) -> bool {
-        false
+        matches!(self, Tier::ProofBacked)
     }
 
     pub fn proof_backed(self) -> bool {
-        false
+        matches!(self, Tier::ProofBacked)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrustGrade {
     TrustedRelayer,
+    Trustless,
 }
 
 impl TrustGrade {
     pub fn label(self) -> &'static str {
         match self {
             TrustGrade::TrustedRelayer => "TrustedRelayer",
+            TrustGrade::Trustless => "Trustless",
         }
     }
 }
