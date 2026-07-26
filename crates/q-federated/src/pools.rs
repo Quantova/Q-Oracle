@@ -55,6 +55,19 @@ pub fn tier_for(network: Network) -> Tier {
     }
 }
 
+/// The one asset a proof-backed corridor is allowed to mint. A Bitcoin, Ethereum or Cosmos proof
+/// carries the network's native coin, so the corridor is pinned to that native pool asset and cannot
+/// be steered by a fact onto some other token listed on the same network.
+pub fn native_asset(network: Network) -> Option<AssetId> {
+    let identifier = match network {
+        Network::Bitcoin => "BTC",
+        Network::Ethereum => "ETH",
+        Network::Cosmos => "ATOM",
+        _ => return None,
+    };
+    Some(derive_asset_id(network, identifier))
+}
+
 pub fn grade_for(network: Network) -> TrustGrade {
     match tier_for(network) {
         Tier::ProofBacked => TrustGrade::Trustless,
@@ -81,7 +94,7 @@ pub fn corridor_for(network: Network, cap_base_units: u128) -> Corridor {
         tier,
         grade: grade_for(network),
         confirmation_depth: depth_for(network),
-        origin_asset: origin_tag(network.id()),
+        origin_asset: native_asset(network).unwrap_or_else(|| origin_tag(network.id())),
         cap_base_units,
         active: true,
     }
