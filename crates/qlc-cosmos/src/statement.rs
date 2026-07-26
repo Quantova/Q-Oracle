@@ -3,7 +3,7 @@
 
 use crate::chain::ChainConfig;
 use crate::commit::{verify_commit, Commit, CommitError, Header};
-use crate::light::{check_anchor, LightError, TrustedState};
+use crate::light::{check_anchor, check_trusting_commit, LightError, TrustedState};
 use crate::proof::{extract_deposit, Deposit, ExistenceProof, ProofError};
 use crate::validator::ValidatorSet;
 use qlc_core::VerifiedEvent;
@@ -127,6 +127,7 @@ fn verify_deposit_core(
     }
     check_anchor(cfg, trusted, header, set).map_err(CorridorError::Unanchored)?;
     let signed_power = verify_commit(cfg.chain_id, header, commit, set).map_err(CorridorError::Commit)?;
+    check_trusting_commit(cfg, trusted, header, commit).map_err(CorridorError::Unanchored)?;
 
     if header.app_hash.len() != 32 {
         return Err(CorridorError::MalformedAppHash);
@@ -465,6 +466,74 @@ mod tests {
         assert_eq!(
             verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
             Err(CorridorError::MalformedAppHash)
+        );
+    }
+
+    #[test]
+    fn a_superset_that_only_borrows_trusted_addresses_mints_no_deposit() {
+        let t1 = keyed(1, 25);
+        let t2 = keyed(2, 25);
+        let t3 = keyed(3, 25);
+        let t4 = keyed(4, 25);
+        let trusted_set = ValidatorSet::new(vec![t1.info, t2.info, t3.info, t4.info]);
+
+        let a1 = keyed(200, 1000);
+        let a2 = keyed(201, 1000);
+        let forged =
+            ValidatorSet::new(vec![t1.info, t2.info, t3.info, t4.info, a1.info, a2.info]);
+
+        let proof = deposit_proof();
+        let app_hash = proof.calculate_root();
+        let header = Header {
+            version_block: 11,
+            version_app: 0,
+            chain_id: COSMOS_HUB.chain_id.to_string(),
+            height: 18_500_000,
+            time: Timestamp { seconds: 1_700_000_000, nanos: 9 },
+            last_block_id: BlockId { hash: vec![0xaa; 32], part_total: 1, part_hash: vec![0xbb; 32] },
+            last_commit_hash: vec![0x01; 32],
+            data_hash: vec![0x02; 32],
+            validators_hash: forged.hash().to_vec(),
+            next_validators_hash: forged.hash().to_vec(),
+            consensus_hash: vec![0x03; 32],
+            app_hash: app_hash.to_vec(),
+            last_results_hash: vec![0x05; 32],
+            evidence_hash: vec![0x06; 32],
+            proposer_address: forged.validators[0].address().to_vec(),
+        };
+
+        let block_id = BlockId { hash: header.hash().to_vec(), part_total: 1, part_hash: vec![0xcc; 32] };
+        let mut signatures = Vec::new();
+        for k in [&a1, &a2] {
+            let timestamp = Timestamp { seconds: 1_700_000_001, nanos: k.seed[0] as i32 };
+            let vote = CanonicalVote {
+                vote_type: PRECOMMIT_TYPE,
+                height: header.height,
+                round: 0,
+                block_id: block_id.clone(),
+                timestamp,
+                chain_id: COSMOS_HUB.chain_id.to_string(),
+            };
+            signatures.push(CommitSig {
+                flag: BlockIdFlag::Commit,
+                validator_address: k.info.address(),
+                timestamp,
+                signature: sign(&k.seed, &vote_sign_bytes(&vote)).to_vec(),
+            });
+        }
+        let commit = Commit { height: header.height, round: 0, block_id, signatures };
+
+        assert_eq!(
+            verify_trustless_deposit(&COSMOS_HUB, &anchor(&trusted_set), &header, &commit, &forged, &proof),
+            Err(CorridorError::Unanchored(LightError::InsufficientTrustedSignatures {
+                signed: 0,
+                trusted_total: 100,
+            }))
+        );
+
+        let (lheader, lcommit, lset, lproof) = scene(&[0, 1, 2, 3]);
+        assert!(
+            verify_trustless_deposit(&COSMOS_HUB, &anchor(&lset), &lheader, &lcommit, &lset, &lproof).is_ok()
         );
     }
 
