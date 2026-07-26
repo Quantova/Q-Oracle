@@ -50,14 +50,28 @@ pub enum WatchError {
 }
 
 fn within_bounds(proof: &DepositProof) -> bool {
+    use crate::wire::{
+        MAX_BRANCH, MAX_HEADERS, MAX_PARTICIPATION, MAX_PROOF_NODES, MAX_PROOF_PATH, MAX_VALIDATORS,
+    };
     match proof {
         DepositProof::Bitcoin { material, .. } => {
-            material.headers.len() <= crate::wire::MAX_HEADERS
-                && material.branch.len() <= crate::wire::MAX_BRANCH
+            material.headers.len() <= MAX_HEADERS
+                && material.branch.len() <= MAX_BRANCH
                 && material.raw_tx.len() <= MAX_RAW_TX
                 && material.deposit_script.len() <= MAX_DEPOSIT_SCRIPT
         }
-        _ => true,
+        DepositProof::Ethereum { update, deposit, .. } => {
+            update.sync_aggregate.participation.len() <= MAX_PARTICIPATION
+                && update.finality_branch.len() <= MAX_BRANCH
+                && update.execution.execution_branch.len() <= MAX_BRANCH
+                && deposit.receipt_proof.len() <= MAX_PROOF_NODES
+        }
+        DepositProof::Cosmos { commit, validators, proof, .. } => {
+            commit.signatures.len() <= MAX_VALIDATORS
+                && validators.validators.len() <= MAX_VALIDATORS
+                && proof.path.len() <= MAX_PROOF_PATH
+        }
+        DepositProof::Federated(env) => env.signatures.len() <= MAX_VALIDATORS,
     }
 }
 
@@ -138,11 +152,20 @@ impl WatcherPool {
     }
 }
 
+/// Whether the guard was durably persisted for an ingested deposit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Durability {
+    NotPersisted,
+    Persisted,
+    PersistFailed,
+}
+
 /// One deposit the ingestion cycle routed, with the answer the dispatcher returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ingested {
     pub source_chain: u32,
     pub response: Response,
+    pub durability: Durability,
 }
 
 /// Run one ingestion cycle. Poll every attached watcher and route each proven deposit through the
@@ -164,20 +187,30 @@ pub fn ingest_once(
             if !within_bounds(&proof) {
                 continue;
             }
-            let response = {
+            let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
-                let response = handle(&mut guard, Request::SubmitDeposit(DepositRequest { proof }));
-                if advanced(&response) {
-                    if let Some(store) = store {
-                        let _ = store.save(&guard.gateway.encode_guard());
+                let response =
+                    handle(&mut guard, Request::SubmitDeposit(DepositRequest { proof }));
+                let durability = if advanced(&response) {
+                    match store {
+                        Some(store) => match store.save(&guard.gateway.encode_guard()) {
+                            Ok(()) => Durability::Persisted,
+                            Err(_) => Durability::PersistFailed,
+                        },
+                        None => Durability::NotPersisted,
                     }
-                }
-                response
-            };
-            ingested.push(Ingested {
-                source_chain,
-                response,
-            });
+                } else {
+                    Durability::NotPersisted
+                };
+                (response, durability)
+            }));
+            if let Ok((response, durability)) = routed {
+                ingested.push(Ingested {
+                    source_chain,
+                    response,
+                    durability,
+                });
+            }
         }
     }
     ingested
@@ -433,6 +466,69 @@ mod tests {
         assert!(
             ingest_once(&state, &pool, None).is_empty(),
             "an oversized proof is refused before it reaches verification under the lock"
+        );
+    }
+
+    #[test]
+    fn an_oversized_ingested_federated_envelope_is_dropped_before_admission() {
+        let signatures: Vec<q_airlock::SignerSig> = (0..=crate::wire::MAX_VALIDATORS)
+            .map(|i| q_airlock::SignerSig {
+                operator_id: i as u32,
+                signature: Vec::new(),
+            })
+            .collect();
+        let env = AttestationEnvelope {
+            fact: btc_fact([0x11; 32]),
+            signatures,
+        };
+        let state = shared(boot());
+        let mut pool = WatcherPool::new();
+        pool.attach(Box::new(FloodNode {
+            proofs: vec![federated_proof(env)],
+        }));
+        assert!(
+            ingest_once(&state, &pool, None).is_empty(),
+            "an envelope over the validator cap is refused before it reaches admission"
+        );
+    }
+
+    #[test]
+    fn a_watch_path_persist_failure_is_surfaced_not_swallowed() {
+        let bridge = p2pkh([0x11; 20]);
+        let recipient = [0x42u8; 32];
+        let raw = raw_deposit_tx(&[(250_000, bridge.clone()), (0, op_return(recipient))]);
+        let txid = Transaction::parse(&raw).unwrap().txid();
+        let asset_id = derive_asset_id(Network::Bitcoin, "BTC").0;
+        let checkpoint = Checkpoint {
+            height: 0,
+            hash: crafted_chain(txid)[0].block_hash(),
+            min_work: U256::ONE,
+        };
+        let state = shared(boot());
+        state
+            .lock()
+            .unwrap()
+            .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6 });
+        let mut pool = WatcherPool::new();
+        pool.attach(Box::new(BitcoinNode {
+            raw_tx: raw,
+            bridge_script: bridge,
+            asset_id,
+            recipient,
+            amount: 250_000,
+        }));
+
+        let store = GuardStore::new("/no-such-q-oracle-dir/guard.snap");
+        let ingested = ingest_once(&state, &pool, Some(&store));
+        assert_eq!(ingested.len(), 1);
+        assert!(
+            matches!(ingested[0].response, Response::DepositAdmitted(_)),
+            "the deposit is admitted in memory"
+        );
+        assert_eq!(
+            ingested[0].durability,
+            Durability::PersistFailed,
+            "a durability failure on the ingestion seam is surfaced, not silently dropped"
         );
     }
 
