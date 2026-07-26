@@ -29,7 +29,9 @@ use q_codec::BridgeFact;
 use q_qbridge::{
     handle, BitcoinProofMaterial, DepositProof, DepositRequest, Request, Response,
 };
-use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
+use qlc_cosmos::commit::{Commit, Header};
+use qlc_cosmos::proof::ExistenceProof;
+use qlc_cosmos::validator::ValidatorSet;
 use qlc_ethereum::{DepositProof as EthDepositProof, LightClientUpdate};
 
 use crate::http::SharedState;
@@ -77,7 +79,6 @@ pub fn bitcoin_proof(material: BitcoinProofMaterial, fact: BridgeFact) -> Deposi
     DepositProof::Bitcoin { material, fact }
 }
 
-/// The raw Ethereum light-client material a watcher pulls, for the server to verify and admit.
 pub fn ethereum_proof(
     update: LightClientUpdate,
     deposit: EthDepositProof,
@@ -90,9 +91,20 @@ pub fn ethereum_proof(
     }
 }
 
-/// A Cosmos deposit proven by the `qlc_cosmos` light client, paired with its fact.
-pub fn cosmos_proof(proven: CosmosDeposit, fact: BridgeFact) -> DepositProof {
-    DepositProof::Cosmos { proven, fact }
+pub fn cosmos_proof(
+    header: Header,
+    commit: Commit,
+    validators: ValidatorSet,
+    proof: ExistenceProof,
+    fact: BridgeFact,
+) -> DepositProof {
+    DepositProof::Cosmos {
+        header,
+        commit,
+        validators,
+        proof,
+        fact,
+    }
 }
 
 /// The set of attached per-chain watchers, one per source chain.

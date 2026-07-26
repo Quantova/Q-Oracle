@@ -14,7 +14,11 @@ use qlc_bitcoin::{
     verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, MerkleStep, NetworkParams,
     SpvError,
 };
-use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
+use qlc_cosmos::commit::{Commit, Header};
+use qlc_cosmos::light::TrustedState;
+use qlc_cosmos::proof::ExistenceProof;
+use qlc_cosmos::validator::ValidatorSet;
+use qlc_cosmos::{ChainConfig, CorridorError};
 use qlc_ethereum::{DepositProof as EthDepositProof, EthError, LightClientStore, LightClientUpdate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +35,12 @@ pub struct BitcoinProofMaterial {
 pub struct BitcoinAnchor {
     pub checkpoint: Checkpoint,
     pub params: NetworkParams,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CosmosAnchor {
+    pub config: ChainConfig,
+    pub trusted: TrustedState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +68,13 @@ pub enum DepositProof {
         deposit: EthDepositProof,
         fact: BridgeFact,
     },
-    Cosmos { proven: CosmosDeposit, fact: BridgeFact },
+    Cosmos {
+        header: Header,
+        commit: Commit,
+        validators: ValidatorSet,
+        proof: ExistenceProof,
+        fact: BridgeFact,
+    },
 }
 
 impl DepositProof {
@@ -142,6 +158,7 @@ pub enum ApiError {
     NoAnchor(u32),
     BitcoinSpv(SpvError),
     EthereumVerify(EthError),
+    CosmosVerify(CorridorError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +177,7 @@ pub struct BridgeState {
     pub sources: SourceRegistry,
     pub bitcoin_anchor: Option<BitcoinAnchor>,
     pub ethereum_store: Option<LightClientStore>,
+    pub cosmos_anchor: Option<CosmosAnchor>,
 }
 
 impl BridgeState {
@@ -170,6 +188,7 @@ impl BridgeState {
             sources: SourceRegistry::new(),
             bitcoin_anchor: None,
             ethereum_store: None,
+            cosmos_anchor: None,
         }
     }
 
@@ -182,6 +201,7 @@ impl BridgeState {
             sources: SourceRegistry::new(),
             bitcoin_anchor: None,
             ethereum_store: None,
+            cosmos_anchor: None,
         }
     }
 
@@ -191,6 +211,10 @@ impl BridgeState {
 
     pub fn set_ethereum_anchor(&mut self, store: LightClientStore) {
         self.ethereum_store = Some(store);
+    }
+
+    pub fn set_cosmos_anchor(&mut self, anchor: CosmosAnchor) {
+        self.cosmos_anchor = Some(anchor);
     }
 }
 
@@ -296,8 +320,33 @@ fn dispatch_deposit(
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
-        (Tier::ProofBacked, Network::Cosmos, DepositProof::Cosmos { proven, fact }) => {
-            let mint = admit_cosmos_trustless(&mut state.gateway, &corridor, proven, fact)
+        (
+            Tier::ProofBacked,
+            Network::Cosmos,
+            DepositProof::Cosmos {
+                header,
+                commit,
+                validators,
+                proof,
+                fact,
+            },
+        ) => {
+            let proven = {
+                let anchor = state
+                    .cosmos_anchor
+                    .as_ref()
+                    .ok_or(ApiError::NoAnchor(Network::Cosmos.id()))?;
+                qlc_cosmos::verify_trustless_deposit(
+                    &anchor.config,
+                    &anchor.trusted,
+                    header,
+                    commit,
+                    validators,
+                    proof,
+                )
+                .map_err(ApiError::CosmosVerify)?
+            };
+            let mint = admit_cosmos_trustless(&mut state.gateway, &corridor, &proven, fact)
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
@@ -1135,6 +1184,274 @@ mod tests {
         assert_eq!(
             response,
             Response::Error(ApiError::NoAnchor(Network::Ethereum.id()))
+        );
+    }
+
+    use qlc_cosmos::chain::COSMOS_HUB;
+    use qlc_cosmos::commit::{BlockIdFlag, CommitSig};
+    use qlc_cosmos::ed25519::{public_key_from_seed, sign};
+    use qlc_cosmos::proof::{encode_deposit_value, InnerOp, LeafOp};
+    use qlc_cosmos::proto::{vote_sign_bytes, BlockId, CanonicalVote, Timestamp, PRECOMMIT_TYPE};
+    use qlc_cosmos::validator::ValidatorInfo;
+
+    struct CosmosKeyed {
+        seed: [u8; 32],
+        info: ValidatorInfo,
+    }
+
+    fn cosmos_keyed(byte: u8, power: u64) -> CosmosKeyed {
+        let seed = [byte; 32];
+        CosmosKeyed {
+            seed,
+            info: ValidatorInfo {
+                pubkey: public_key_from_seed(&seed),
+                voting_power: power,
+            },
+        }
+    }
+
+    fn cosmos_deposit_proof(recipient: [u8; 32], asset: [u8; 16], amount: u128) -> ExistenceProof {
+        ExistenceProof {
+            key: b"transfer/deposit/0x1a2b".to_vec(),
+            value: encode_deposit_value(&recipient, &asset, amount),
+            leaf: LeafOp {
+                prefix: vec![0x00, 0x02, 0x00],
+            },
+            path: vec![
+                InnerOp {
+                    prefix: vec![0x01, 0x0a],
+                    suffix: vec![0x1b, 0x2c],
+                },
+                InnerOp {
+                    prefix: vec![0x01],
+                    suffix: vec![0x33, 0x44, 0x55],
+                },
+            ],
+        }
+    }
+
+    fn cosmos_scene(
+        recipient: [u8; 32],
+        asset: [u8; 16],
+        amount: u128,
+    ) -> (Header, Commit, ValidatorSet, ExistenceProof) {
+        let vs = [
+            cosmos_keyed(1, 25),
+            cosmos_keyed(2, 25),
+            cosmos_keyed(3, 25),
+            cosmos_keyed(4, 25),
+        ];
+        let set = ValidatorSet::new(vs.iter().map(|k| k.info).collect());
+        let proof = cosmos_deposit_proof(recipient, asset, amount);
+        let app_hash = proof.calculate_root();
+        let header = Header {
+            version_block: 11,
+            version_app: 0,
+            chain_id: COSMOS_HUB.chain_id.to_string(),
+            height: 18_500_000,
+            time: Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 9,
+            },
+            last_block_id: BlockId {
+                hash: vec![0xaa; 32],
+                part_total: 1,
+                part_hash: vec![0xbb; 32],
+            },
+            last_commit_hash: vec![0x01; 32],
+            data_hash: vec![0x02; 32],
+            validators_hash: set.hash().to_vec(),
+            next_validators_hash: set.hash().to_vec(),
+            consensus_hash: vec![0x03; 32],
+            app_hash: app_hash.to_vec(),
+            last_results_hash: vec![0x05; 32],
+            evidence_hash: vec![0x06; 32],
+            proposer_address: set.validators[0].address().to_vec(),
+        };
+        let block_id = BlockId {
+            hash: header.hash().to_vec(),
+            part_total: 1,
+            part_hash: vec![0xcc; 32],
+        };
+        let mut signatures = Vec::new();
+        for k in &vs {
+            let timestamp = Timestamp {
+                seconds: 1_700_000_001,
+                nanos: k.seed[0] as i32,
+            };
+            let vote = CanonicalVote {
+                vote_type: PRECOMMIT_TYPE,
+                height: header.height,
+                round: 0,
+                block_id: block_id.clone(),
+                timestamp,
+                chain_id: COSMOS_HUB.chain_id.to_string(),
+            };
+            signatures.push(CommitSig {
+                flag: BlockIdFlag::Commit,
+                validator_address: k.info.address(),
+                timestamp,
+                signature: sign(&k.seed, &vote_sign_bytes(&vote)).to_vec(),
+            });
+        }
+        let commit = Commit {
+            height: header.height,
+            round: 0,
+            block_id,
+            signatures,
+        };
+        (header, commit, set, proof)
+    }
+
+    fn cosmos_anchor_for(set: &ValidatorSet) -> CosmosAnchor {
+        CosmosAnchor {
+            config: COSMOS_HUB,
+            trusted: TrustedState {
+                height: 0,
+                header_hash: [0u8; 32],
+                validators: set.clone(),
+                next_validators_hash: set.hash().to_vec(),
+            },
+        }
+    }
+
+    fn cosmos_pool(state: &mut BridgeState) -> PoolView {
+        match handle(
+            state,
+            Request::CreatePool(pool_request(Network::Cosmos.id(), "ATOM")),
+        ) {
+            Response::PoolCreated(view) => view,
+            other => panic!("expected PoolCreated, got {:?}", other),
+        }
+    }
+
+    fn cosmos_fact(
+        asset: [u8; 16],
+        source_ref: [u8; 32],
+        amount: u128,
+        recipient: [u8; 32],
+    ) -> BridgeFact {
+        BridgeFact {
+            version: FACT_VERSION,
+            source_chain: Network::Cosmos.id(),
+            dest_chain: DEST,
+            route_id: 1,
+            direction: Direction::Deposit,
+            nonce: 1,
+            source_ref: SourceRef(source_ref),
+            asset_id: AssetId(asset),
+            amount,
+            recipient: Recipient(recipient),
+            finality_depth: COSMOS_HUB.confirmation_depth,
+            observed_height: 18_500_000,
+            expiry_height: 19_000_000,
+        }
+    }
+
+    #[test]
+    fn a_cosmos_deposit_with_valid_anchored_material_is_verified_server_side_and_admitted() {
+        let mut state = empty_state(0);
+        let view = cosmos_pool(&mut state);
+        let recipient = [0x51u8; 32];
+        let (header, commit, set, proof) = cosmos_scene(recipient, view.asset_id, 400_000);
+        let anchor = cosmos_anchor_for(&set);
+        let proven = qlc_cosmos::verify_trustless_deposit(
+            &anchor.config,
+            &anchor.trusted,
+            &header,
+            &commit,
+            &set,
+            &proof,
+        )
+        .expect("the anchored material verifies");
+        state.set_cosmos_anchor(anchor);
+        let fact = cosmos_fact(view.asset_id, proven.source_ref(), proven.amount(), recipient);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Cosmos {
+                    header,
+                    commit,
+                    validators: set,
+                    proof,
+                    fact,
+                },
+            }),
+        );
+        match response {
+            Response::DepositAdmitted(DepositOutcome::AdmittedPendingChainMint(mint)) => {
+                assert_eq!(mint.amount, 400_000);
+                assert_eq!(mint.asset_id, view.asset_id);
+                assert_eq!(mint.source_ref, proven.source_ref());
+            }
+            other => panic!("expected a trustless admission, got {:?}", other),
+        }
+        assert!(state.gateway.is_reference_used(&proven.source_ref()));
+    }
+
+    #[test]
+    fn a_cosmos_deposit_that_does_not_verify_against_the_pinned_trusted_state_is_rejected() {
+        let mut state = empty_state(0);
+        let view = cosmos_pool(&mut state);
+        let recipient = [0x51u8; 32];
+        let (header, commit, set, proof) = cosmos_scene(recipient, view.asset_id, 400_000);
+        let foreign = ValidatorSet::new(
+            [
+                cosmos_keyed(50, 25),
+                cosmos_keyed(51, 25),
+                cosmos_keyed(52, 25),
+                cosmos_keyed(53, 25),
+            ]
+            .iter()
+            .map(|k| k.info)
+            .collect(),
+        );
+        state.set_cosmos_anchor(cosmos_anchor_for(&foreign));
+        let fact = cosmos_fact(view.asset_id, [0x77u8; 32], 400_000, recipient);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Cosmos {
+                    header,
+                    commit,
+                    validators: set,
+                    proof,
+                    fact,
+                },
+            }),
+        );
+        assert!(
+            matches!(
+                response,
+                Response::Error(ApiError::CosmosVerify(CorridorError::Unanchored(_)))
+            ),
+            "a set that does not overlap the pinned trusted state is refused"
+        );
+        assert_eq!(state.gateway.minted_of_asset(&view.asset_id), 0);
+    }
+
+    #[test]
+    fn a_cosmos_deposit_with_no_pinned_anchor_is_refused() {
+        let mut state = empty_state(0);
+        let view = cosmos_pool(&mut state);
+        let recipient = [0x51u8; 32];
+        let (header, commit, set, proof) = cosmos_scene(recipient, view.asset_id, 400_000);
+        let fact = cosmos_fact(view.asset_id, [0x00u8; 32], 400_000, recipient);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Cosmos {
+                    header,
+                    commit,
+                    validators: set,
+                    proof,
+                    fact,
+                },
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Error(ApiError::NoAnchor(Network::Cosmos.id()))
         );
     }
 }

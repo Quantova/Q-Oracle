@@ -166,11 +166,6 @@ impl LightClientStore {
     }
 }
 
-/// Bootstrap a light client store from a pinned weak-subjectivity checkpoint. The checkpoint header
-/// is trusted out of band, and the current sync committee only enters the store once it is proven
-/// against that header's state root under the fork-aware current-sync-committee generalized index.
-/// A committee that does not merkle to the pinned checkpoint state root is refused, so no caller can
-/// seat a forged committee.
 pub fn bootstrap(
     config: EvmChainConfig,
     period: u64,

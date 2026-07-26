@@ -26,3 +26,4 @@ q-codec = { workspace = true }
 q-airlock = { workspace = true }
 blst = "0.3.16"
 qlc-ethereum = { workspace = true, features = ["test-util"] }
+qlc-cosmos = { workspace = true, features = ["test-util"] }

@@ -12,6 +12,12 @@ use q_qbridge::{
     Response,
 };
 use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
+use qlc_cosmos::commit::{BlockIdFlag, Commit, CommitError, CommitSig, Header};
+use qlc_cosmos::light::LightError;
+use qlc_cosmos::proof::{ExistenceProof, InnerOp, LeafOp, ProofError};
+use qlc_cosmos::proto::{BlockId, Timestamp};
+use qlc_cosmos::validator::{ValidatorInfo, ValidatorSet};
+use qlc_cosmos::CorridorError;
 use qlc_ethereum::beacon::{BeaconBlockHeader, SyncAggregate};
 use qlc_ethereum::bls::BlsSignature;
 use qlc_ethereum::mpt::MptError;
@@ -27,6 +33,10 @@ pub const MAX_BRANCH: usize = 64;
 pub const MAX_PARTICIPATION: usize = 4096;
 
 pub const MAX_PROOF_NODES: usize = 256;
+
+pub const MAX_VALIDATORS: usize = 4096;
+
+pub const MAX_PROOF_PATH: usize = 256;
 
 /// Every rejection the wire raises before the dispatcher is reached. A transport frame that names no
 /// method is a not-found, everything else the request layer refuses is a bad request.
@@ -87,6 +97,14 @@ fn as_u8(j: &Json, name: &'static str) -> Result<u8, WireError> {
 
 fn as_usize(j: &Json, name: &'static str) -> Result<usize, WireError> {
     Ok(as_u64(j, name)? as usize)
+}
+
+fn as_i64(j: &Json, name: &'static str) -> Result<i64, WireError> {
+    Ok(as_u64(j, name)? as i64)
+}
+
+fn as_i32(j: &Json, name: &'static str) -> Result<i32, WireError> {
+    Ok(as_u64(j, name)? as i32)
 }
 
 fn as_u128(j: &Json, name: &'static str) -> Result<u128, WireError> {
@@ -270,7 +288,20 @@ fn encode_proof(proof: &DepositProof) -> Json {
             ),
             ("fact", hexs(&fact.encode())),
         ]),
-        DepositProof::Cosmos { .. } => object(vec![("kind", Json::str("cosmos"))]),
+        DepositProof::Cosmos {
+            header,
+            commit,
+            validators,
+            proof,
+            fact,
+        } => object(vec![
+            ("kind", Json::str("cosmos")),
+            ("header", cosmos_header_json(header)),
+            ("commit", commit_json(commit)),
+            ("validators", validators_json(validators)),
+            ("proof", existence_proof_json(proof)),
+            ("fact", hexs(&fact.encode())),
+        ]),
     }
 }
 
@@ -411,9 +442,236 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                 fact: decode_fact(j)?,
             })
         }
-        "cosmos" => Err(WireError::BadProofKind(kind.to_string())),
+        "cosmos" => Ok(DepositProof::Cosmos {
+            header: cosmos_header_from(field(j, "header")?)?,
+            commit: commit_from(field(j, "commit")?)?,
+            validators: validators_from(field(j, "validators")?)?,
+            proof: existence_proof_from(field(j, "proof")?)?,
+            fact: decode_fact(j)?,
+        }),
         other => Err(WireError::BadProofKind(other.to_string())),
     }
+}
+
+fn cosmos_header_json(h: &Header) -> Json {
+    object(vec![
+        ("version_block", Json::Int(h.version_block)),
+        ("version_app", Json::Int(h.version_app)),
+        ("chain_id", Json::str(h.chain_id.clone())),
+        ("height", Json::Int(h.height as u64)),
+        ("time", timestamp_json(&h.time)),
+        ("last_block_id", block_id_json(&h.last_block_id)),
+        ("last_commit_hash", hexs(&h.last_commit_hash)),
+        ("data_hash", hexs(&h.data_hash)),
+        ("validators_hash", hexs(&h.validators_hash)),
+        ("next_validators_hash", hexs(&h.next_validators_hash)),
+        ("consensus_hash", hexs(&h.consensus_hash)),
+        ("app_hash", hexs(&h.app_hash)),
+        ("last_results_hash", hexs(&h.last_results_hash)),
+        ("evidence_hash", hexs(&h.evidence_hash)),
+        ("proposer_address", hexs(&h.proposer_address)),
+    ])
+}
+
+fn cosmos_header_from(j: &Json) -> Result<Header, WireError> {
+    Ok(Header {
+        version_block: as_u64(field(j, "version_block")?, "version_block")?,
+        version_app: as_u64(field(j, "version_app")?, "version_app")?,
+        chain_id: as_str(field(j, "chain_id")?, "chain_id")?.to_string(),
+        height: as_i64(field(j, "height")?, "height")?,
+        time: timestamp_from(field(j, "time")?)?,
+        last_block_id: block_id_from(field(j, "last_block_id")?)?,
+        last_commit_hash: as_hex(field(j, "last_commit_hash")?, "last_commit_hash")?,
+        data_hash: as_hex(field(j, "data_hash")?, "data_hash")?,
+        validators_hash: as_hex(field(j, "validators_hash")?, "validators_hash")?,
+        next_validators_hash: as_hex(field(j, "next_validators_hash")?, "next_validators_hash")?,
+        consensus_hash: as_hex(field(j, "consensus_hash")?, "consensus_hash")?,
+        app_hash: as_hex(field(j, "app_hash")?, "app_hash")?,
+        last_results_hash: as_hex(field(j, "last_results_hash")?, "last_results_hash")?,
+        evidence_hash: as_hex(field(j, "evidence_hash")?, "evidence_hash")?,
+        proposer_address: as_hex(field(j, "proposer_address")?, "proposer_address")?,
+    })
+}
+
+fn timestamp_json(t: &Timestamp) -> Json {
+    object(vec![
+        ("seconds", Json::Int(t.seconds as u64)),
+        ("nanos", Json::Int(t.nanos as u64)),
+    ])
+}
+
+fn timestamp_from(j: &Json) -> Result<Timestamp, WireError> {
+    Ok(Timestamp {
+        seconds: as_i64(field(j, "seconds")?, "seconds")?,
+        nanos: as_i32(field(j, "nanos")?, "nanos")?,
+    })
+}
+
+fn block_id_json(b: &BlockId) -> Json {
+    object(vec![
+        ("hash", hexs(&b.hash)),
+        ("part_total", u32j(b.part_total)),
+        ("part_hash", hexs(&b.part_hash)),
+    ])
+}
+
+fn block_id_from(j: &Json) -> Result<BlockId, WireError> {
+    Ok(BlockId {
+        hash: as_hex(field(j, "hash")?, "hash")?,
+        part_total: as_u32(field(j, "part_total")?, "part_total")?,
+        part_hash: as_hex(field(j, "part_hash")?, "part_hash")?,
+    })
+}
+
+fn flag_json(f: BlockIdFlag) -> Json {
+    Json::str(match f {
+        BlockIdFlag::Absent => "absent",
+        BlockIdFlag::Commit => "commit",
+        BlockIdFlag::Nil => "nil",
+    })
+}
+
+fn flag_from(j: &Json) -> Result<BlockIdFlag, WireError> {
+    match as_str(j, "flag")? {
+        "absent" => Ok(BlockIdFlag::Absent),
+        "commit" => Ok(BlockIdFlag::Commit),
+        "nil" => Ok(BlockIdFlag::Nil),
+        _ => Err(WireError::BadField("flag")),
+    }
+}
+
+fn commit_sig_json(s: &CommitSig) -> Json {
+    object(vec![
+        ("flag", flag_json(s.flag)),
+        ("validator_address", hexs(&s.validator_address)),
+        ("timestamp", timestamp_json(&s.timestamp)),
+        ("signature", hexs(&s.signature)),
+    ])
+}
+
+fn commit_sig_from(j: &Json) -> Result<CommitSig, WireError> {
+    Ok(CommitSig {
+        flag: flag_from(field(j, "flag")?)?,
+        validator_address: hex_array::<20>(field(j, "validator_address")?, "validator_address")?,
+        timestamp: timestamp_from(field(j, "timestamp")?)?,
+        signature: as_hex(field(j, "signature")?, "signature")?,
+    })
+}
+
+fn commit_json(c: &Commit) -> Json {
+    object(vec![
+        ("height", Json::Int(c.height as u64)),
+        ("round", Json::Int(c.round as u64)),
+        ("block_id", block_id_json(&c.block_id)),
+        (
+            "signatures",
+            Json::Array(c.signatures.iter().map(commit_sig_json).collect()),
+        ),
+    ])
+}
+
+fn commit_from(j: &Json) -> Result<Commit, WireError> {
+    let sigs_json = field(j, "signatures")?
+        .as_array()
+        .ok_or(WireError::BadType("signatures"))?;
+    if sigs_json.len() > MAX_VALIDATORS {
+        return Err(WireError::BadField("signatures"));
+    }
+    let mut signatures = Vec::with_capacity(sigs_json.len());
+    for s in sigs_json {
+        signatures.push(commit_sig_from(s)?);
+    }
+    Ok(Commit {
+        height: as_i64(field(j, "height")?, "height")?,
+        round: as_i64(field(j, "round")?, "round")?,
+        block_id: block_id_from(field(j, "block_id")?)?,
+        signatures,
+    })
+}
+
+fn validator_json(v: &ValidatorInfo) -> Json {
+    object(vec![
+        ("pubkey", hexs(&v.pubkey)),
+        ("voting_power", Json::Int(v.voting_power)),
+    ])
+}
+
+fn validator_from(j: &Json) -> Result<ValidatorInfo, WireError> {
+    Ok(ValidatorInfo {
+        pubkey: hex_array::<32>(field(j, "pubkey")?, "pubkey")?,
+        voting_power: as_u64(field(j, "voting_power")?, "voting_power")?,
+    })
+}
+
+fn validators_json(set: &ValidatorSet) -> Json {
+    Json::Array(set.validators.iter().map(validator_json).collect())
+}
+
+fn validators_from(j: &Json) -> Result<ValidatorSet, WireError> {
+    let items = j.as_array().ok_or(WireError::BadType("validators"))?;
+    if items.len() > MAX_VALIDATORS {
+        return Err(WireError::BadField("validators"));
+    }
+    let mut validators = Vec::with_capacity(items.len());
+    for item in items {
+        validators.push(validator_from(item)?);
+    }
+    Ok(ValidatorSet::new(validators))
+}
+
+fn leaf_op_json(l: &LeafOp) -> Json {
+    object(vec![("prefix", hexs(&l.prefix))])
+}
+
+fn leaf_op_from(j: &Json) -> Result<LeafOp, WireError> {
+    Ok(LeafOp {
+        prefix: as_hex(field(j, "prefix")?, "prefix")?,
+    })
+}
+
+fn inner_op_json(i: &InnerOp) -> Json {
+    object(vec![
+        ("prefix", hexs(&i.prefix)),
+        ("suffix", hexs(&i.suffix)),
+    ])
+}
+
+fn inner_op_from(j: &Json) -> Result<InnerOp, WireError> {
+    Ok(InnerOp {
+        prefix: as_hex(field(j, "prefix")?, "prefix")?,
+        suffix: as_hex(field(j, "suffix")?, "suffix")?,
+    })
+}
+
+fn existence_proof_json(p: &ExistenceProof) -> Json {
+    object(vec![
+        ("key", hexs(&p.key)),
+        ("value", hexs(&p.value)),
+        ("leaf", leaf_op_json(&p.leaf)),
+        (
+            "path",
+            Json::Array(p.path.iter().map(inner_op_json).collect()),
+        ),
+    ])
+}
+
+fn existence_proof_from(j: &Json) -> Result<ExistenceProof, WireError> {
+    let path_json = field(j, "path")?
+        .as_array()
+        .ok_or(WireError::BadType("path"))?;
+    if path_json.len() > MAX_PROOF_PATH {
+        return Err(WireError::BadField("path"));
+    }
+    let mut path = Vec::with_capacity(path_json.len());
+    for op in path_json {
+        path.push(inner_op_from(op)?);
+    }
+    Ok(ExistenceProof {
+        key: as_hex(field(j, "key")?, "key")?,
+        value: as_hex(field(j, "value")?, "value")?,
+        leaf: leaf_op_from(field(j, "leaf")?)?,
+        path,
+    })
 }
 
 fn pool_view_json(v: &PoolView) -> Json {
@@ -596,6 +854,9 @@ fn api_json(api: &ApiError) -> Json {
         ApiError::EthereumVerify(e) => {
             tagged("api", "ethereum_verify", vec![("eth", eth_err_json(e))])
         }
+        ApiError::CosmosVerify(e) => {
+            tagged("api", "cosmos_verify", vec![("cosmos", corridor_err_json(e))])
+        }
         ApiError::Pool(e) => pool_err_json(e),
         ApiError::Federated(e) => federated_err_json(e),
         ApiError::Trustless(e) => trustless_err_json(e),
@@ -762,6 +1023,108 @@ fn mpt_err_from(j: &Json) -> Result<MptError, WireError> {
     }
 }
 
+fn corridor_err_json(e: &CorridorError) -> Json {
+    match e {
+        CorridorError::ChainMismatch => tagged("cosmos", "chain_mismatch", vec![]),
+        CorridorError::MalformedAppHash => tagged("cosmos", "malformed_app_hash", vec![]),
+        CorridorError::Unanchored(l) => {
+            tagged("cosmos", "unanchored", vec![("light", light_err_json(l))])
+        }
+        CorridorError::Commit(c) => {
+            tagged("cosmos", "commit", vec![("commit", commit_err_json(c))])
+        }
+        CorridorError::Proof(p) => tagged("cosmos", "proof", vec![("proof", proof_err_json(p))]),
+    }
+}
+
+fn corridor_err_from(j: &Json) -> Result<CorridorError, WireError> {
+    match code_of(j)? {
+        "chain_mismatch" => Ok(CorridorError::ChainMismatch),
+        "malformed_app_hash" => Ok(CorridorError::MalformedAppHash),
+        "unanchored" => Ok(CorridorError::Unanchored(light_err_from(field(j, "light")?)?)),
+        "commit" => Ok(CorridorError::Commit(commit_err_from(field(j, "commit")?)?)),
+        "proof" => Ok(CorridorError::Proof(proof_err_from(field(j, "proof")?)?)),
+        other => Err(WireError::UnknownErrorCode(other.to_string())),
+    }
+}
+
+fn light_err_json(e: &LightError) -> Json {
+    match e {
+        LightError::ChainMismatch => tagged("light", "chain_mismatch", vec![]),
+        LightError::NotProgressing => tagged("light", "not_progressing", vec![]),
+        LightError::UntrustedValidatorSet => tagged("light", "untrusted_validator_set", vec![]),
+        LightError::InsufficientOverlap {
+            overlap,
+            trusted_total,
+        } => tagged(
+            "light",
+            "insufficient_overlap",
+            vec![
+                ("overlap", u128s(*overlap)),
+                ("trusted_total", u128s(*trusted_total)),
+            ],
+        ),
+        LightError::NotAdjacent => tagged("light", "not_adjacent", vec![]),
+        LightError::NextValidatorMismatch => tagged("light", "next_validator_mismatch", vec![]),
+        LightError::Commit(c) => {
+            tagged("light", "commit", vec![("commit", commit_err_json(c))])
+        }
+    }
+}
+
+fn light_err_from(j: &Json) -> Result<LightError, WireError> {
+    match code_of(j)? {
+        "chain_mismatch" => Ok(LightError::ChainMismatch),
+        "not_progressing" => Ok(LightError::NotProgressing),
+        "untrusted_validator_set" => Ok(LightError::UntrustedValidatorSet),
+        "insufficient_overlap" => Ok(LightError::InsufficientOverlap {
+            overlap: as_u128(field(j, "overlap")?, "overlap")?,
+            trusted_total: as_u128(field(j, "trusted_total")?, "trusted_total")?,
+        }),
+        "not_adjacent" => Ok(LightError::NotAdjacent),
+        "next_validator_mismatch" => Ok(LightError::NextValidatorMismatch),
+        "commit" => Ok(LightError::Commit(commit_err_from(field(j, "commit")?)?)),
+        other => Err(WireError::UnknownErrorCode(other.to_string())),
+    }
+}
+
+fn commit_err_json(e: &CommitError) -> Json {
+    match e {
+        CommitError::HeaderMismatch => tagged("commit", "header_mismatch", vec![]),
+        CommitError::NotEnoughVotingPower { signed, total } => tagged(
+            "commit",
+            "not_enough_voting_power",
+            vec![("signed", u128s(*signed)), ("total", u128s(*total))],
+        ),
+    }
+}
+
+fn commit_err_from(j: &Json) -> Result<CommitError, WireError> {
+    match code_of(j)? {
+        "header_mismatch" => Ok(CommitError::HeaderMismatch),
+        "not_enough_voting_power" => Ok(CommitError::NotEnoughVotingPower {
+            signed: as_u128(field(j, "signed")?, "signed")?,
+            total: as_u128(field(j, "total")?, "total")?,
+        }),
+        other => Err(WireError::UnknownErrorCode(other.to_string())),
+    }
+}
+
+fn proof_err_json(e: &ProofError) -> Json {
+    match e {
+        ProofError::RootMismatch => tagged("proof", "root_mismatch", vec![]),
+        ProofError::BadValueLength => tagged("proof", "bad_value_length", vec![]),
+    }
+}
+
+fn proof_err_from(j: &Json) -> Result<ProofError, WireError> {
+    match code_of(j)? {
+        "root_mismatch" => Ok(ProofError::RootMismatch),
+        "bad_value_length" => Ok(ProofError::BadValueLength),
+        other => Err(WireError::UnknownErrorCode(other.to_string())),
+    }
+}
+
 fn api_from(j: &Json) -> Result<ApiError, WireError> {
     match as_str(field(j, "category")?, "category")? {
         "api" => match code_of(j)? {
@@ -784,6 +1147,9 @@ fn api_from(j: &Json) -> Result<ApiError, WireError> {
             )?)),
             "bitcoin_spv" => Ok(ApiError::BitcoinSpv(spv_err_from(field(j, "spv")?)?)),
             "ethereum_verify" => Ok(ApiError::EthereumVerify(eth_err_from(field(j, "eth")?)?)),
+            "cosmos_verify" => {
+                Ok(ApiError::CosmosVerify(corridor_err_from(field(j, "cosmos")?)?))
+            }
             other => Err(WireError::UnknownErrorCode(other.to_string())),
         },
         "pool" => Ok(ApiError::Pool(pool_err_from(j)?)),
@@ -1387,12 +1753,90 @@ mod tests {
     }
 
     #[test]
-    fn a_cosmos_proof_from_an_untrusted_client_is_refused() {
-        let body = object(vec![("proof", object(vec![("kind", Json::str("cosmos"))]))]);
-        assert!(matches!(
-            decode_request("submit_deposit", &body),
-            Err(WireError::BadProofKind(_))
-        ));
+    fn a_cosmos_deposit_round_trips_its_raw_material_and_fact() {
+        let header = Header {
+            version_block: 11,
+            version_app: 0,
+            chain_id: "cosmoshub-4".to_string(),
+            height: 18_500_000,
+            time: Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 9,
+            },
+            last_block_id: BlockId {
+                hash: vec![0xaa; 32],
+                part_total: 1,
+                part_hash: vec![0xbb; 32],
+            },
+            last_commit_hash: vec![0x01; 32],
+            data_hash: vec![0x02; 32],
+            validators_hash: vec![0x03; 32],
+            next_validators_hash: vec![0x04; 32],
+            consensus_hash: vec![0x05; 32],
+            app_hash: vec![0x06; 32],
+            last_results_hash: vec![0x07; 32],
+            evidence_hash: vec![0x08; 32],
+            proposer_address: vec![0x09; 20],
+        };
+        let commit = Commit {
+            height: 18_500_000,
+            round: 0,
+            block_id: BlockId {
+                hash: vec![0xcc; 32],
+                part_total: 1,
+                part_hash: vec![0xdd; 32],
+            },
+            signatures: vec![CommitSig {
+                flag: BlockIdFlag::Commit,
+                validator_address: [0x11; 20],
+                timestamp: Timestamp {
+                    seconds: 1_700_000_001,
+                    nanos: 5,
+                },
+                signature: vec![0x22; 64],
+            }],
+        };
+        let validators = ValidatorSet::new(vec![ValidatorInfo {
+            pubkey: [0x33; 32],
+            voting_power: 25,
+        }]);
+        let proof = ExistenceProof {
+            key: vec![0x74, 0x65],
+            value: vec![0x55; 64],
+            leaf: LeafOp {
+                prefix: vec![0x00, 0x02, 0x00],
+            },
+            path: vec![InnerOp {
+                prefix: vec![0x01, 0x0a],
+                suffix: vec![0x1b, 0x2c],
+            }],
+        };
+        round_request(Request::SubmitDeposit(DepositRequest {
+            proof: DepositProof::Cosmos {
+                header,
+                commit,
+                validators,
+                proof,
+                fact: sample_fact(),
+            },
+        }));
+    }
+
+    #[test]
+    fn oversized_cosmos_arrays_are_rejected_before_allocation() {
+        let big_validators = Json::Array(vec![Json::Null; MAX_VALIDATORS + 1]);
+        assert_eq!(
+            validators_from(&big_validators),
+            Err(WireError::BadField("validators"))
+        );
+        let big_path = object(vec![(
+            "path",
+            Json::Array(vec![Json::Null; MAX_PROOF_PATH + 1]),
+        )]);
+        assert_eq!(
+            existence_proof_from(&big_path),
+            Err(WireError::BadField("path"))
+        );
     }
 
     #[test]
@@ -1488,6 +1932,24 @@ mod tests {
         ))));
         round_response(Response::Error(ApiError::EthereumVerify(EthError::Mpt(
             MptError::HashMismatch,
+        ))));
+        round_response(Response::Error(ApiError::CosmosVerify(
+            CorridorError::ChainMismatch,
+        )));
+        round_response(Response::Error(ApiError::CosmosVerify(
+            CorridorError::Unanchored(LightError::InsufficientOverlap {
+                overlap: 40,
+                trusted_total: 100,
+            }),
+        )));
+        round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Commit(
+            CommitError::NotEnoughVotingPower {
+                signed: 50,
+                total: 100,
+            },
+        ))));
+        round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Proof(
+            ProofError::RootMismatch,
         ))));
     }
 
