@@ -20,13 +20,19 @@ pub const MAX_BODY: usize = 2 * 1024 * 1024;
 
 pub const MAX_HEAD: usize = 16 * 1024;
 
-pub const IO_TIMEOUT: Duration = Duration::from_secs(15);
+pub const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub const REQUEST_DEADLINE: Duration = Duration::from_secs(20);
+pub const REQUEST_DEADLINE: Duration = Duration::from_secs(8);
 
 pub const MAX_CONNECTIONS: usize = 512;
 
 pub const MAX_CONNECTIONS_PER_IP: usize = 32;
+
+pub const RATE_WINDOW: Duration = Duration::from_secs(1);
+
+pub const MAX_ADMITS_PER_WINDOW: usize = 256;
+
+pub const MAX_ADMITS_PER_IP_PER_WINDOW: usize = 16;
 
 /// The shared bridge state every connection dispatches against. A read-write lock guards it so read
 /// RPCs and the heavy read-only half of a deposit run concurrently under a shared lock, and only the
@@ -77,15 +83,71 @@ impl Limiter {
     }
 }
 
+#[derive(Default)]
+struct RateLimiter {
+    inner: Mutex<RateInner>,
+}
+
+#[derive(Default)]
+struct RateInner {
+    window_start: Option<Instant>,
+    total: usize,
+    per_ip: HashMap<IpAddr, usize>,
+}
+
+impl RateLimiter {
+    fn allow(
+        &self,
+        ip: IpAddr,
+        now: Instant,
+        window: Duration,
+        total_cap: usize,
+        per_ip_cap: usize,
+    ) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let elapsed = inner
+            .window_start
+            .map(|start| now.saturating_duration_since(start) >= window)
+            .unwrap_or(true);
+        if elapsed {
+            inner.window_start = Some(now);
+            inner.total = 0;
+            inner.per_ip.clear();
+        }
+        if inner.total >= total_cap {
+            return false;
+        }
+        let count = inner.per_ip.entry(ip).or_insert(0);
+        if *count >= per_ip_cap {
+            return false;
+        }
+        *count += 1;
+        inner.total += 1;
+        true
+    }
+}
+
 pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardStore>>) {
     thread::spawn(move || {
         let limiter = Arc::new(Limiter::default());
+        let rate = RateLimiter::default();
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let ip = stream
                 .peer_addr()
                 .map(|addr| addr.ip())
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+            if !rate.allow(
+                ip,
+                Instant::now(),
+                RATE_WINDOW,
+                MAX_ADMITS_PER_WINDOW,
+                MAX_ADMITS_PER_IP_PER_WINDOW,
+            ) {
+                stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
+                let _ = write_error(&mut stream, 429, "rate_limited", "too many requests, slow down");
+                continue;
+            }
             match limiter.try_admit(ip, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP) {
                 Admit::Ok => {}
                 Admit::TotalFull => {
@@ -436,6 +498,43 @@ mod tests {
         assert!(
             matches!(limiter.try_admit(peer, 100, 3), Admit::Ok),
             "a released slot is reusable"
+        );
+    }
+
+    #[test]
+    fn the_rate_limiter_caps_admissions_per_window_and_reopens_after_it() {
+        let rate = RateLimiter::default();
+        let window = Duration::from_secs(1);
+        let t0 = Instant::now();
+        let peer = ip(5);
+        for _ in 0..3 {
+            assert!(rate.allow(peer, t0, window, 100, 3));
+        }
+        assert!(
+            !rate.allow(peer, t0, window, 100, 3),
+            "a fourth admit inside the window is refused"
+        );
+        assert!(
+            rate.allow(ip(6), t0, window, 100, 3),
+            "a different address still admits inside the global cap"
+        );
+        let t1 = t0 + window;
+        assert!(
+            rate.allow(peer, t1, window, 100, 3),
+            "a fresh window reopens the per address allowance"
+        );
+    }
+
+    #[test]
+    fn the_rate_limiter_caps_the_global_admissions_per_window() {
+        let rate = RateLimiter::default();
+        let window = Duration::from_secs(1);
+        let t0 = Instant::now();
+        assert!(rate.allow(ip(1), t0, window, 2, 10));
+        assert!(rate.allow(ip(2), t0, window, 2, 10));
+        assert!(
+            !rate.allow(ip(3), t0, window, 2, 10),
+            "the global window cap holds even with per address room left"
         );
     }
 
