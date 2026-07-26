@@ -67,6 +67,24 @@ pub fn verify_transition(
     Ok(adopt(new_header, new_set))
 }
 
+pub fn check_anchor(
+    cfg: &ChainConfig,
+    trusted: &TrustedState,
+    new_header: &Header,
+    new_set: &ValidatorSet,
+) -> Result<(), LightError> {
+    check_header(cfg, trusted, new_header, new_set)?;
+
+    if !overlap_meets(&trusted.validators, new_set, cfg.overlap_numerator, cfg.overlap_denominator) {
+        return Err(LightError::InsufficientOverlap {
+            overlap: crate::validator::overlap_power(&trusted.validators, new_set),
+            trusted_total: trusted.validators.total_power(),
+        });
+    }
+
+    Ok(())
+}
+
 pub fn verify_adjacent(
     cfg: &ChainConfig,
     trusted: &TrustedState,

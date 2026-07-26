@@ -64,6 +64,7 @@ mod tests {
     use crate::ed25519::{public_key_from_seed, sign};
     use crate::proof::{encode_deposit_value, ExistenceProof, InnerOp, LeafOp};
     use crate::proto::{vote_sign_bytes, BlockId, CanonicalVote, Timestamp, PRECOMMIT_TYPE};
+    use crate::light::TrustedState;
     use crate::statement::verify_deposit;
     use crate::validator::{ValidatorInfo, ValidatorSet};
 
@@ -80,6 +81,15 @@ mod tests {
                 pubkey: public_key_from_seed(&seed),
                 voting_power: power,
             },
+        }
+    }
+
+    fn anchor(set: &ValidatorSet) -> TrustedState {
+        TrustedState {
+            height: 0,
+            header_hash: [0u8; 32],
+            validators: set.clone(),
+            next_validators_hash: set.hash().to_vec(),
         }
     }
 
@@ -149,7 +159,7 @@ mod tests {
     #[test]
     fn a_successful_verification_yields_a_stable_canonical_witness() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let out = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         let a = prove_ready_witness(&out);
         let b = prove_ready_witness(&out);
         assert_eq!(a, b);
@@ -159,7 +169,7 @@ mod tests {
     #[test]
     fn the_digest_matches_a_fresh_hash_of_the_statement_and_facts() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let out = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         let witness = prove_ready_witness(&out);
         assert_eq!(witness.public_input_digest, shake256_256(&witness.encode()));
     }
@@ -167,7 +177,7 @@ mod tests {
     #[test]
     fn the_witness_carries_the_height_and_the_signed_power() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let out = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         let witness = prove_ready_witness(&out);
         assert_eq!(witness.facts.header_height, 18_500_000);
         assert_eq!(witness.facts.signed_power, 100);
@@ -177,9 +187,9 @@ mod tests {
     #[test]
     fn a_different_signed_power_changes_the_witness_digest() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let full = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let full = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         let (header2, commit2, set2, proof2) = scene(&[0, 1, 2]);
-        let partial = verify_deposit(&COSMOS_HUB, &header2, &commit2, &set2, &proof2).unwrap();
+        let partial = verify_deposit(&COSMOS_HUB, &anchor(&set2), &header2, &commit2, &set2, &proof2).unwrap();
         let a = prove_ready_witness(&full);
         let b = prove_ready_witness(&partial);
         assert_ne!(a.public_input_digest, b.public_input_digest);
@@ -188,7 +198,7 @@ mod tests {
     #[test]
     fn the_encoded_witness_is_a_fixed_width_of_hash_and_count_fields_only() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
-        let out = verify_deposit(&COSMOS_HUB, &header, &commit, &set, &proof).unwrap();
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof).unwrap();
         let witness = prove_ready_witness(&out);
         assert_eq!(
             witness.encode().len(),
