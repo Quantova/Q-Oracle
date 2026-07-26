@@ -66,6 +66,26 @@ pub struct DepositProof {
     pub receipt_proof: Vec<Vec<u8>>,
 }
 
+/// An Ethereum deposit proven trustless end to end. Every field is read from the bridge deposit log
+/// under a receipt proof that folds to the receipts root of a finalized beacon header, itself signed
+/// by a sync committee supermajority. Nothing here is taken on a relayer's word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrustlessDeposit {
+    pub source_ref: [u8; 32],
+    pub amount: u128,
+    pub recipient: [u8; 32],
+    pub asset_id: [u8; 16],
+    pub block_number: u64,
+    pub finality_depth: u32,
+}
+
+struct CoreDeposit {
+    anchor: [u8; 32],
+    source_ref: [u8; 32],
+    raw: RawDeposit,
+    block_number: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LightClientStore {
     pub config: EvmChainConfig,
@@ -157,12 +177,12 @@ fn deposit_source_ref(anchor: &[u8; 32], key: &[u8], log_index: u32) -> [u8; 32]
     keccak256(&buf)
 }
 
-pub fn verify_deposit_update(
+fn verify_deposit_core(
     store: &LightClientStore,
     update: &LightClientUpdate,
     deposit: &DepositProof,
     verifier: &dyn BlsAggregateVerifier,
-) -> Result<ProofStatement, EthError> {
+) -> Result<CoreDeposit, EthError> {
     if !store.config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
@@ -195,18 +215,55 @@ pub fn verify_deposit_update(
 
     let anchor = update.finalized_header.hash_tree_root();
     let source_ref = deposit_source_ref(&anchor, &key, raw.log_index);
-    let event = EventClaim {
+    Ok(CoreDeposit {
+        anchor,
         source_ref,
-        asset_id: raw.asset_id,
-        amount: raw.amount,
-        recipient: raw.recipient,
+        raw,
+        block_number: update.execution.block_number,
+    })
+}
+
+pub fn verify_deposit_update(
+    store: &LightClientStore,
+    update: &LightClientUpdate,
+    deposit: &DepositProof,
+    verifier: &dyn BlsAggregateVerifier,
+) -> Result<ProofStatement, EthError> {
+    let core = verify_deposit_core(store, update, deposit, verifier)?;
+    let event = EventClaim {
+        source_ref: core.source_ref,
+        asset_id: core.raw.asset_id,
+        amount: core.raw.amount,
+        recipient: core.raw.recipient,
     };
     Ok(evm_light_client(
         store.config.corridor_id,
-        anchor,
+        core.anchor,
         event,
         store.config.finality_depth,
     ))
+}
+
+/// Prove a complete trustless Ethereum deposit: verify the sync committee aggregate over the
+/// finalized header, the finality and execution branches, then read the deposit log carried by the
+/// receipt proof against the finalized receipts root. The consensus and content halves are joined
+/// here, so the returned amount, recipient and asset are read from the chain, never asserted by a
+/// caller. The finality depth is the corridor's, matching the light client that proved the header.
+pub fn verify_trustless_deposit(
+    store: &LightClientStore,
+    update: &LightClientUpdate,
+    deposit: &DepositProof,
+    verifier: &dyn BlsAggregateVerifier,
+) -> Result<TrustlessDeposit, EthError> {
+    let core = verify_deposit_core(store, update, deposit, verifier)?;
+    Ok(TrustlessDeposit {
+        source_ref: core.source_ref,
+        amount: core.raw.amount,
+        recipient: core.raw.recipient,
+        asset_id: core.raw.asset_id,
+        block_number: core.block_number,
+        finality_depth: store.config.finality_depth,
+    })
 }
 
 pub fn public_input_digest(statement: &ProofStatement) -> [u8; 32] {
@@ -349,8 +406,18 @@ mod tests {
     fn build_fixture_for(cfg: EvmChainConfig, amount: u128, participation: Vec<bool>) -> Fixture {
         let recipient = [0x5c; 32];
         let asset_id = [0x77; 16];
-
         let receipt = deposit_receipt(&cfg.deposit_contract, &recipient, amount, &asset_id);
+        fixture_from_receipt(cfg, receipt, participation, recipient, amount, asset_id)
+    }
+
+    fn fixture_from_receipt(
+        cfg: EvmChainConfig,
+        receipt: Vec<u8>,
+        participation: Vec<bool>,
+        recipient: [u8; 32],
+        amount: u128,
+        asset_id: [u8; 16],
+    ) -> Fixture {
         let mut entries = Vec::new();
         for i in 0..6u64 {
             let key = rlp::encode_uint(i);
@@ -733,5 +800,97 @@ mod tests {
         assert_eq!(ev.asset_id, f.asset_id);
         assert_eq!(ev.amount, f.amount);
         assert_eq!(ev.height, 20_000_000);
+    }
+
+    #[test]
+    fn a_finalized_deposit_proves_trustless_end_to_end() {
+        let f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        let proven =
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls).unwrap();
+        assert_eq!(proven.amount, f.amount);
+        assert_eq!(proven.recipient, f.recipient);
+        assert_eq!(proven.asset_id, f.asset_id);
+        assert_eq!(proven.block_number, 20_000_000);
+        assert_eq!(proven.finality_depth, 64);
+        assert_ne!(proven.source_ref, [0u8; 32]);
+    }
+
+    #[test]
+    fn the_trustless_deposit_carries_the_same_values_as_the_statement() {
+        let f = build_fixture(3_000_000_000_000_000_000u128, full_participation());
+        let statement =
+            verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls).unwrap();
+        let proven =
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls).unwrap();
+        assert_eq!(proven.source_ref, statement.event.source_ref);
+        assert_eq!(proven.amount, statement.event.amount);
+        assert_eq!(proven.recipient, statement.event.recipient);
+        assert_eq!(proven.asset_id, statement.event.asset_id);
+    }
+
+    #[test]
+    fn a_receipt_from_another_bridge_contract_carries_no_trustless_deposit() {
+        let mut f = build_fixture(1_000u128, full_participation());
+        f.store.config.deposit_contract = [0x99; 20];
+        assert_eq!(
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::Receipt(receipt::ReceiptError::NoDeposit))
+        );
+    }
+
+    #[test]
+    fn a_log_under_a_foreign_topic_is_not_a_trustless_deposit() {
+        let cfg = config::ethereum();
+        let recipient = [0x5c; 32];
+        let asset_id = [0x77; 16];
+        let foreign_topic = keccak256(b"SomeOtherEvent(bytes32,uint256,bytes16)");
+        let log = receipt::fixtures::encode_log(
+            &cfg.deposit_contract,
+            &[foreign_topic, recipient],
+            &receipt::fixtures::deposit_data(1_000u128, &asset_id),
+        );
+        let receipt_bytes = rlp::encode_list(&[
+            rlp::encode_bytes(&[1u8]),
+            rlp::encode_uint(21000),
+            rlp::encode_bytes(&[0u8; 256]),
+            rlp::encode_list(&[log]),
+        ]);
+        let f = fixture_from_receipt(cfg, receipt_bytes, full_participation(), recipient, 1_000, asset_id);
+        assert_eq!(
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::Receipt(receipt::ReceiptError::NoDeposit))
+        );
+    }
+
+    #[test]
+    fn a_tampered_receipt_proof_carries_no_trustless_deposit() {
+        let mut f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        let last = f.deposit.receipt_proof.len() - 1;
+        f.deposit.receipt_proof[last][6] ^= 0xff;
+        assert_eq!(
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::Mpt(mpt::MptError::HashMismatch))
+        );
+    }
+
+    #[test]
+    fn a_trustless_deposit_above_the_base_unit_cap_is_refused() {
+        let cap = config::ethereum().max_deposit_base_units;
+        let f = build_fixture(cap + 1, full_participation());
+        assert_eq!(
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::CapExceeded { amount: cap + 1, cap })
+        );
+    }
+
+    #[test]
+    fn a_trustless_deposit_below_a_supermajority_is_refused() {
+        let mut participation = vec![false; 512];
+        participation[..300].fill(true);
+        let f = build_fixture(1_000u128, participation);
+        assert_eq!(
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::InsufficientParticipation { got: 300, needed: 342 })
+        );
     }
 }
