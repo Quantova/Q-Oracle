@@ -21,8 +21,18 @@ impl OperatorSet {
         }
     }
 
-    pub fn register(&mut self, operator_id: u32, pubkey: PublicKey) {
+    /// Register an operator's key. A pubkey already held under a different operator id is refused,
+    /// so no single key can occupy two quorum slots. Returns `false` when the key is rejected.
+    pub fn register(&mut self, operator_id: u32, pubkey: PublicKey) -> bool {
+        if self
+            .pubkeys
+            .iter()
+            .any(|(id, existing)| *id != operator_id && *existing == pubkey)
+        {
+            return false;
+        }
         self.pubkeys.insert(operator_id, pubkey);
+        true
     }
 
     pub fn remove(&mut self, operator_id: u32) {
@@ -43,6 +53,38 @@ impl OperatorSet {
 
     pub fn set_threshold(&mut self, threshold: usize) {
         self.threshold = threshold;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(byte: u8) -> PublicKey {
+        let mut seed = [0u8; 32];
+        seed[0] = byte;
+        let (pk, _sk) = ml_dsa::keygen(&seed);
+        pk
+    }
+
+    #[test]
+    fn a_pubkey_already_held_under_another_id_is_refused() {
+        let mut set = OperatorSet::new(2);
+        let shared = key(1);
+        assert!(set.register(0, shared));
+        assert!(!set.register(1, shared), "one key must not fill two slots");
+        assert_eq!(set.size(), 1);
+        assert!(set.pubkey(1).is_none());
+    }
+
+    #[test]
+    fn distinct_keys_and_same_id_rotation_are_allowed() {
+        let mut set = OperatorSet::new(2);
+        assert!(set.register(0, key(1)));
+        assert!(set.register(1, key(2)));
+        assert_eq!(set.size(), 2);
+        assert!(set.register(0, key(3)), "rotating a slot's own key is allowed");
+        assert_eq!(set.size(), 2);
     }
 }
 
