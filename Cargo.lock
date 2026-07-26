@@ -166,8 +166,10 @@ dependencies = [
 name = "q-qbridge"
 version = "0.1.0"
 dependencies = [
+ "blst",
  "q-airlock",
  "q-assets",
+ "q-bls",
  "q-codec",
  "q-federated",
  "q-gateway",

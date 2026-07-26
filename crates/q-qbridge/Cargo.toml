@@ -15,6 +15,7 @@ q-codec = { workspace = true }
 q-airlock = { workspace = true }
 q-gateway = { workspace = true }
 q-federated = { workspace = true }
+q-bls = { path = "../q-bls" }
 qlc-bitcoin = { workspace = true }
 qlc-ethereum = { workspace = true }
 qlc-cosmos = { workspace = true }
@@ -23,3 +24,5 @@ qlc-cosmos = { workspace = true }
 qtv-crypto = { workspace = true }
 q-codec = { workspace = true }
 q-airlock = { workspace = true }
+blst = "0.3.16"
+qlc-ethereum = { workspace = true, features = ["test-util"] }

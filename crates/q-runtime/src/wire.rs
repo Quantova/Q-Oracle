@@ -12,12 +12,21 @@ use q_qbridge::{
     Response,
 };
 use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
+use qlc_ethereum::beacon::{BeaconBlockHeader, SyncAggregate};
+use qlc_ethereum::bls::BlsSignature;
+use qlc_ethereum::mpt::MptError;
+use qlc_ethereum::receipt::ReceiptError;
+use qlc_ethereum::{DepositProof as EthDepositProof, EthError, ExecutionCommit, LightClientUpdate};
 
 use crate::json::{from_hex, object, to_hex, Json};
 
 pub const MAX_HEADERS: usize = 2048;
 
 pub const MAX_BRANCH: usize = 64;
+
+pub const MAX_PARTICIPATION: usize = 4096;
+
+pub const MAX_PROOF_NODES: usize = 256;
 
 /// Every rejection the wire raises before the dispatcher is reached. A transport frame that names no
 /// method is a not-found, everything else the request layer refuses is a bad request.
@@ -229,9 +238,76 @@ fn encode_proof(proof: &DepositProof) -> Json {
             ("deposit_script", hexs(&material.deposit_script)),
             ("fact", hexs(&fact.encode())),
         ]),
-        DepositProof::Ethereum { .. } => object(vec![("kind", Json::str("ethereum"))]),
+        DepositProof::Ethereum {
+            update,
+            deposit,
+            fact,
+        } => object(vec![
+            ("kind", Json::str("ethereum")),
+            ("attested_header", header_json(&update.attested_header)),
+            ("finalized_header", header_json(&update.finalized_header)),
+            ("finality_branch", roots_json(&update.finality_branch)),
+            (
+                "participation",
+                Json::Array(
+                    update
+                        .sync_aggregate
+                        .participation
+                        .iter()
+                        .map(|b| Json::Bool(*b))
+                        .collect(),
+                ),
+            ),
+            ("signature", hexs(&update.sync_aggregate.signature.0)),
+            ("signature_slot", Json::Int(update.signature_slot)),
+            ("receipts_root", hexs(&update.execution.receipts_root)),
+            ("block_number", Json::Int(update.execution.block_number)),
+            ("execution_branch", roots_json(&update.execution.execution_branch)),
+            ("receipt_index", Json::Int(deposit.receipt_index)),
+            (
+                "receipt_proof",
+                Json::Array(deposit.receipt_proof.iter().map(|n| hexs(n)).collect()),
+            ),
+            ("fact", hexs(&fact.encode())),
+        ]),
         DepositProof::Cosmos { .. } => object(vec![("kind", Json::str("cosmos"))]),
     }
+}
+
+fn header_json(h: &BeaconBlockHeader) -> Json {
+    object(vec![
+        ("slot", Json::Int(h.slot)),
+        ("proposer_index", Json::Int(h.proposer_index)),
+        ("parent_root", hexs(&h.parent_root)),
+        ("state_root", hexs(&h.state_root)),
+        ("body_root", hexs(&h.body_root)),
+    ])
+}
+
+fn header_from(j: &Json) -> Result<BeaconBlockHeader, WireError> {
+    Ok(BeaconBlockHeader {
+        slot: as_u64(field(j, "slot")?, "slot")?,
+        proposer_index: as_u64(field(j, "proposer_index")?, "proposer_index")?,
+        parent_root: hex_array::<32>(field(j, "parent_root")?, "parent_root")?,
+        state_root: hex_array::<32>(field(j, "state_root")?, "state_root")?,
+        body_root: hex_array::<32>(field(j, "body_root")?, "body_root")?,
+    })
+}
+
+fn roots_json(roots: &[[u8; 32]]) -> Json {
+    Json::Array(roots.iter().map(|r| hexs(r)).collect())
+}
+
+fn roots_from(j: &Json, name: &'static str, max: usize) -> Result<Vec<[u8; 32]>, WireError> {
+    let items = j.as_array().ok_or(WireError::BadType(name))?;
+    if items.len() > max {
+        return Err(WireError::BadField(name));
+    }
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        out.push(hex_array::<32>(item, name)?);
+    }
+    Ok(out)
 }
 
 fn decode_fact(j: &Json) -> Result<BridgeFact, WireError> {
@@ -285,7 +361,57 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                 fact: decode_fact(j)?,
             })
         }
-        "ethereum" | "cosmos" => Err(WireError::BadProofKind(kind.to_string())),
+        "ethereum" => {
+            let participation_json = field(j, "participation")?
+                .as_array()
+                .ok_or(WireError::BadType("participation"))?;
+            if participation_json.len() > MAX_PARTICIPATION {
+                return Err(WireError::BadField("participation"));
+            }
+            let mut participation = Vec::with_capacity(participation_json.len());
+            for p in participation_json {
+                participation.push(as_bool(p, "participation")?);
+            }
+            let receipt_proof_json = field(j, "receipt_proof")?
+                .as_array()
+                .ok_or(WireError::BadType("receipt_proof"))?;
+            if receipt_proof_json.len() > MAX_PROOF_NODES {
+                return Err(WireError::BadField("receipt_proof"));
+            }
+            let mut receipt_proof = Vec::with_capacity(receipt_proof_json.len());
+            for n in receipt_proof_json {
+                receipt_proof.push(as_hex(n, "receipt_proof")?);
+            }
+            let update = LightClientUpdate {
+                attested_header: header_from(field(j, "attested_header")?)?,
+                finalized_header: header_from(field(j, "finalized_header")?)?,
+                finality_branch: roots_from(field(j, "finality_branch")?, "finality_branch", MAX_BRANCH)?,
+                sync_aggregate: SyncAggregate {
+                    participation,
+                    signature: BlsSignature(hex_array::<96>(field(j, "signature")?, "signature")?),
+                },
+                signature_slot: as_u64(field(j, "signature_slot")?, "signature_slot")?,
+                execution: ExecutionCommit {
+                    receipts_root: hex_array::<32>(field(j, "receipts_root")?, "receipts_root")?,
+                    block_number: as_u64(field(j, "block_number")?, "block_number")?,
+                    execution_branch: roots_from(
+                        field(j, "execution_branch")?,
+                        "execution_branch",
+                        MAX_BRANCH,
+                    )?,
+                },
+            };
+            let deposit = EthDepositProof {
+                receipt_index: as_u64(field(j, "receipt_index")?, "receipt_index")?,
+                receipt_proof,
+            };
+            Ok(DepositProof::Ethereum {
+                update,
+                deposit,
+                fact: decode_fact(j)?,
+            })
+        }
+        "cosmos" => Err(WireError::BadProofKind(kind.to_string())),
         other => Err(WireError::BadProofKind(other.to_string())),
     }
 }
@@ -467,6 +593,9 @@ fn api_json(api: &ApiError) -> Json {
         ApiError::ProofTierMismatch => tagged("api", "proof_tier_mismatch", vec![]),
         ApiError::NoAnchor(id) => tagged("api", "no_anchor", vec![("network_id", u32j(*id))]),
         ApiError::BitcoinSpv(e) => tagged("api", "bitcoin_spv", vec![("spv", spv_err_json(e))]),
+        ApiError::EthereumVerify(e) => {
+            tagged("api", "ethereum_verify", vec![("eth", eth_err_json(e))])
+        }
         ApiError::Pool(e) => pool_err_json(e),
         ApiError::Federated(e) => federated_err_json(e),
         ApiError::Trustless(e) => trustless_err_json(e),
@@ -539,6 +668,100 @@ fn spv_err_from(j: &Json) -> Result<SpvError, WireError> {
     }
 }
 
+fn eth_err_json(e: &EthError) -> Json {
+    match e {
+        EthError::NotBeaconChain => tagged("eth", "not_beacon_chain", vec![]),
+        EthError::InvalidParticipationLength { got, expected } => tagged(
+            "eth",
+            "invalid_participation_length",
+            vec![("got", usizej(*got)), ("expected", usizej(*expected))],
+        ),
+        EthError::InsufficientParticipation { got, needed } => tagged(
+            "eth",
+            "insufficient_participation",
+            vec![("got", usizej(*got)), ("needed", usizej(*needed))],
+        ),
+        EthError::WrongPeriod => tagged("eth", "wrong_period", vec![]),
+        EthError::BadFinalityProof => tagged("eth", "bad_finality_proof", vec![]),
+        EthError::BadExecutionProof => tagged("eth", "bad_execution_proof", vec![]),
+        EthError::BadSyncCommitteeProof => tagged("eth", "bad_sync_committee_proof", vec![]),
+        EthError::BadSignature => tagged("eth", "bad_signature", vec![]),
+        EthError::MissingReceipt => tagged("eth", "missing_receipt", vec![]),
+        EthError::CapExceeded { amount, cap } => tagged(
+            "eth",
+            "cap_exceeded",
+            vec![("amount", u128s(*amount)), ("cap", u128s(*cap))],
+        ),
+        EthError::Receipt(r) => tagged("eth", "receipt", vec![("receipt", receipt_err_json(r))]),
+        EthError::Mpt(m) => tagged("eth", "mpt", vec![("mpt", mpt_err_json(m))]),
+    }
+}
+
+fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
+    match code_of(j)? {
+        "not_beacon_chain" => Ok(EthError::NotBeaconChain),
+        "invalid_participation_length" => Ok(EthError::InvalidParticipationLength {
+            got: as_usize(field(j, "got")?, "got")?,
+            expected: as_usize(field(j, "expected")?, "expected")?,
+        }),
+        "insufficient_participation" => Ok(EthError::InsufficientParticipation {
+            got: as_usize(field(j, "got")?, "got")?,
+            needed: as_usize(field(j, "needed")?, "needed")?,
+        }),
+        "wrong_period" => Ok(EthError::WrongPeriod),
+        "bad_finality_proof" => Ok(EthError::BadFinalityProof),
+        "bad_execution_proof" => Ok(EthError::BadExecutionProof),
+        "bad_sync_committee_proof" => Ok(EthError::BadSyncCommitteeProof),
+        "bad_signature" => Ok(EthError::BadSignature),
+        "missing_receipt" => Ok(EthError::MissingReceipt),
+        "cap_exceeded" => Ok(EthError::CapExceeded {
+            amount: as_u128(field(j, "amount")?, "amount")?,
+            cap: as_u128(field(j, "cap")?, "cap")?,
+        }),
+        "receipt" => Ok(EthError::Receipt(receipt_err_from(field(j, "receipt")?)?)),
+        "mpt" => Ok(EthError::Mpt(mpt_err_from(field(j, "mpt")?)?)),
+        other => Err(WireError::UnknownErrorCode(other.to_string())),
+    }
+}
+
+fn receipt_err_json(e: &ReceiptError) -> Json {
+    match e {
+        ReceiptError::Malformed => tagged("receipt", "malformed", vec![]),
+        ReceiptError::NotSuccessful => tagged("receipt", "not_successful", vec![]),
+        ReceiptError::NoDeposit => tagged("receipt", "no_deposit", vec![]),
+        ReceiptError::AmountOverflow => tagged("receipt", "amount_overflow", vec![]),
+    }
+}
+
+fn receipt_err_from(j: &Json) -> Result<ReceiptError, WireError> {
+    match code_of(j)? {
+        "malformed" => Ok(ReceiptError::Malformed),
+        "not_successful" => Ok(ReceiptError::NotSuccessful),
+        "no_deposit" => Ok(ReceiptError::NoDeposit),
+        "amount_overflow" => Ok(ReceiptError::AmountOverflow),
+        other => Err(WireError::UnknownErrorCode(other.to_string())),
+    }
+}
+
+fn mpt_err_json(e: &MptError) -> Json {
+    match e {
+        MptError::MissingNode => tagged("mpt", "missing_node", vec![]),
+        MptError::HashMismatch => tagged("mpt", "hash_mismatch", vec![]),
+        MptError::BadNode => tagged("mpt", "bad_node", vec![]),
+        MptError::BadRef => tagged("mpt", "bad_ref", vec![]),
+    }
+}
+
+fn mpt_err_from(j: &Json) -> Result<MptError, WireError> {
+    match code_of(j)? {
+        "missing_node" => Ok(MptError::MissingNode),
+        "hash_mismatch" => Ok(MptError::HashMismatch),
+        "bad_node" => Ok(MptError::BadNode),
+        "bad_ref" => Ok(MptError::BadRef),
+        other => Err(WireError::UnknownErrorCode(other.to_string())),
+    }
+}
+
 fn api_from(j: &Json) -> Result<ApiError, WireError> {
     match as_str(field(j, "category")?, "category")? {
         "api" => match code_of(j)? {
@@ -560,6 +783,7 @@ fn api_from(j: &Json) -> Result<ApiError, WireError> {
                 "network_id",
             )?)),
             "bitcoin_spv" => Ok(ApiError::BitcoinSpv(spv_err_from(field(j, "spv")?)?)),
+            "ethereum_verify" => Ok(ApiError::EthereumVerify(eth_err_from(field(j, "eth")?)?)),
             other => Err(WireError::UnknownErrorCode(other.to_string())),
         },
         "pool" => Ok(ApiError::Pool(pool_err_from(j)?)),
@@ -1110,12 +1334,56 @@ mod tests {
     }
 
     #[test]
-    fn an_ethereum_proof_from_an_untrusted_client_is_refused() {
-        let body = object(vec![("proof", object(vec![("kind", Json::str("ethereum"))]))]);
-        assert!(matches!(
+    fn an_ethereum_deposit_round_trips_its_raw_material_and_fact() {
+        let header = BeaconBlockHeader {
+            slot: 7_100_000,
+            proposer_index: 12,
+            parent_root: [0x11; 32],
+            state_root: [0x22; 32],
+            body_root: [0x33; 32],
+        };
+        let update = LightClientUpdate {
+            attested_header: header,
+            finalized_header: header,
+            finality_branch: vec![[0xf0; 32], [0xf1; 32]],
+            sync_aggregate: SyncAggregate {
+                participation: vec![true, false, true, true],
+                signature: BlsSignature([0x9c; 96]),
+            },
+            signature_slot: 7_100_050,
+            execution: ExecutionCommit {
+                receipts_root: [0x44; 32],
+                block_number: 20_000_000,
+                execution_branch: vec![[0xe0; 32]],
+            },
+        };
+        let deposit = EthDepositProof {
+            receipt_index: 3,
+            receipt_proof: vec![vec![0x01, 0x02], vec![0x03, 0x04, 0x05]],
+        };
+        round_request(Request::SubmitDeposit(DepositRequest {
+            proof: DepositProof::Ethereum {
+                update,
+                deposit,
+                fact: sample_fact(),
+            },
+        }));
+    }
+
+    #[test]
+    fn an_oversized_ethereum_participation_array_is_rejected_before_allocation() {
+        let participation = Json::Array(vec![Json::Bool(true); MAX_PARTICIPATION + 1]);
+        let body = object(vec![(
+            "proof",
+            object(vec![
+                ("kind", Json::str("ethereum")),
+                ("participation", participation),
+            ]),
+        )]);
+        assert_eq!(
             decode_request("submit_deposit", &body),
-            Err(WireError::BadProofKind(_))
-        ));
+            Err(WireError::BadField("participation"))
+        );
     }
 
     #[test]
@@ -1210,6 +1478,16 @@ mod tests {
         ))));
         round_response(Response::Error(ApiError::Federated(FederatedError::Gateway(
             GatewayError::InvalidFact(CodecError::ZeroAmount),
+        ))));
+        round_response(Response::Error(ApiError::EthereumVerify(EthError::BadSignature)));
+        round_response(Response::Error(ApiError::EthereumVerify(
+            EthError::InsufficientParticipation { got: 300, needed: 342 },
+        )));
+        round_response(Response::Error(ApiError::EthereumVerify(EthError::Receipt(
+            ReceiptError::NoDeposit,
+        ))));
+        round_response(Response::Error(ApiError::EthereumVerify(EthError::Mpt(
+            MptError::HashMismatch,
         ))));
     }
 

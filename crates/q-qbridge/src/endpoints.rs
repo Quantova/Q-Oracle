@@ -15,7 +15,7 @@ use qlc_bitcoin::{
     SpvError,
 };
 use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
-use qlc_ethereum::TrustlessDeposit as EthereumDeposit;
+use qlc_ethereum::{DepositProof as EthDepositProof, EthError, LightClientStore, LightClientUpdate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitcoinProofMaterial {
@@ -53,7 +53,11 @@ pub struct DepositRequest {
 pub enum DepositProof {
     Federated(AttestationEnvelope),
     Bitcoin { material: BitcoinProofMaterial, fact: BridgeFact },
-    Ethereum { proven: EthereumDeposit, fact: BridgeFact },
+    Ethereum {
+        update: LightClientUpdate,
+        deposit: EthDepositProof,
+        fact: BridgeFact,
+    },
     Cosmos { proven: CosmosDeposit, fact: BridgeFact },
 }
 
@@ -137,6 +141,7 @@ pub enum ApiError {
     ProofTierMismatch,
     NoAnchor(u32),
     BitcoinSpv(SpvError),
+    EthereumVerify(EthError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +159,7 @@ pub struct BridgeState {
     pub gateway: Gateway,
     pub sources: SourceRegistry,
     pub bitcoin_anchor: Option<BitcoinAnchor>,
+    pub ethereum_store: Option<LightClientStore>,
 }
 
 impl BridgeState {
@@ -163,6 +169,7 @@ impl BridgeState {
             gateway,
             sources: SourceRegistry::new(),
             bitcoin_anchor: None,
+            ethereum_store: None,
         }
     }
 
@@ -174,11 +181,16 @@ impl BridgeState {
             gateway,
             sources: SourceRegistry::new(),
             bitcoin_anchor: None,
+            ethereum_store: None,
         }
     }
 
     pub fn set_bitcoin_anchor(&mut self, anchor: BitcoinAnchor) {
         self.bitcoin_anchor = Some(anchor);
+    }
+
+    pub fn set_ethereum_anchor(&mut self, store: LightClientStore) {
+        self.ethereum_store = Some(store);
     }
 }
 
@@ -270,8 +282,17 @@ fn dispatch_deposit(
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
-        (Tier::ProofBacked, Network::Ethereum, DepositProof::Ethereum { proven, fact }) => {
-            let mint = admit_ethereum_trustless(&mut state.gateway, &corridor, proven, fact)
+        (Tier::ProofBacked, Network::Ethereum, DepositProof::Ethereum { update, deposit, fact }) => {
+            let proven = {
+                let store = state
+                    .ethereum_store
+                    .as_ref()
+                    .ok_or(ApiError::NoAnchor(Network::Ethereum.id()))?;
+                let verifier = q_bls::Bls12381AggregateVerifier::new();
+                qlc_ethereum::verify_trustless_deposit(store, update, deposit, &verifier)
+                    .map_err(ApiError::EthereumVerify)?
+            };
+            let mint = admit_ethereum_trustless(&mut state.gateway, &corridor, &proven, fact)
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
@@ -801,5 +822,319 @@ mod tests {
             }),
         );
         assert_eq!(response, Response::Error(ApiError::UnknownNetwork(44)));
+    }
+
+    use blst::min_pk::{AggregateSignature, SecretKey as BlsSecretKey};
+    use q_bls::{Bls12381AggregateVerifier, ETH_SYNC_COMMITTEE_DST};
+    use qlc_ethereum::beacon::{
+        compute_domain, compute_signing_root, current_sync_committee_layout, BeaconBlockHeader,
+        SyncAggregate, SyncCommittee, CURRENT_SYNC_COMMITTEE_DEPTH, DOMAIN_SYNC_COMMITTEE,
+        EXECUTION_RECEIPTS_DEPTH, EXECUTION_RECEIPTS_INDEX, FINALIZED_ROOT_DEPTH,
+        FINALIZED_ROOT_INDEX,
+    };
+    use qlc_ethereum::bls::{BlsPubkey, BlsSignature};
+    use qlc_ethereum::config as eth_config;
+    use qlc_ethereum::mpt::builder as mpt_builder;
+    use qlc_ethereum::receipt::fixtures::deposit_receipt;
+    use qlc_ethereum::{bootstrap, rlp, ssz, ExecutionCommit};
+
+    const ETH_PERIOD: u64 = 870;
+    const ETH_PERIOD_SLOTS: u64 = 32 * 256;
+    const ETH_SIG_SLOT: u64 = ETH_PERIOD * ETH_PERIOD_SLOTS + 100;
+
+    fn eth_secret(seed: u8, i: usize) -> BlsSecretKey {
+        let mut ikm = [0u8; 32];
+        ikm[0] = seed;
+        ikm[1] = (i & 0xff) as u8;
+        ikm[2] = ((i >> 8) & 0xff) as u8;
+        ikm[31] = 0xa5;
+        BlsSecretKey::key_gen(&ikm, &[]).unwrap()
+    }
+
+    fn eth_committee(seed: u8) -> (SyncCommittee, Vec<BlsSecretKey>) {
+        let secrets: Vec<BlsSecretKey> = (0..512).map(|i| eth_secret(seed, i)).collect();
+        let pubkeys: Vec<BlsPubkey> = secrets
+            .iter()
+            .map(|s| BlsPubkey(s.sk_to_pk().compress()))
+            .collect();
+        let aggregate_pubkey = pubkeys[0];
+        (
+            SyncCommittee {
+                pubkeys,
+                aggregate_pubkey,
+            },
+            secrets,
+        )
+    }
+
+    fn eth_full_participation() -> Vec<bool> {
+        let mut p = vec![false; 512];
+        p[..400].fill(true);
+        p
+    }
+
+    fn eth_aggregate(secrets: &[BlsSecretKey], participation: &[bool], root: &[u8; 32]) -> BlsSignature {
+        let mut sigs = Vec::new();
+        for (i, present) in participation.iter().enumerate() {
+            if *present {
+                sigs.push(secrets[i].sign(root, ETH_SYNC_COMMITTEE_DST, &[]));
+            }
+        }
+        let refs: Vec<&_> = sigs.iter().collect();
+        let agg = AggregateSignature::aggregate(&refs, false).unwrap();
+        BlsSignature(agg.to_signature().compress())
+    }
+
+    fn eth_current_committee_branch() -> Vec<[u8; 32]> {
+        (0..CURRENT_SYNC_COMMITTEE_DEPTH)
+            .map(|i| [0xd0 + i as u8; 32])
+            .collect()
+    }
+
+    fn eth_checkpoint(committee: &SyncCommittee) -> BeaconBlockHeader {
+        let (index, _) = current_sync_committee_layout(false);
+        let branch = eth_current_committee_branch();
+        let leaf = committee.hash_tree_root();
+        let state_root = ssz::merkle_root_from_branch(&leaf, &branch, index);
+        BeaconBlockHeader {
+            slot: ETH_PERIOD * ETH_PERIOD_SLOTS + 8,
+            proposer_index: 5,
+            parent_root: [0u8; 32],
+            state_root,
+            body_root: [0u8; 32],
+        }
+    }
+
+    fn eth_bootstrapped_store(seed: u8) -> LightClientStore {
+        let (committee, _) = eth_committee(seed);
+        let checkpoint = eth_checkpoint(&committee);
+        bootstrap(
+            eth_config::ethereum(),
+            ETH_PERIOD,
+            checkpoint,
+            committee,
+            eth_current_committee_branch(),
+        )
+        .unwrap()
+    }
+
+    fn ethereum_fixture(
+        asset_id: [u8; 16],
+        recipient: [u8; 32],
+        amount: u128,
+    ) -> (LightClientStore, LightClientUpdate, EthDepositProof) {
+        let cfg = eth_config::ethereum();
+        let (committee, secrets) = eth_committee(0x11);
+
+        let receipt = deposit_receipt(&cfg.deposit_contract, &recipient, amount, &asset_id);
+        let mut entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for i in 0..6u64 {
+            let key = rlp::encode_uint(i);
+            let value = if i == 3 {
+                receipt.clone()
+            } else {
+                let mut v = b"other-receipt-payload-over-thirty-two-bytes-".to_vec();
+                v.push(i as u8);
+                v
+            };
+            entries.push((key, value));
+        }
+        let nibble_entries: Vec<(Vec<u8>, Vec<u8>)> = entries
+            .iter()
+            .map(|(k, v)| {
+                let mut nib = Vec::new();
+                for b in k {
+                    nib.push(b >> 4);
+                    nib.push(b & 0x0f);
+                }
+                (nib, v.clone())
+            })
+            .collect();
+        let trie = mpt_builder::build(nibble_entries);
+        let receipts_root = mpt_builder::root_hash(&trie);
+        let receipt_proof = mpt_builder::prove(&trie, &entries[3].0);
+
+        let execution_branch: Vec<[u8; 32]> = (0..EXECUTION_RECEIPTS_DEPTH)
+            .map(|i| [0xe0 + i as u8; 32])
+            .collect();
+        let body_root =
+            ssz::merkle_root_from_branch(&receipts_root, &execution_branch, EXECUTION_RECEIPTS_INDEX);
+
+        let finalized_header = BeaconBlockHeader {
+            slot: ETH_PERIOD * ETH_PERIOD_SLOTS + 40,
+            proposer_index: 99,
+            parent_root: [0x01; 32],
+            state_root: [0x02; 32],
+            body_root,
+        };
+        let finalized_root = finalized_header.hash_tree_root();
+
+        let finality_branch: Vec<[u8; 32]> = (0..FINALIZED_ROOT_DEPTH)
+            .map(|i| [0xf0 + i as u8; 32])
+            .collect();
+        let attested_state_root =
+            ssz::merkle_root_from_branch(&finalized_root, &finality_branch, FINALIZED_ROOT_INDEX);
+        let attested_header = BeaconBlockHeader {
+            slot: ETH_PERIOD * ETH_PERIOD_SLOTS + 60,
+            proposer_index: 100,
+            parent_root: [0x03; 32],
+            state_root: attested_state_root,
+            body_root: [0x04; 32],
+        };
+
+        let checkpoint = eth_checkpoint(&committee);
+        let store = bootstrap(
+            cfg.clone(),
+            ETH_PERIOD,
+            checkpoint,
+            committee,
+            eth_current_committee_branch(),
+        )
+        .unwrap();
+
+        let participation = eth_full_participation();
+        let fork_version = cfg.fork_version_at_slot(ETH_SIG_SLOT);
+        let domain =
+            compute_domain(DOMAIN_SYNC_COMMITTEE, fork_version.0, &cfg.genesis_validators_root);
+        let signing_root = compute_signing_root(&attested_header.hash_tree_root(), &domain);
+        let signature = eth_aggregate(&secrets, &participation, &signing_root);
+
+        let update = LightClientUpdate {
+            attested_header,
+            finalized_header,
+            finality_branch,
+            sync_aggregate: SyncAggregate {
+                participation,
+                signature,
+            },
+            signature_slot: ETH_SIG_SLOT,
+            execution: ExecutionCommit {
+                receipts_root,
+                block_number: 20_000_000,
+                execution_branch,
+            },
+        };
+        let deposit = EthDepositProof {
+            receipt_index: 3,
+            receipt_proof,
+        };
+        (store, update, deposit)
+    }
+
+    fn ethereum_pool(state: &mut BridgeState) -> PoolView {
+        match handle(
+            state,
+            Request::CreatePool(pool_request(Network::Ethereum.id(), "USDC")),
+        ) {
+            Response::PoolCreated(view) => view,
+            other => panic!("expected PoolCreated, got {:?}", other),
+        }
+    }
+
+    fn ethereum_fact(
+        asset: [u8; 16],
+        source_ref: [u8; 32],
+        amount: u128,
+        recipient: [u8; 32],
+    ) -> BridgeFact {
+        BridgeFact {
+            version: FACT_VERSION,
+            source_chain: Network::Ethereum.id(),
+            dest_chain: DEST,
+            route_id: 1,
+            direction: Direction::Deposit,
+            nonce: 1,
+            source_ref: SourceRef(source_ref),
+            asset_id: AssetId(asset),
+            amount,
+            recipient: Recipient(recipient),
+            finality_depth: 64,
+            observed_height: 20_000_000,
+            expiry_height: 21_000_000,
+        }
+    }
+
+    #[test]
+    fn an_ethereum_deposit_with_valid_anchored_material_is_verified_server_side_and_admitted() {
+        let mut state = empty_state(0);
+        let view = ethereum_pool(&mut state);
+        let recipient = [0x5cu8; 32];
+        let (store, update, deposit) = ethereum_fixture(view.asset_id, recipient, 250_000);
+        let proven = qlc_ethereum::verify_trustless_deposit(
+            &store,
+            &update,
+            &deposit,
+            &Bls12381AggregateVerifier::new(),
+        )
+        .expect("the anchored material verifies");
+        state.set_ethereum_anchor(store);
+        let fact = ethereum_fact(view.asset_id, proven.source_ref(), proven.amount(), recipient);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Ethereum {
+                    update,
+                    deposit,
+                    fact,
+                },
+            }),
+        );
+        match response {
+            Response::DepositAdmitted(DepositOutcome::AdmittedPendingChainMint(mint)) => {
+                assert_eq!(mint.amount, 250_000);
+                assert_eq!(mint.asset_id, view.asset_id);
+                assert_eq!(mint.source_ref, proven.source_ref());
+            }
+            other => panic!("expected a trustless admission, got {:?}", other),
+        }
+        assert!(state.gateway.is_reference_used(&proven.source_ref()));
+    }
+
+    #[test]
+    fn an_ethereum_deposit_that_does_not_verify_against_the_pinned_checkpoint_is_rejected() {
+        let mut state = empty_state(0);
+        let view = ethereum_pool(&mut state);
+        let recipient = [0x5cu8; 32];
+        let (_store, update, deposit) = ethereum_fixture(view.asset_id, recipient, 250_000);
+        state.set_ethereum_anchor(eth_bootstrapped_store(0x22));
+        let fact = ethereum_fact(view.asset_id, [0x77u8; 32], 250_000, recipient);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Ethereum {
+                    update,
+                    deposit,
+                    fact,
+                },
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Error(ApiError::EthereumVerify(EthError::BadSignature))
+        );
+        assert_eq!(state.gateway.minted_of_asset(&view.asset_id), 0);
+    }
+
+    #[test]
+    fn an_ethereum_deposit_with_no_pinned_anchor_is_refused() {
+        let mut state = empty_state(0);
+        let view = ethereum_pool(&mut state);
+        let recipient = [0x5cu8; 32];
+        let (_store, update, deposit) = ethereum_fixture(view.asset_id, recipient, 250_000);
+        let fact = ethereum_fact(view.asset_id, [0x00u8; 32], 250_000, recipient);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Ethereum {
+                    update,
+                    deposit,
+                    fact,
+                },
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Error(ApiError::NoAnchor(Network::Ethereum.id()))
+        );
     }
 }
