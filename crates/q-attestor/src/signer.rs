@@ -1,11 +1,56 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use core::sync::atomic::{compiler_fence, Ordering};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey, Signature, SEED_BYTES};
+
+fn secure_wipe(bytes: &mut [u8]) {
+    for slot in bytes.iter_mut() {
+        *slot = 0;
+    }
+    compiler_fence(Ordering::SeqCst);
+    let _ = core::hint::black_box(&*bytes);
+}
+
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for i in 0..a.len() {
+        diff |= a[i] ^ b[i];
+    }
+    diff == 0
+}
+
+struct ZeroizingSecretKey {
+    bytes: SecretKey,
+}
+
+impl ZeroizingSecretKey {
+    fn new(bytes: SecretKey) -> ZeroizingSecretKey {
+        ZeroizingSecretKey { bytes }
+    }
+
+    fn expose(&self) -> &SecretKey {
+        &self.bytes
+    }
+
+    #[cfg(test)]
+    fn clear_for_test(&mut self) {
+        secure_wipe(&mut self.bytes);
+    }
+}
+
+impl Drop for ZeroizingSecretKey {
+    fn drop(&mut self) {
+        secure_wipe(&mut self.bytes);
+    }
+}
 
 pub trait AttestationSigner {
     fn operator_id(&self) -> u32;
@@ -16,7 +61,7 @@ pub trait AttestationSigner {
 pub struct SoftSigner {
     operator_id: u32,
     public_key: PublicKey,
-    secret_key: SecretKey,
+    secret_key: ZeroizingSecretKey,
 }
 
 impl SoftSigner {
@@ -25,7 +70,7 @@ impl SoftSigner {
         SoftSigner {
             operator_id,
             public_key,
-            secret_key,
+            secret_key: ZeroizingSecretKey::new(secret_key),
         }
     }
 }
@@ -41,7 +86,7 @@ impl AttestationSigner for SoftSigner {
 
     fn sign(&self, message: &[u8], context: &[u8]) -> Signature {
         let rnd = [0u8; 32];
-        ml_dsa::sign(&self.secret_key, message, context, &rnd)
+        ml_dsa::sign(self.secret_key.expose(), message, context, &rnd)
             .expect("ml-dsa sign over an in-bounds context")
     }
 }
@@ -79,7 +124,7 @@ impl<B: SigningBackend> AttestationSigner for EnclaveSigner<B> {
 pub struct SoftBackend {
     operator_id: u32,
     public_key: PublicKey,
-    secret_key: SecretKey,
+    secret_key: ZeroizingSecretKey,
 }
 
 impl SoftBackend {
@@ -88,7 +133,7 @@ impl SoftBackend {
         SoftBackend {
             operator_id,
             public_key,
-            secret_key,
+            secret_key: ZeroizingSecretKey::new(secret_key),
         }
     }
 }
@@ -104,7 +149,7 @@ impl SigningBackend for SoftBackend {
 
     fn sign(&self, preimage: &[u8], context: &[u8]) -> Signature {
         let rnd = [0u8; 32];
-        ml_dsa::sign(&self.secret_key, preimage, context, &rnd)
+        ml_dsa::sign(self.secret_key.expose(), preimage, context, &rnd)
             .expect("ml-dsa sign over an in-bounds context")
     }
 }
@@ -196,9 +241,15 @@ pub struct SoftwareHsm {
     label: Vec<u8>,
     key_handle: ObjectHandle,
     public_key: PublicKey,
-    secret_key: SecretKey,
+    secret_key: ZeroizingSecretKey,
     sessions: RefCell<BTreeMap<SessionHandle, TokenSession>>,
     next_session: Cell<SessionHandle>,
+}
+
+impl Drop for SoftwareHsm {
+    fn drop(&mut self) {
+        secure_wipe(&mut self.pin);
+    }
 }
 
 impl SoftwareHsm {
@@ -215,7 +266,7 @@ impl SoftwareHsm {
             label: label.to_vec(),
             key_handle: 0x51a1,
             public_key,
-            secret_key,
+            secret_key: ZeroizingSecretKey::new(secret_key),
             sessions: RefCell::new(BTreeMap::new()),
             next_session: Cell::new(1),
         }
@@ -248,7 +299,7 @@ impl Pkcs11Module for SoftwareHsm {
         let state = sessions
             .get_mut(&session)
             .ok_or(Pkcs11Error::NotAuthenticated)?;
-        if pin != self.pin.as_slice() {
+        if !ct_eq(pin, self.pin.as_slice()) {
             return Err(Pkcs11Error::LoginFailed);
         }
         state.authenticated = true;
@@ -287,7 +338,8 @@ impl Pkcs11Module for SoftwareHsm {
             return Err(Pkcs11Error::KeyNotProvisioned);
         }
         let rnd = [0u8; 32];
-        ml_dsa::sign(&self.secret_key, preimage, context, &rnd).ok_or(Pkcs11Error::SignRejected)
+        ml_dsa::sign(self.secret_key.expose(), preimage, context, &rnd)
+            .ok_or(Pkcs11Error::SignRejected)
     }
 }
 
@@ -511,5 +563,29 @@ mod tests {
             .sign(session, handle, b"observed lock", CTX)
             .expect("the handle signs");
         assert!(ml_dsa::verify(&pk, b"observed lock", &sig, CTX));
+    }
+
+    #[test]
+    fn the_operator_secret_key_wipes_to_zero() {
+        let (_pk, sk) = ml_dsa::keygen(&[0x60u8; 32]);
+        let mut key = ZeroizingSecretKey::new(sk);
+        assert!(key.expose().iter().any(|&b| b != 0));
+        key.clear_for_test();
+        assert!(key.expose().iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn secure_wipe_clears_every_byte() {
+        let mut buf = vec![0x5au8; 128];
+        secure_wipe(&mut buf);
+        assert!(buf.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn the_pin_compare_scans_every_byte() {
+        assert!(ct_eq(b"operator-ceremony-pin", b"operator-ceremony-pin"));
+        assert!(!ct_eq(b"operator-ceremony-pin", b"operator-ceremony-piZ"));
+        assert!(!ct_eq(b"operator-ceremony-pin", b"Zperator-ceremony-pin"));
+        assert!(!ct_eq(b"operator-ceremony-pin", b"operator-ceremony-pins"));
     }
 }
