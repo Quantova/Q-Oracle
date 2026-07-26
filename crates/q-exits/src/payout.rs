@@ -467,9 +467,6 @@ mod tests {
     use crate::exits::{DeskConfig, ExitDesk, ExitState};
     use qlc_bitcoin::BITCOIN;
 
-    // Crafted-difficulty parameters for the fixtures below: the pow limit sits at the crafted
-    // header target so the min-difficulty floor admits them, exactly as the real network limit
-    // would admit real mainnet difficulty.
     const EASY: NetworkParams = NetworkParams {
         network: BITCOIN.network,
         name: BITCOIN.name,
