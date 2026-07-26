@@ -4,6 +4,8 @@
 use q_codec::BridgeFact;
 use q_gateway::Gateway;
 use qlc_bitcoin::TrustlessDeposit;
+use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
+use qlc_ethereum::TrustlessDeposit as EthereumDeposit;
 
 use crate::corridors::Corridor;
 
@@ -14,6 +16,7 @@ pub enum TrustlessError {
     ReferenceMismatch,
     AmountMismatch { proven: u128, fact: u128 },
     RecipientMismatch,
+    AssetMismatch,
     InsufficientConfirmations { have: u32, need: u32 },
     ReplayedReference,
     AssetNotRegistered,
@@ -92,6 +95,11 @@ pub fn admit_bitcoin_trustless(
     fact: &BridgeFact,
 ) -> Result<TrustlessMint, TrustlessError> {
     let mint = match_bitcoin_deposit(corridor, proven, fact)?;
+    apply_replay_and_cap(gateway, &mint)?;
+    Ok(mint)
+}
+
+fn apply_replay_and_cap(gateway: &Gateway, mint: &TrustlessMint) -> Result<(), TrustlessError> {
     if gateway.is_reference_used(&mint.source_ref) {
         return Err(TrustlessError::ReplayedReference);
     }
@@ -113,6 +121,136 @@ pub fn admit_bitcoin_trustless(
             add: mint.amount,
         });
     }
+    Ok(())
+}
+
+/// The pure verification-plus-fact-match gate for a proof-backed Ethereum corridor. A verified
+/// Ethereum deposit clears only when the fact names the same source chain, the same deposit by the
+/// reference derived from its receipt, the amount, recipient and asset the bridge log actually
+/// carries, and only when the proven finality depth reaches the corridor depth. The proven values,
+/// not the fact's, are carried forward.
+pub fn match_ethereum_deposit(
+    corridor: &Corridor,
+    proven: &EthereumDeposit,
+    fact: &BridgeFact,
+) -> Result<TrustlessMint, TrustlessError> {
+    if !corridor.tier.is_proof_backed() {
+        return Err(TrustlessError::NotProofBacked);
+    }
+    if fact.source_chain != corridor.chain_id {
+        return Err(TrustlessError::SourceMismatch {
+            corridor: corridor.chain_id,
+            fact: fact.source_chain,
+        });
+    }
+    if fact.source_ref.0 != proven.source_ref {
+        return Err(TrustlessError::ReferenceMismatch);
+    }
+    if fact.amount != proven.amount {
+        return Err(TrustlessError::AmountMismatch {
+            proven: proven.amount,
+            fact: fact.amount,
+        });
+    }
+    if fact.recipient.0 != proven.recipient {
+        return Err(TrustlessError::RecipientMismatch);
+    }
+    if fact.asset_id.0 != proven.asset_id {
+        return Err(TrustlessError::AssetMismatch);
+    }
+    if proven.finality_depth < corridor.confirmation_depth {
+        return Err(TrustlessError::InsufficientConfirmations {
+            have: proven.finality_depth,
+            need: corridor.confirmation_depth,
+        });
+    }
+    Ok(TrustlessMint {
+        asset_id: proven.asset_id,
+        recipient: proven.recipient,
+        amount: proven.amount,
+        source_ref: proven.source_ref,
+        source_chain: corridor.chain_id,
+        confirmations: proven.finality_depth,
+    })
+}
+
+/// The trustless admission path for an Ethereum corridor. It clears the fact-match gate, then
+/// applies the gateway's replay and per-asset cap checks against current state. The gateway is read
+/// only here: the authoritative mint is left at the same seam the Bitcoin path documents, not
+/// opened for a proof-backed deposit without the corridor's STARK verified on chain.
+pub fn admit_ethereum_trustless(
+    gateway: &Gateway,
+    corridor: &Corridor,
+    proven: &EthereumDeposit,
+    fact: &BridgeFact,
+) -> Result<TrustlessMint, TrustlessError> {
+    let mint = match_ethereum_deposit(corridor, proven, fact)?;
+    apply_replay_and_cap(gateway, &mint)?;
+    Ok(mint)
+}
+
+/// The pure verification-plus-fact-match gate for a proof-backed Cosmos corridor. A verified Cosmos
+/// deposit clears only when the fact names the same source chain, the same deposit by the reference
+/// derived from its proven key, the amount, recipient and asset the value under the app hash
+/// actually carries, and only when the proven confirmations reach the corridor depth. The proven
+/// values, not the fact's, are carried forward.
+pub fn match_cosmos_deposit(
+    corridor: &Corridor,
+    proven: &CosmosDeposit,
+    fact: &BridgeFact,
+) -> Result<TrustlessMint, TrustlessError> {
+    if !corridor.tier.is_proof_backed() {
+        return Err(TrustlessError::NotProofBacked);
+    }
+    if fact.source_chain != corridor.chain_id {
+        return Err(TrustlessError::SourceMismatch {
+            corridor: corridor.chain_id,
+            fact: fact.source_chain,
+        });
+    }
+    if fact.source_ref.0 != proven.source_ref {
+        return Err(TrustlessError::ReferenceMismatch);
+    }
+    if fact.amount != proven.amount {
+        return Err(TrustlessError::AmountMismatch {
+            proven: proven.amount,
+            fact: fact.amount,
+        });
+    }
+    if fact.recipient.0 != proven.recipient {
+        return Err(TrustlessError::RecipientMismatch);
+    }
+    if fact.asset_id.0 != proven.asset_id {
+        return Err(TrustlessError::AssetMismatch);
+    }
+    if proven.confirmations < corridor.confirmation_depth {
+        return Err(TrustlessError::InsufficientConfirmations {
+            have: proven.confirmations,
+            need: corridor.confirmation_depth,
+        });
+    }
+    Ok(TrustlessMint {
+        asset_id: proven.asset_id,
+        recipient: proven.recipient,
+        amount: proven.amount,
+        source_ref: proven.source_ref,
+        source_chain: corridor.chain_id,
+        confirmations: proven.confirmations,
+    })
+}
+
+/// The trustless admission path for a Cosmos corridor. It clears the fact-match gate, then applies
+/// the gateway's replay and per-asset cap checks against current state. The gateway is read only
+/// here: the authoritative mint is left at the same seam the Bitcoin path documents, not opened for
+/// a proof-backed deposit without the corridor's STARK verified on chain.
+pub fn admit_cosmos_trustless(
+    gateway: &Gateway,
+    corridor: &Corridor,
+    proven: &CosmosDeposit,
+    fact: &BridgeFact,
+) -> Result<TrustlessMint, TrustlessError> {
+    let mint = match_cosmos_deposit(corridor, proven, fact)?;
+    apply_replay_and_cap(gateway, &mint)?;
     Ok(mint)
 }
 
@@ -312,6 +450,364 @@ mod tests {
                 minted: 0,
                 cap: 249_999,
                 add: 250_000
+            })
+        );
+    }
+
+    const ETH_CHAIN: u32 = 1;
+    const COSMOS_CHAIN: u32 = 8;
+    const ETH_ASSET: [u8; 16] = [0x77; 16];
+    const COSMOS_ASSET: [u8; 16] = [0x22; 16];
+
+    fn eth_corridor(tier: Tier) -> Corridor {
+        Corridor {
+            chain_id: ETH_CHAIN,
+            name: "Ethereum",
+            tier,
+            grade: TrustGrade::Trustless,
+            confirmation_depth: 64,
+            origin_asset: origin_tag(ETH_CHAIN),
+            cap_base_units: 1_000_000,
+            active: true,
+        }
+    }
+
+    fn cosmos_corridor(tier: Tier) -> Corridor {
+        Corridor {
+            chain_id: COSMOS_CHAIN,
+            name: "Cosmos Hub",
+            tier,
+            grade: TrustGrade::Trustless,
+            confirmation_depth: 2,
+            origin_asset: origin_tag(COSMOS_CHAIN),
+            cap_base_units: 1_000_000,
+            active: true,
+        }
+    }
+
+    fn eth_proven(
+        source_ref: [u8; 32],
+        amount: u128,
+        recipient: [u8; 32],
+        asset: [u8; 16],
+        finality: u32,
+    ) -> EthereumDeposit {
+        EthereumDeposit {
+            source_ref,
+            amount,
+            recipient,
+            asset_id: asset,
+            block_number: 20_000_000,
+            finality_depth: finality,
+        }
+    }
+
+    fn cosmos_proven(
+        source_ref: [u8; 32],
+        amount: u128,
+        recipient: [u8; 32],
+        asset: [u8; 16],
+        confs: u32,
+    ) -> CosmosDeposit {
+        CosmosDeposit {
+            source_ref,
+            amount,
+            recipient,
+            asset_id: asset,
+            height: 18_500_000,
+            confirmations: confs,
+        }
+    }
+
+    fn fact_with_asset(
+        c: &Corridor,
+        source_ref: [u8; 32],
+        amount: u128,
+        recipient: [u8; 32],
+        asset: [u8; 16],
+    ) -> BridgeFact {
+        BridgeFact {
+            version: FACT_VERSION,
+            source_chain: c.chain_id,
+            dest_chain: DEST,
+            route_id: 1,
+            direction: Direction::Deposit,
+            nonce: 1,
+            source_ref: SourceRef(source_ref),
+            asset_id: AssetId(asset),
+            amount,
+            recipient: Recipient(recipient),
+            finality_depth: c.confirmation_depth,
+            observed_height: 800_000,
+            expiry_height: 900_000,
+        }
+    }
+
+    #[test]
+    fn an_ethereum_proof_that_matches_the_fact_clears_the_gate() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let r = [0x33u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
+        let f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
+        let mint = match_ethereum_deposit(&c, &p, &f).expect("matching proof mints");
+        assert_eq!(mint.amount, 250_000);
+        assert_eq!(mint.recipient, recipient);
+        assert_eq!(mint.source_ref, r);
+        assert_eq!(mint.source_chain, ETH_CHAIN);
+        assert_eq!(mint.asset_id, ETH_ASSET);
+        assert_eq!(mint.confirmations, 64);
+    }
+
+    #[test]
+    fn a_federated_ethereum_corridor_is_refused_from_the_trustless_path() {
+        let c = eth_corridor(Tier::Federated);
+        let r = [0x33u8; 32];
+        let p = eth_proven(r, 250_000, [0x42u8; 32], ETH_ASSET, 64);
+        let f = fact_with_asset(&c, r, 250_000, [0x42u8; 32], ETH_ASSET);
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::NotProofBacked)
+        );
+    }
+
+    #[test]
+    fn an_ethereum_fact_that_overstates_the_amount_is_refused() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let r = [0x33u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
+        let f = fact_with_asset(&c, r, 250_001, recipient, ETH_ASSET);
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::AmountMismatch {
+                proven: 250_000,
+                fact: 250_001
+            })
+        );
+    }
+
+    #[test]
+    fn an_ethereum_fact_that_names_a_different_recipient_is_refused() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let r = [0x33u8; 32];
+        let p = eth_proven(r, 250_000, [0x42u8; 32], ETH_ASSET, 64);
+        let f = fact_with_asset(&c, r, 250_000, [0x43u8; 32], ETH_ASSET);
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::RecipientMismatch)
+        );
+    }
+
+    #[test]
+    fn an_ethereum_fact_that_names_a_different_asset_is_refused() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let r = [0x33u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
+        let f = fact_with_asset(&c, r, 250_000, recipient, [0x88u8; 16]);
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::AssetMismatch)
+        );
+    }
+
+    #[test]
+    fn an_ethereum_fact_whose_reference_is_not_the_proven_one_is_refused() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let recipient = [0x42u8; 32];
+        let p = eth_proven([0x33u8; 32], 250_000, recipient, ETH_ASSET, 64);
+        let f = fact_with_asset(&c, [0x99u8; 32], 250_000, recipient, ETH_ASSET);
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::ReferenceMismatch)
+        );
+    }
+
+    #[test]
+    fn an_ethereum_fact_on_a_different_source_chain_is_refused() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let r = [0x33u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
+        let mut f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
+        f.source_chain = 5;
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::SourceMismatch {
+                corridor: ETH_CHAIN,
+                fact: 5
+            })
+        );
+    }
+
+    #[test]
+    fn an_ethereum_deposit_short_of_the_corridor_finality_is_refused() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let r = [0x33u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 63);
+        let f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::InsufficientConfirmations { have: 63, need: 64 })
+        );
+    }
+
+    #[test]
+    fn ethereum_admission_clears_within_the_asset_cap() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let gw = gateway_with_cap(ETH_ASSET, 1_000_000);
+        let r = [0x33u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
+        let f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
+        let mint = admit_ethereum_trustless(&gw, &c, &p, &f).expect("within cap");
+        assert_eq!(mint.amount, 250_000);
+        assert_eq!(mint.asset_id, ETH_ASSET);
+    }
+
+    #[test]
+    fn ethereum_admission_refuses_an_unregistered_asset() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let gw = Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000);
+        let r = [0x33u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
+        let f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
+        assert_eq!(
+            admit_ethereum_trustless(&gw, &c, &p, &f),
+            Err(TrustlessError::AssetNotRegistered)
+        );
+    }
+
+    #[test]
+    fn ethereum_admission_refuses_a_deposit_over_the_asset_cap() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let gw = gateway_with_cap(ETH_ASSET, 249_999);
+        let r = [0x33u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
+        let f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
+        assert_eq!(
+            admit_ethereum_trustless(&gw, &c, &p, &f),
+            Err(TrustlessError::AssetCapExceeded {
+                minted: 0,
+                cap: 249_999,
+                add: 250_000
+            })
+        );
+    }
+
+    #[test]
+    fn a_cosmos_proof_that_matches_the_fact_clears_the_gate() {
+        let c = cosmos_corridor(Tier::ProofBacked);
+        let r = [0x55u8; 32];
+        let recipient = [0x51u8; 32];
+        let p = cosmos_proven(r, 7_500_000, recipient, COSMOS_ASSET, 2);
+        let f = fact_with_asset(&c, r, 7_500_000, recipient, COSMOS_ASSET);
+        let mint = match_cosmos_deposit(&c, &p, &f).expect("matching proof mints");
+        assert_eq!(mint.amount, 7_500_000);
+        assert_eq!(mint.recipient, recipient);
+        assert_eq!(mint.source_ref, r);
+        assert_eq!(mint.source_chain, COSMOS_CHAIN);
+        assert_eq!(mint.asset_id, COSMOS_ASSET);
+        assert_eq!(mint.confirmations, 2);
+    }
+
+    #[test]
+    fn a_federated_cosmos_corridor_is_refused_from_the_trustless_path() {
+        let c = cosmos_corridor(Tier::Federated);
+        let r = [0x55u8; 32];
+        let p = cosmos_proven(r, 7_500_000, [0x51u8; 32], COSMOS_ASSET, 2);
+        let f = fact_with_asset(&c, r, 7_500_000, [0x51u8; 32], COSMOS_ASSET);
+        assert_eq!(
+            match_cosmos_deposit(&c, &p, &f),
+            Err(TrustlessError::NotProofBacked)
+        );
+    }
+
+    #[test]
+    fn a_cosmos_fact_that_overstates_the_amount_is_refused() {
+        let c = cosmos_corridor(Tier::ProofBacked);
+        let r = [0x55u8; 32];
+        let recipient = [0x51u8; 32];
+        let p = cosmos_proven(r, 7_500_000, recipient, COSMOS_ASSET, 2);
+        let f = fact_with_asset(&c, r, 7_500_001, recipient, COSMOS_ASSET);
+        assert_eq!(
+            match_cosmos_deposit(&c, &p, &f),
+            Err(TrustlessError::AmountMismatch {
+                proven: 7_500_000,
+                fact: 7_500_001
+            })
+        );
+    }
+
+    #[test]
+    fn a_cosmos_fact_that_names_a_different_asset_is_refused() {
+        let c = cosmos_corridor(Tier::ProofBacked);
+        let r = [0x55u8; 32];
+        let recipient = [0x51u8; 32];
+        let p = cosmos_proven(r, 7_500_000, recipient, COSMOS_ASSET, 2);
+        let f = fact_with_asset(&c, r, 7_500_000, recipient, [0x11u8; 16]);
+        assert_eq!(
+            match_cosmos_deposit(&c, &p, &f),
+            Err(TrustlessError::AssetMismatch)
+        );
+    }
+
+    #[test]
+    fn a_cosmos_fact_whose_reference_is_not_the_proven_one_is_refused() {
+        let c = cosmos_corridor(Tier::ProofBacked);
+        let recipient = [0x51u8; 32];
+        let p = cosmos_proven([0x55u8; 32], 7_500_000, recipient, COSMOS_ASSET, 2);
+        let f = fact_with_asset(&c, [0x99u8; 32], 7_500_000, recipient, COSMOS_ASSET);
+        assert_eq!(
+            match_cosmos_deposit(&c, &p, &f),
+            Err(TrustlessError::ReferenceMismatch)
+        );
+    }
+
+    #[test]
+    fn a_cosmos_deposit_short_of_the_corridor_depth_is_refused() {
+        let c = cosmos_corridor(Tier::ProofBacked);
+        let r = [0x55u8; 32];
+        let recipient = [0x51u8; 32];
+        let p = cosmos_proven(r, 7_500_000, recipient, COSMOS_ASSET, 1);
+        let f = fact_with_asset(&c, r, 7_500_000, recipient, COSMOS_ASSET);
+        assert_eq!(
+            match_cosmos_deposit(&c, &p, &f),
+            Err(TrustlessError::InsufficientConfirmations { have: 1, need: 2 })
+        );
+    }
+
+    #[test]
+    fn cosmos_admission_clears_within_the_asset_cap() {
+        let c = cosmos_corridor(Tier::ProofBacked);
+        let gw = gateway_with_cap(COSMOS_ASSET, 1_000_000_000);
+        let r = [0x55u8; 32];
+        let recipient = [0x51u8; 32];
+        let p = cosmos_proven(r, 7_500_000, recipient, COSMOS_ASSET, 2);
+        let f = fact_with_asset(&c, r, 7_500_000, recipient, COSMOS_ASSET);
+        let mint = admit_cosmos_trustless(&gw, &c, &p, &f).expect("within cap");
+        assert_eq!(mint.amount, 7_500_000);
+        assert_eq!(mint.asset_id, COSMOS_ASSET);
+    }
+
+    #[test]
+    fn cosmos_admission_refuses_a_deposit_over_the_asset_cap() {
+        let c = cosmos_corridor(Tier::ProofBacked);
+        let gw = gateway_with_cap(COSMOS_ASSET, 7_499_999);
+        let r = [0x55u8; 32];
+        let recipient = [0x51u8; 32];
+        let p = cosmos_proven(r, 7_500_000, recipient, COSMOS_ASSET, 2);
+        let f = fact_with_asset(&c, r, 7_500_000, recipient, COSMOS_ASSET);
+        assert_eq!(
+            admit_cosmos_trustless(&gw, &c, &p, &f),
+            Err(TrustlessError::AssetCapExceeded {
+                minted: 0,
+                cap: 7_499_999,
+                add: 7_500_000
             })
         );
     }

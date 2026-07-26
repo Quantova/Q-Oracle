@@ -126,6 +126,8 @@ dependencies = [
  "q-gateway",
  "q-isolation",
  "qlc-bitcoin",
+ "qlc-cosmos",
+ "qlc-ethereum",
  "qtv-crypto 0.3.0",
 ]
 

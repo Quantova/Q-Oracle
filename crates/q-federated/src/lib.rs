@@ -10,7 +10,10 @@ pub mod trustless;
 pub mod watch;
 
 pub use admission::{admit, install, FederatedError};
-pub use trustless::{admit_bitcoin_trustless, match_bitcoin_deposit, TrustlessError, TrustlessMint};
+pub use trustless::{
+    admit_bitcoin_trustless, admit_cosmos_trustless, admit_ethereum_trustless, match_bitcoin_deposit,
+    match_cosmos_deposit, match_ethereum_deposit, TrustlessError, TrustlessMint,
+};
 pub use corridors::{
     corridors, find, origin_tag, Corridor, Tier, TrustGrade, ALGORAND, APTOS, AVALANCHE, BNB_CHAIN,
     CARDANO, CCTP_USDC, DOGECOIN, HEDERA, LITECOIN, MONERO, NEAR, POLYGON, SOLANA, STELLAR, SUI,
