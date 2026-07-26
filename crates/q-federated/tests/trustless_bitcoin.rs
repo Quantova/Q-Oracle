@@ -10,6 +10,7 @@ use qlc_bitcoin::params::Network;
 use qlc_bitcoin::tx::Transaction;
 use qlc_bitcoin::{
     verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, NetworkParams, TrustlessDeposit,
+    U256,
 };
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
@@ -88,9 +89,13 @@ fn prove_crafted_deposit(bridge: &[u8], recipient: [u8; 32], amount: u64) -> (Tr
     let raw = raw_deposit_tx(&[(amount, bridge.to_vec()), (0, op_return(recipient))]);
     let txid = Transaction::parse(&raw).unwrap().txid();
     let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
+    let checkpoint = Checkpoint {
+        height: chain.start_height,
+        hash: chain.header_at(chain.start_height).unwrap().block_hash(),
+        min_work: U256::ZERO,
+    };
     let proven =
-        verify_trustless_deposit(&chain, &EASY, &Checkpoint::accepting(&chain), 0, &[], &raw, bridge)
-            .unwrap();
+        verify_trustless_deposit(&chain, &EASY, &checkpoint, 0, &[], &raw, bridge).unwrap();
     (proven, raw)
 }
 
