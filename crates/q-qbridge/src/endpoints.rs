@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn a_federated_deposit_is_routed_to_the_quorum_admission_and_mints() {
-        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let ops: Vec<Op> = (0..4).map(mk).collect();
         let mut set = OperatorSet::new(3);
         for op in &ops {
             set.register(op.id, op.pk);
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn a_proof_that_does_not_match_the_pool_tier_is_refused() {
-        let ops: Vec<Op> = (0..5).map(mk).collect();
+        let ops: Vec<Op> = (0..4).map(mk).collect();
         let mut set = OperatorSet::new(3);
         for op in &ops {
             set.register(op.id, op.pk);

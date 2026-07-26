@@ -68,7 +68,7 @@ fn gateway(ops: &[Op], threshold: usize) -> Gateway {
 
 #[test]
 fn vector_prove_nothing_message_fails() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let zero = BridgeFact {
         version: 0,
@@ -95,7 +95,7 @@ fn vector_prove_nothing_message_fails() {
 
 #[test]
 fn vector_off_by_one_quorum_fails() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let f = deposit([0x12; 32], 500);
 
@@ -118,7 +118,7 @@ fn vector_off_by_one_quorum_fails() {
 
 #[test]
 fn vector_duplicate_signer_fails() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let f = deposit([0x13; 32], 500);
     let s0 = attest(&ops[0], &f);
@@ -171,7 +171,7 @@ fn vector_signature_over_a_reshaped_fact_does_not_count() {
 
 #[test]
 fn vector_reference_is_consumed_before_any_second_mint() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     let f = deposit([0x16; 32], 500);
     gw.process_deposit(&AttestationEnvelope {
@@ -183,7 +183,7 @@ fn vector_reference_is_consumed_before_any_second_mint() {
     let reshaped = deposit([0x16; 32], 400);
     let replay = AttestationEnvelope {
         fact: reshaped.clone(),
-        signatures: (2..5).map(|i| attest(&ops[i], &reshaped)).collect(),
+        signatures: (1..4).map(|i| attest(&ops[i], &reshaped)).collect(),
     };
     assert_eq!(gw.process_deposit(&replay), Err(GatewayError::ReplayedReference));
     assert_eq!(gw.minted_of_asset(&ASSET), 500);

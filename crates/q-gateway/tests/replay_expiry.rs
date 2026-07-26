@@ -71,7 +71,7 @@ fn attest(ops: &[&Op], f: &BridgeFact) -> AttestationEnvelope {
 
 #[test]
 fn a_deposit_past_its_signed_deadline_is_rejected_and_the_deadline_block_still_admits() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
     gw.advance_to(2_000);
 
@@ -91,7 +91,7 @@ fn a_deposit_past_its_signed_deadline_is_rejected_and_the_deadline_block_still_a
 
 #[test]
 fn a_non_advancing_nonce_on_the_same_route_and_direction_is_rejected() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
 
     let first = fact([0x11; 32], 1, 5, 900_000, 500);
@@ -115,7 +115,7 @@ fn a_non_advancing_nonce_on_the_same_route_and_direction_is_rejected() {
 
 #[test]
 fn a_strictly_increasing_nonce_sequence_admits() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
 
     for (i, nonce) in [5u64, 6, 7, 100].iter().enumerate() {
@@ -129,7 +129,7 @@ fn a_strictly_increasing_nonce_sequence_admits() {
 
 #[test]
 fn the_same_nonce_on_a_different_route_keeps_its_own_sequence() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
 
     let route_one = fact([0x31; 32], 1, 9, 900_000, 500);

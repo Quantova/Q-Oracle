@@ -80,7 +80,7 @@ fn gateway(ops: &[Op]) -> Gateway {
 
 #[test]
 fn an_operator_quorum_freeze_halts_mints_then_auto_expires() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.advance_to(1_000);
 
@@ -111,7 +111,7 @@ fn an_operator_quorum_freeze_halts_mints_then_auto_expires() {
 
 #[test]
 fn a_short_freeze_quorum_does_not_freeze() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.advance_to(1_000);
 
@@ -128,12 +128,12 @@ fn a_short_freeze_quorum_does_not_freeze() {
 
 #[test]
 fn one_honest_watchdog_can_pause_within_a_bounded_window() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.advance_to(1_000);
 
     let until = 1_000 + WATCHDOG_MAX_WINDOW;
-    let alarm = sign_ctx(&ops[4], &until_message(until), WATCHDOG_DOMAIN);
+    let alarm = sign_ctx(&ops[3], &until_message(until), WATCHDOG_DOMAIN);
     gw.watchdog_freeze(until, &alarm).expect("a single honest watcher pauses the gateway");
     assert!(gw.is_frozen());
 
@@ -150,12 +150,12 @@ fn one_honest_watchdog_can_pause_within_a_bounded_window() {
 
 #[test]
 fn a_watchdog_cannot_pause_beyond_the_bounded_window() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.advance_to(1_000);
 
     let too_far = 1_000 + WATCHDOG_MAX_WINDOW + 1;
-    let alarm = sign_ctx(&ops[4], &until_message(too_far), WATCHDOG_DOMAIN);
+    let alarm = sign_ctx(&ops[3], &until_message(too_far), WATCHDOG_DOMAIN);
     assert_eq!(
         gw.watchdog_freeze(too_far, &alarm),
         Err(GatewayError::WatchdogWindowTooWide {
@@ -168,7 +168,7 @@ fn a_watchdog_cannot_pause_beyond_the_bounded_window() {
 
 #[test]
 fn a_stranger_alarm_is_not_a_watchdog() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.advance_to(1_000);
 

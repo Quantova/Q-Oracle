@@ -75,7 +75,7 @@ fn gateway_with_mint(ops: &[Op], exit_delay: u64) -> Gateway {
 
 #[test]
 fn an_exit_burns_the_origin_asset_and_waits_out_the_delay() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway_with_mint(&ops, 100);
     gw.advance_to(1_000);
     assert_eq!(gw.minted_of_asset(&ASSET), 800);
@@ -104,7 +104,7 @@ fn an_exit_burns_the_origin_asset_and_waits_out_the_delay() {
 
 #[test]
 fn an_exit_larger_than_the_minted_balance_is_rejected() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway_with_mint(&ops, 100);
     assert_eq!(
         gw.request_exit(ASSET, 801, DEST),
@@ -115,7 +115,7 @@ fn an_exit_larger_than_the_minted_balance_is_rejected() {
 
 #[test]
 fn a_zero_exit_is_rejected() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway_with_mint(&ops, 100);
     assert_eq!(
         gw.request_exit(ASSET, 0, DEST),
@@ -125,7 +125,7 @@ fn a_zero_exit_is_rejected() {
 
 #[test]
 fn a_zero_delay_exit_clears_at_once() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway_with_mint(&ops, 0);
     gw.advance_to(500);
     let ticket = gw.request_exit(ASSET, 100, DEST).expect("exit request");
@@ -136,7 +136,7 @@ fn a_zero_delay_exit_clears_at_once() {
 
 #[test]
 fn an_unknown_exit_ticket_is_rejected() {
-    let ops: Vec<Op> = (0..5).map(mk).collect();
+    let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway_with_mint(&ops, 100);
     assert_eq!(gw.finalize_exit(41), Err(GatewayError::UnknownExit(41)));
 }

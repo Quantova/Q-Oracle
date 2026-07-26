@@ -17,6 +17,14 @@ pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
 
+/// The smallest quorum that is a two-thirds supermajority of `size` and is never below two. A
+/// corridor with no explicit quorum falls back to this floor so it can never admit on a bare
+/// majority or a lone signer.
+pub fn supermajority_floor(size: usize) -> usize {
+    let two_thirds = (size.saturating_mul(2) + 2) / 3;
+    two_thirds.max(2)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CorridorConfig {
     pub confirmation_depth: u32,
@@ -163,7 +171,9 @@ impl Gateway {
             if c.quorum > 0 {
                 c.quorum
             } else {
-                self.operators.threshold()
+                self.operators
+                    .threshold()
+                    .max(supermajority_floor(self.operators.size()))
             }
         })
     }
@@ -341,7 +351,9 @@ impl Gateway {
         let required = if corridor.quorum > 0 {
             corridor.quorum
         } else {
-            self.operators.threshold()
+            self.operators
+                .threshold()
+                .max(supermajority_floor(self.operators.size()))
         };
         let mut w = Writer::new();
         w.u32(source_chain);
@@ -460,7 +472,7 @@ impl Gateway {
         let required = if corridor.quorum > 0 {
             corridor.quorum
         } else {
-            self.operators.threshold()
+            self.operators.threshold().max(supermajority_floor(size))
         };
         if required == 0 || required > size {
             return Err(GatewayError::ThinQuorum {
@@ -655,6 +667,38 @@ mod tests {
     }
 
     #[test]
+    fn a_corridor_with_no_explicit_quorum_still_requires_a_two_thirds_supermajority() {
+        let (s, mut gw) = nine_op_gateway(3);
+        assert_eq!(gw.corridor_quorum(1), Some(6), "the fallback is raised to two thirds of nine");
+        let f = fact();
+        assert_eq!(
+            gw.process_deposit(&envelope(&s[0..5], &f)),
+            Err(GatewayError::BelowThreshold { got: 5, need: 6 }),
+            "five of nine is not a supermajority on the fallback path"
+        );
+        assert_eq!(
+            gw.process_deposit(&envelope(&s[0..6], &f)).expect("a real supermajority admits").amount,
+            500
+        );
+    }
+
+    #[test]
+    fn a_single_operator_fallback_admit_is_refused() {
+        let s: Vec<_> = (0..1).map(signer).collect();
+        let mut set = OperatorSet::new(1);
+        set.register(s[0].0, s[0].1);
+        let mut gw = Gateway::new(9000, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+        let f = fact();
+        assert_eq!(
+            gw.process_deposit(&envelope(&s[0..1], &f)),
+            Err(GatewayError::ThinQuorum { quorum: 2, size: 1 }),
+            "a lone operator can never form a two-thirds quorum of at least two"
+        );
+    }
+
+    #[test]
     fn a_zero_corridor_quorum_is_refused() {
         let (_s, mut gw) = nine_op_gateway(3);
         assert_eq!(
@@ -674,7 +718,7 @@ mod tests {
         a.route_id = 7;
         a.nonce = 5;
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..3], &a)).expect("first corridor admits").amount,
+            gw.process_deposit(&envelope(&s[0..6], &a)).expect("first corridor admits").amount,
             500
         );
 
@@ -685,7 +729,7 @@ mod tests {
         b.source_ref = SourceRef([0x22; 32]);
         b.asset_id = AssetId([0xb2; 16]);
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..3], &b))
+            gw.process_deposit(&envelope(&s[0..6], &b))
                 .expect("a second corridor sharing the route is not blocked by the first's higher nonce")
                 .amount,
             500

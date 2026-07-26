@@ -54,7 +54,7 @@ fn signer_pubkey(id: u32) -> qtv_crypto::ml_dsa::PublicKey {
 #[test]
 fn full_pipeline_from_watcher_to_mint() {
     let mut set = OperatorSet::new(3);
-    for id in 0..5u32 {
+    for id in 0..4u32 {
         set.register(id, signer_pubkey(id));
     }
     let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000);
