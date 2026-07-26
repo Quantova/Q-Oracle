@@ -34,9 +34,6 @@ pub const MAX_ADMITS_PER_WINDOW: usize = 256;
 
 pub const MAX_ADMITS_PER_IP_PER_WINDOW: usize = 16;
 
-/// The shared bridge state every connection dispatches against. A read-write lock guards it so read
-/// RPCs and the heavy read-only half of a deposit run concurrently under a shared lock, and only the
-/// short mutating commit takes the exclusive lock.
 pub type SharedState = Arc<RwLock<BridgeState>>;
 
 enum Admit {
