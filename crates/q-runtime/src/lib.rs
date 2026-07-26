@@ -14,8 +14,10 @@
 //! corridor stays at the seam `q_federated::trustless` documents. This crate never opens a
 //! no-quorum mint entry point.
 
+pub mod http;
 pub mod json;
 pub mod wire;
 
+pub use http::{serve, SharedState, MAX_BODY, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_HEAD};
 pub use json::Json;
 pub use wire::{decode_request, decode_response, encode_request, encode_response, method_of, WireError};
