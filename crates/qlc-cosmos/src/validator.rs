@@ -78,6 +78,9 @@ pub fn overlap_power(old: &ValidatorSet, new: &ValidatorSet) -> u128 {
 }
 
 pub fn overlap_meets(old: &ValidatorSet, new: &ValidatorSet, numerator: u64, denominator: u64) -> bool {
+    if numerator == 0 {
+        return false;
+    }
     let overlap = overlap_power(old, new);
     overlap * (denominator as u128) > old.total_power() * (numerator as u128)
 }
@@ -140,6 +143,16 @@ mod tests {
         let mut b = a.clone();
         b.validators[0].pubkey[0] ^= 0xff;
         assert_ne!(a.hash(), b.hash());
+    }
+
+    #[test]
+    fn a_zero_overlap_numerator_fails_closed_even_at_full_overlap() {
+        let set = ValidatorSet::new(vec![validator(1, 50), validator(2, 50)]);
+        assert!(overlap_meets(&set, &set, 2, 3));
+        assert!(
+            !overlap_meets(&set, &set, 0, 3),
+            "a zero numerator would otherwise admit a near-empty overlap"
+        );
     }
 
     #[test]

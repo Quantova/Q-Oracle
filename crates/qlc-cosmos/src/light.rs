@@ -47,7 +47,9 @@ pub fn check_trusting_commit(
     let signed = tally_signed_power(cfg.chain_id, new_header, new_commit, &trusted.validators)
         .map_err(LightError::Commit)?;
     let trusted_total = trusted.validators.total_power();
-    if signed * (cfg.overlap_denominator as u128) > trusted_total * (cfg.overlap_numerator as u128) {
+    if cfg.overlap_numerator > 0
+        && signed * (cfg.overlap_denominator as u128) > trusted_total * (cfg.overlap_numerator as u128)
+    {
         Ok(())
     } else {
         Err(LightError::InsufficientTrustedSignatures { signed, trusted_total })
@@ -220,6 +222,35 @@ mod tests {
         let result = verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &new).unwrap();
         assert_eq!(result.height, 150);
         assert_eq!(result.validators, new);
+    }
+
+    #[test]
+    fn a_zero_overlap_numerator_config_fails_closed() {
+        let a = keyed(1, 40);
+        let b = keyed(2, 40);
+        let c = keyed(3, 20);
+        let d = keyed(4, 20);
+        let old = make_set(&[&a, &b, &c]);
+        let new = make_set(&[&a, &b, &d]);
+        let trusted = trusted_from(100, &old, &old);
+        let header = header_for(150, &new, &new);
+        let commit = signed_commit(&header, &[&a, &b, &d]);
+        let cfg = ChainConfig { overlap_numerator: 0, ..COSMOS_HUB };
+
+        assert!(
+            matches!(
+                verify_transition(&cfg, &trusted, &header, &commit, &new),
+                Err(LightError::InsufficientOverlap { .. })
+            ),
+            "a zero overlap numerator must not fail open at the transition gate"
+        );
+        assert!(
+            matches!(
+                check_trusting_commit(&cfg, &trusted, &header, &commit),
+                Err(LightError::InsufficientTrustedSignatures { .. })
+            ),
+            "a zero overlap numerator must not fail open at the trusting-commit gate"
+        );
     }
 
     #[test]
