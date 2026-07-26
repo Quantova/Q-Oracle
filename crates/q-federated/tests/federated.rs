@@ -174,7 +174,7 @@ fn every_named_corridor_is_labeled_federated_tier() {
         assert_eq!(c.tier, Tier::Federated);
         assert_eq!(c.tier.label(), "Federated");
         assert_eq!(c.grade, TrustGrade::TrustedRelayer);
-        assert!(!c.tier.verifies_foreign_on_chain());
+        assert!(!c.tier.is_proof_backed_tier());
         assert!(!c.tier.proof_backed());
     }
     let names: BTreeSet<&str> = all.iter().map(|c| c.name).collect();
@@ -268,7 +268,7 @@ fn only_an_ml_dsa_attestation_over_the_canonical_preimage_counts() {
         Err(FederatedError::Gateway(GatewayError::BadSignature(2)))
     );
     assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
-    assert!(!c.tier.verifies_foreign_on_chain());
+    assert!(!c.tier.is_proof_backed_tier());
     assert!(!c.tier.proof_backed());
 }
 
