@@ -19,6 +19,7 @@ members = [
     "crates/qlc-ethereum",
     "crates/qlc-bitcoin",
     "crates/q-qbridge",
+    "crates/q-runtime",
 ]
 
 [workspace.package]
