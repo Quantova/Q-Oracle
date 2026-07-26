@@ -415,4 +415,83 @@ mod tests {
 
         assert!(!verify(&a, b"forge anything under an identity key", &sig));
     }
+
+    fn order_bytes_le() -> [u8; 32] {
+        arr32("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010")
+    }
+
+    fn add_bytes_le(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        let mut carry = 0u16;
+        for i in 0..32 {
+            let t = a[i] as u16 + b[i] as u16 + carry;
+            out[i] = t as u8;
+            carry = t >> 8;
+        }
+        out
+    }
+
+    fn valid_signature() -> ([u8; 32], Vec<u8>, [u8; 64]) {
+        let seed = arr32("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
+        let pk = public_key_from_seed(&seed);
+        let msg = b"quantova cosmos corridor".to_vec();
+        let sig = sign(&seed, &msg);
+        assert!(verify(&pk, &msg, &sig));
+        (pk, msg, sig)
+    }
+
+    #[test]
+    fn a_scalar_equal_to_the_group_order_is_rejected() {
+        let (pk, msg, mut sig) = valid_signature();
+        sig[32..64].copy_from_slice(&order_bytes_le());
+        assert!(!verify(&pk, &msg, &sig));
+    }
+
+    #[test]
+    fn a_scalar_plus_the_group_order_is_rejected() {
+        let (pk, msg, mut sig) = valid_signature();
+        let mut s = [0u8; 32];
+        s.copy_from_slice(&sig[32..64]);
+        let malleated = add_bytes_le(&s, &order_bytes_le());
+        sig[32..64].copy_from_slice(&malleated);
+        assert!(!verify(&pk, &msg, &sig));
+    }
+
+    #[test]
+    fn a_non_canonical_public_key_y_is_rejected() {
+        let (_pk, msg, sig) = valid_signature();
+        let non_canonical =
+            arr32("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
+        assert!(decompress(&non_canonical).is_none());
+        assert!(!verify(&non_canonical, &msg, &sig));
+    }
+
+    #[test]
+    fn a_zero_x_with_the_sign_bit_set_is_rejected() {
+        let (_pk, msg, sig) = valid_signature();
+        let mut a = [0u8; 32];
+        a[0] = 1;
+        a[31] |= 0x80;
+        assert!(decompress(&a).is_none());
+        assert!(!verify(&a, &msg, &sig));
+    }
+
+    #[test]
+    fn a_small_order_public_key_is_rejected() {
+        let (_pk, msg, sig) = valid_signature();
+        let small_order =
+            arr32("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
+        assert!(decompress(&small_order).unwrap().is_small_order());
+        assert!(!verify(&small_order, &msg, &sig));
+    }
+
+    #[test]
+    fn a_small_order_r_is_rejected() {
+        let (pk, msg, mut sig) = valid_signature();
+        let small_order =
+            arr32("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
+        sig[0..32].copy_from_slice(&small_order);
+        sig[32..64].copy_from_slice(&Scalar::from_u64(9).to_bytes_le());
+        assert!(!verify(&pk, &msg, &sig));
+    }
 }
