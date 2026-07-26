@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use q_qbridge::{handle, BridgeState};
 
 use crate::json::{self, object, Json};
+use crate::persist::{advanced, GuardStore};
 use crate::wire::{decode_request, encode_response};
 
 pub const MAX_BODY: usize = 2 * 1024 * 1024;
@@ -73,7 +74,7 @@ impl Limiter {
     }
 }
 
-pub fn serve(listener: TcpListener, state: SharedState) {
+pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardStore>>) {
     thread::spawn(move || {
         let limiter = Arc::new(Limiter::default());
         for stream in listener.incoming() {
@@ -102,9 +103,10 @@ pub fn serve(listener: TcpListener, state: SharedState) {
             }
             let state = state.clone();
             let limiter = limiter.clone();
+            let store = store.clone();
             thread::spawn(move || {
                 let _slot = SlotGuard { limiter, ip };
-                let _ = handle_connection(stream, state);
+                let _ = handle_connection(stream, state, store);
             });
         }
     });
@@ -121,7 +123,11 @@ impl Drop for SlotGuard {
     }
 }
 
-fn handle_connection(mut stream: TcpStream, state: SharedState) -> IoResult<()> {
+fn handle_connection(
+    mut stream: TcpStream,
+    state: SharedState,
+    store: Option<Arc<GuardStore>>,
+) -> IoResult<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
     let deadline = Instant::now() + REQUEST_DEADLINE;
@@ -211,11 +217,23 @@ fn handle_connection(mut stream: TcpStream, state: SharedState) -> IoResult<()> 
 
     let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle(&mut guard, request)));
-    drop(guard);
-    match outcome {
-        Ok(response) => write_response(&mut stream, 200, &encode_response(&response).render()),
-        Err(_) => write_error(&mut stream, 500, "internal_error", "the request handler failed"),
+    let response = match outcome {
+        Ok(response) => response,
+        Err(_) => {
+            drop(guard);
+            return write_error(&mut stream, 500, "internal_error", "the request handler failed");
+        }
+    };
+    if advanced(&response) {
+        if let Some(store) = store.as_ref() {
+            if store.save(&guard.gateway.encode_guard()).is_err() {
+                drop(guard);
+                return write_error(&mut stream, 500, "internal_error", "the admission could not be persisted");
+            }
+        }
     }
+    drop(guard);
+    write_response(&mut stream, 200, &encode_response(&response).render())
 }
 
 fn is_timeout(e: &std::io::Error) -> bool {
@@ -405,7 +423,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let gateway = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
         let state: SharedState = Arc::new(Mutex::new(BridgeState::seeded(gateway)));
-        serve(listener, state);
+        serve(listener, state, None);
         port
     }
 
@@ -475,7 +493,7 @@ mod tests {
         })
         .join();
 
-        serve(listener, state);
+        serve(listener, state, None);
         let response = round_trip(
             port,
             "POST /v1/list_pools HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
