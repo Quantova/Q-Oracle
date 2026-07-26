@@ -6,17 +6,23 @@ Quantova is a sovereign post quantum Layer 1 with only NIST standardized schemes
 
 ## What it is for
 
-Q-Oracle is the off chain translation layer for the Quantova gateway. Its nodes watch a foreign chain, run that chain's own verification off chain, and turn a confirmed foreign event into a post quantum attestation the Quantova chain can accept. The attestation is a module lattice signature over the observed fact, carried with a proof of correct verification. The chain never sees the foreign signature. It sees only the post quantum attestation Q-Oracle produced.
+Q-Oracle is the off chain translation layer for the Quantova gateway. Its nodes watch a foreign chain, run that chain's own verification off chain, and turn a confirmed foreign event into a post quantum attestation the Quantova chain can accept. The attestation is a module lattice signature over the observed fact. The chain never sees the foreign signature. It sees only the post quantum attestation Q-Oracle produced.
 
-This is the Airlock boundary named in POLICY-crypto section 7. Classical cryptography is permitted here and nowhere else, and nothing in the organization may import this repository. The isolation is enforced two ways. The repository is dropped from the classical crypto deny gate that every other repository runs, and no other crate is allowed to depend on it, so the classical code has exactly one home and no path inward.
+## What is in the repository
+
+This repository holds the working bridge oracle, not a placeholder. It carries the airlock isolation boundary, both admission paths, and the light client verifiers for the trustless chains.
+
+The federated admission path takes an operator quorum. Each operator watches its own independent source, signs the observed fact with a module lattice key, and the gateway admits the deposit only when a supermajority of distinct operators agree and the per asset and per epoch budgets still hold.
+
+The trustless admission path takes a proof in place of a quorum. A proof backed corridor is verified from the foreign chain's own consensus, and the proven amount, recipient, and reference are carried forward, never the caller's word.
+
+The trustless corridors are Bitcoin, Ethereum, and Cosmos. The Bitcoin verifier follows the proof of work header chain, holds it to a pinned checkpoint and a cumulative work floor, and confirms the deposit to the network confirmation depth. The Ethereum verifier runs a sync committee light client with a BLS aggregate check and reads the deposit from the receipt under a finalized header. The Cosmos verifier runs a Tendermint light client with a validator overlap rule and reads the deposit value at its proven key under the committed app hash.
+
+A proof backed deposit is admitted here but not minted here. The authoritative on chain mint stays behind the trustless deposit seam, so this repository never opens a mint entry point of its own.
 
 ## The one exemption, stated plainly
 
-Every other Quantova repository runs `cargo deny` against the shared deny list, which makes classical crypto crates unrepresentable anywhere in the dependency tree. Q-Oracle's own deny file lifts that ban for this repository alone. License and advisory checks still apply here. The exemption is the whole point of the repository, and it is the reason nothing may import it.
-
-## Status
-
-This repository is early and holds no bridge code yet. The classical verification code arrives in the gateway phase, Wave F. Until then the repository fixes the boundary in place, the exemption, the no import rule, and the license, so the one place classical cryptography is ever allowed is decided before any of it is written.
+Every other Quantova repository runs cargo deny against the shared deny list, which makes classical crypto crates unrepresentable anywhere in the dependency tree. Q-Oracle's own deny file lifts that ban for this repository alone. License and advisory checks still apply here. The exemption is the whole point of the repository, and it is the reason nothing may import it. The isolation is enforced two ways. The repository is dropped from the classical crypto deny gate that every other repository runs, and no other crate is allowed to depend on it, so the classical code has exactly one home and no path inward.
 
 ## Governance and license
 
