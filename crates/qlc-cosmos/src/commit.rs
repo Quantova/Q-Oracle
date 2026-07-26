@@ -117,7 +117,7 @@ pub enum CommitError {
     NotEnoughVotingPower { signed: u128, total: u128 },
 }
 
-pub fn verify_commit(
+pub fn tally_signed_power(
     chain_id: &str,
     header: &Header,
     commit: &Commit,
@@ -126,7 +126,6 @@ pub fn verify_commit(
     if commit.block_id.hash != header.hash() {
         return Err(CommitError::HeaderMismatch);
     }
-    let total = set.total_power();
     let mut signed: u128 = 0;
     let mut counted: Vec<[u8; 20]> = Vec::new();
 
@@ -161,6 +160,17 @@ pub fn verify_commit(
         }
     }
 
+    Ok(signed)
+}
+
+pub fn verify_commit(
+    chain_id: &str,
+    header: &Header,
+    commit: &Commit,
+    set: &ValidatorSet,
+) -> Result<u128, CommitError> {
+    let signed = tally_signed_power(chain_id, header, commit, set)?;
+    let total = set.total_power();
     if has_two_thirds(signed, total) {
         Ok(signed)
     } else {
