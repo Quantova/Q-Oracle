@@ -25,7 +25,7 @@ impl Tier {
         matches!(self, Tier::ProofBacked)
     }
 
-    pub fn verifies_foreign_on_chain(self) -> bool {
+    pub fn is_proof_backed_tier(self) -> bool {
         matches!(self, Tier::ProofBacked)
     }
 
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn the_tier_verifies_nothing_foreign_and_carries_no_proof() {
         for c in corridors() {
-            assert!(!c.tier.verifies_foreign_on_chain());
+            assert!(!c.tier.is_proof_backed_tier());
             assert!(!c.tier.proof_backed());
         }
     }
