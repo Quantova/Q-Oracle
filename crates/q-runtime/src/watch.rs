@@ -152,7 +152,6 @@ impl WatcherPool {
     }
 }
 
-/// Whether the guard was durably persisted for an ingested deposit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Durability {
     NotPersisted,
