@@ -8,10 +8,13 @@ use q_exits::{ExitProver, ExitStatement, HashStark, EXIT_STATEMENT_VERSION};
 use q_isolation::{admit, PqArtifact};
 use qtv_crypto::ml_dsa::SIGNATURE_BYTES;
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 fn real_attestation() -> q_airlock::AttestationEnvelope {
     let ctx = CorridorContext {
         source_chain: 1,
         dest_chain: 9000,
+        dest_chain_id: DEST_ID,
         route_id: 7,
         required_confirmations: 6,
     };

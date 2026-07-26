@@ -7,6 +7,8 @@ use q_gateway::gateway::{FREEZE_DOMAIN, WATCHDOG_DOMAIN, WATCHDOG_MAX_WINDOW};
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const CHAIN_ID: u32 = 9000;
 const SOURCE: u32 = 1;
 const ASSET: [u8; 16] = [0xa1; 16];
@@ -56,7 +58,7 @@ fn attest(ops: &[&Op], fact: &BridgeFact) -> AttestationEnvelope {
         fact: fact.clone(),
         signatures: ops
             .iter()
-            .map(|op| sign_ctx(op, &fact.attest_preimage(), ATTEST_DOMAIN))
+            .map(|op| sign_ctx(op, &fact.attest_preimage(DEST_ID), ATTEST_DOMAIN))
             .collect(),
     }
 }
@@ -72,7 +74,7 @@ fn gateway(ops: &[Op]) -> Gateway {
     for op in ops {
         set.register(op.id, op.pk);
     }
-    let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000);
+    let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000);
     gw.register_corridor(SOURCE, 6);
     gw.register_asset_cap(ASSET, 1_000);
     gw

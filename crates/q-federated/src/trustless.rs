@@ -235,6 +235,8 @@ pub fn admit_cosmos_trustless(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use crate::corridors::{origin_tag, Tier, TrustGrade};
     use q_codec::{AssetId, Direction, Recipient, SourceRef, FACT_VERSION};
     use q_gateway::{Gateway, OperatorSet};
@@ -283,7 +285,7 @@ mod tests {
     }
 
     fn gateway_with_cap(asset: [u8; 16], cap: u128) -> Gateway {
-        let mut gw = Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000);
+        let mut gw = Gateway::new(DEST, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
         gw.register_asset_cap(asset, cap);
         gw
     }
@@ -429,7 +431,7 @@ mod tests {
     #[test]
     fn admission_refuses_an_unregistered_asset() {
         let c = corridor(Tier::ProofBacked);
-        let mut gw = Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000);
+        let mut gw = Gateway::new(DEST, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
         let txid = [0x11u8; 32];
         let recipient = [0x42u8; 32];
         let p = proven(txid, 250_000, recipient, 6);
@@ -701,7 +703,7 @@ mod tests {
     #[test]
     fn ethereum_admission_refuses_an_unregistered_asset() {
         let c = eth_corridor(Tier::ProofBacked);
-        let mut gw = Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000);
+        let mut gw = Gateway::new(DEST, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
         let r = [0x33u8; 32];
         let recipient = [0x42u8; 32];
         let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);

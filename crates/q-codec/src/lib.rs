@@ -298,10 +298,11 @@ impl BridgeFact {
             && self.expiry_height == 0
     }
 
-    pub fn attest_preimage(&self) -> Vec<u8> {
+    pub fn attest_preimage(&self, dest_chain_id: u64) -> Vec<u8> {
         let mut w = Writer::new();
         w.fixed(ATTEST_DOMAIN);
         w.fixed(&self.encode());
+        w.u64(dest_chain_id);
         w.finish()
     }
 
@@ -331,6 +332,8 @@ impl BridgeFact {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEST_ID: u64 = 0x0123_4567_89AB_CDEF;
 
     fn sample() -> BridgeFact {
         BridgeFact {
@@ -451,74 +454,128 @@ mod tests {
     #[test]
     fn attest_preimage_carries_the_encoded_fact() {
         let f = sample();
-        let pre = f.attest_preimage();
-        assert!(pre.ends_with(&f.encode()));
+        let pre = f.attest_preimage(DEST_ID);
+        assert_eq!(
+            &pre[ATTEST_DOMAIN.len()..ATTEST_DOMAIN.len() + FACT_ENCODED_LEN],
+            f.encode().as_slice()
+        );
+        assert!(pre.ends_with(&DEST_ID.to_le_bytes()));
     }
 
     #[test]
     fn attest_preimage_is_deterministic() {
         let f = sample();
-        assert_eq!(f.attest_preimage(), f.attest_preimage());
+        assert_eq!(f.attest_preimage(DEST_ID), f.attest_preimage(DEST_ID));
     }
 
     #[test]
     fn attest_preimage_leads_with_the_context_and_is_longer_than_the_fact() {
         let f = sample();
-        let pre = f.attest_preimage();
+        let pre = f.attest_preimage(DEST_ID);
         assert!(pre.starts_with(ATTEST_DOMAIN));
-        assert_eq!(pre.len(), ATTEST_DOMAIN.len() + FACT_ENCODED_LEN);
+        assert_eq!(pre.len(), ATTEST_DOMAIN.len() + FACT_ENCODED_LEN + 8);
     }
 
     #[test]
     fn every_semantic_field_moves_the_preimage() {
-        let base = sample().attest_preimage();
+        let base = sample().attest_preimage(DEST_ID);
 
         let mut a = sample();
         a.source_chain = 2;
-        assert_ne!(a.attest_preimage(), base);
+        assert_ne!(a.attest_preimage(DEST_ID), base);
 
         let mut b = sample();
         b.dest_chain = 9001;
-        assert_ne!(b.attest_preimage(), base);
+        assert_ne!(b.attest_preimage(DEST_ID), base);
 
         let mut c = sample();
         c.route_id = 8;
-        assert_ne!(c.attest_preimage(), base);
+        assert_ne!(c.attest_preimage(DEST_ID), base);
 
         let mut d = sample();
         d.direction = Direction::ExitAck;
-        assert_ne!(d.attest_preimage(), base);
+        assert_ne!(d.attest_preimage(DEST_ID), base);
 
         let mut e = sample();
         e.nonce = 43;
-        assert_ne!(e.attest_preimage(), base);
+        assert_ne!(e.attest_preimage(DEST_ID), base);
 
         let mut g = sample();
         g.source_ref = SourceRef([8u8; 32]);
-        assert_ne!(g.attest_preimage(), base);
+        assert_ne!(g.attest_preimage(DEST_ID), base);
 
         let mut h = sample();
         h.asset_id = AssetId([4u8; 16]);
-        assert_ne!(h.attest_preimage(), base);
+        assert_ne!(h.attest_preimage(DEST_ID), base);
 
         let mut i = sample();
         i.amount = 1_000_001;
-        assert_ne!(i.attest_preimage(), base);
+        assert_ne!(i.attest_preimage(DEST_ID), base);
 
         let mut j = sample();
         j.recipient = Recipient([6u8; 32]);
-        assert_ne!(j.attest_preimage(), base);
+        assert_ne!(j.attest_preimage(DEST_ID), base);
 
         let mut k = sample();
         k.finality_depth = 13;
-        assert_ne!(k.attest_preimage(), base);
+        assert_ne!(k.attest_preimage(DEST_ID), base);
 
         let mut l = sample();
         l.observed_height = 880_001;
-        assert_ne!(l.attest_preimage(), base);
+        assert_ne!(l.attest_preimage(DEST_ID), base);
 
         let mut m = sample();
         m.expiry_height = 900_001;
-        assert_ne!(m.attest_preimage(), base);
+        assert_ne!(m.attest_preimage(DEST_ID), base);
+
+        assert_ne!(
+            sample().attest_preimage(DEST_ID ^ (1u64 << 40)),
+            base,
+            "the destination chain u64 moves the preimage while the fact stays fixed"
+        );
+    }
+
+    fn pinned_vector_fact() -> BridgeFact {
+        BridgeFact {
+            version: FACT_VERSION,
+            source_chain: 1,
+            dest_chain: 9000,
+            route_id: 7,
+            direction: Direction::Deposit,
+            nonce: 42,
+            source_ref: SourceRef([9u8; 32]),
+            asset_id: AssetId([3u8; 16]),
+            amount: 1_000_000,
+            recipient: Recipient([5u8; 32]),
+            finality_depth: 6,
+            observed_height: 111,
+            expiry_height: 222,
+        }
+    }
+
+    #[test]
+    fn the_attest_preimage_matches_the_pinned_cross_chain_vector() {
+        const PINNED: [u8; 173] = [
+            81, 85, 65, 78, 84, 79, 86, 65, 47, 81, 45, 79, 82, 65, 67, 76, 69, 47, 65, 84, 84, 69,
+            83, 84, 47, 118, 49, 1, 1, 0, 0, 0, 40, 35, 0, 0, 7, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0,
+            0, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+            9, 9, 9, 9, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 64, 66, 15, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+            5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 0, 0, 0, 111, 0, 0, 0, 0, 0, 0, 0, 222, 0, 0, 0, 0,
+            0, 0, 0, 239, 205, 171, 137, 103, 69, 35, 1,
+        ];
+        let preimage = pinned_vector_fact().attest_preimage(0x0123_4567_89AB_CDEF);
+        assert_eq!(preimage.len(), ATTEST_DOMAIN.len() + FACT_ENCODED_LEN + 8);
+        assert_eq!(preimage.len(), 173);
+        assert_eq!(preimage.as_slice(), PINNED.as_slice());
+        assert!(preimage.starts_with(ATTEST_DOMAIN));
+        assert_eq!(
+            &preimage[ATTEST_DOMAIN.len()..ATTEST_DOMAIN.len() + FACT_ENCODED_LEN],
+            pinned_vector_fact().encode().as_slice()
+        );
+        assert_eq!(
+            &preimage[ATTEST_DOMAIN.len() + FACT_ENCODED_LEN..],
+            0x0123_4567_89AB_CDEFu64.to_le_bytes()
+        );
     }
 }

@@ -49,6 +49,7 @@ pub struct MintReceipt {
 
 pub struct Gateway {
     chain_id: u32,
+    dest_chain_id: u64,
     operators: OperatorSet,
     governance: OperatorSet,
     used_refs: BTreeSet<[u8; 32]>,
@@ -70,9 +71,10 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    pub fn new(chain_id: u32, operators: OperatorSet, epoch_cap: u128) -> Gateway {
+    pub fn new(chain_id: u32, dest_chain_id: u64, operators: OperatorSet, epoch_cap: u128) -> Gateway {
         Gateway {
             chain_id,
+            dest_chain_id,
             operators,
             governance: OperatorSet::new(0),
             used_refs: BTreeSet::new(),
@@ -555,7 +557,7 @@ impl Gateway {
             });
         }
 
-        let message = fact.attest_preimage();
+        let message = fact.attest_preimage(self.dest_chain_id);
         let distinct = verify_quorum(&message, ATTEST_DOMAIN, &env.signatures, &self.operators)?;
         if distinct.len() < required {
             return Err(GatewayError::BelowThreshold {
@@ -628,8 +630,8 @@ impl Gateway {
     }
 }
 
-pub fn attestation_message(fact: &BridgeFact) -> Vec<u8> {
-    fact.attest_preimage()
+pub fn attestation_message(fact: &BridgeFact, dest_chain_id: u64) -> Vec<u8> {
+    fact.attest_preimage(dest_chain_id)
 }
 
 #[cfg(test)]
@@ -637,6 +639,8 @@ mod tests {
     use super::*;
     use q_codec::{AssetId, Recipient, SourceRef, FACT_VERSION};
     use qtv_crypto::ml_dsa;
+
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
 
     fn fact() -> BridgeFact {
         BridgeFact {
@@ -665,7 +669,7 @@ mod tests {
     }
 
     fn sign(sk: &ml_dsa::SecretKey, id: u32, f: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(sk, &f.attest_preimage(), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(sk, &f.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
         SignerSig {
             operator_id: id,
             signature: sig.to_vec(),
@@ -679,7 +683,7 @@ mod tests {
         for (id, pk, _) in &s {
             set.register(*id, *pk);
         }
-        let mut gw = Gateway::new(9000, set, 1_000_000);
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
         gw.register_corridor(1, 6);
         gw.register_asset_cap([0xa1; 16], 1_000);
 
@@ -698,7 +702,7 @@ mod tests {
         for (id, pk, _) in &s {
             set.register(*id, *pk);
         }
-        let mut gw = Gateway::new(9000, set, 1_000_000);
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
         gw.register_corridor(1, 6);
         gw.register_asset_cap([0xa1; 16], 1_000);
         (s, gw)
@@ -761,7 +765,7 @@ mod tests {
         let s: Vec<_> = (0..1).map(signer).collect();
         let mut set = OperatorSet::new(1);
         set.register(s[0].0, s[0].1);
-        let mut gw = Gateway::new(9000, set, 1_000_000);
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
         gw.register_corridor(1, 6);
         gw.register_asset_cap([0xa1; 16], 1_000);
         let f = fact();
@@ -817,7 +821,7 @@ mod tests {
         for (id, pk, _) in &s {
             set.register(*id, *pk);
         }
-        let mut gw = Gateway::new(9000, set, 1_000_000);
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
         gw.register_corridor(1, 6);
         gw.register_asset_cap([0xa1; 16], 1_000);
 
@@ -871,7 +875,7 @@ mod tests {
         for (id, pk, _) in &s {
             set.register(*id, *pk);
         }
-        let mut gw = Gateway::new(9000, set, 1_000_000);
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
         gw.register_corridor(1, 6);
         gw.register_asset_cap([0xa1; 16], 1_000);
         gw.admit_trustless([0xa1; 16], [0xab; 32], 400, 1)

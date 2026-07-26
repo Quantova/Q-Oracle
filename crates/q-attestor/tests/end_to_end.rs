@@ -8,6 +8,8 @@ use q_attestor::{
 };
 use q_gateway::{Gateway, OperatorSet};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const CHAIN_ID: u32 = 9000;
 const SOURCE: u32 = 1;
 const ASSET: [u8; 16] = [0xa1; 16];
@@ -16,6 +18,7 @@ fn context() -> CorridorContext {
     CorridorContext {
         source_chain: SOURCE,
         dest_chain: CHAIN_ID,
+        dest_chain_id: DEST_ID,
         route_id: 1,
         required_confirmations: 6,
     }
@@ -57,7 +60,7 @@ fn full_pipeline_from_watcher_to_mint() {
     for id in 0..4u32 {
         set.register(id, signer_pubkey(id));
     }
-    let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000);
+    let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000);
     gw.register_corridor(SOURCE, 6);
     gw.register_asset_cap(ASSET, 1_000);
 

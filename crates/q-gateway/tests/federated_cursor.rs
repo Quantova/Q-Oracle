@@ -7,6 +7,8 @@ use q_gateway::gateway::BATCH_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const CHAIN_ID: u32 = 9000;
 const SOURCE: u32 = 4;
 
@@ -48,7 +50,7 @@ fn gateway(ops: &[Op]) -> Gateway {
     for op in ops {
         set.register(op.id, op.pk);
     }
-    let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000);
+    let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000);
     gw.register_corridor(SOURCE, 6);
     gw
 }

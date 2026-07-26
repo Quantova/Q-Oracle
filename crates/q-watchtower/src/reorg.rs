@@ -80,11 +80,13 @@ impl ReorgWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use q_gateway::OperatorSet;
 
     fn gateway_with_corridor(source_chain: u32) -> Gateway {
         let set = OperatorSet::new(1);
-        let mut gw = Gateway::new(9000, set, 1_000_000);
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
         gw.register_corridor(source_chain, 6);
         gw
     }

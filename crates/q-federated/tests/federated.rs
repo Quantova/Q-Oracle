@@ -14,6 +14,8 @@ use q_federated::{
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const CHAIN_ID: u32 = 9000;
 
 struct Op {
@@ -36,7 +38,7 @@ fn gateway(ops: &[Op], threshold: usize) -> Gateway {
     for op in ops {
         set.register(op.id, op.pk);
     }
-    let mut gw = Gateway::new(CHAIN_ID, set, 1_000_000_000_000_000);
+    let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000_000_000_000);
     install(&mut gw);
     gw
 }
@@ -60,7 +62,7 @@ fn deposit(c: &Corridor, source_ref: [u8; 32], amount: u128) -> BridgeFact {
 }
 
 fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
     SignerSig {
         operator_id: op.id,
         signature: sig.to_vec(),

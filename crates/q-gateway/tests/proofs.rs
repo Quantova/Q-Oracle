@@ -7,6 +7,8 @@ use q_gateway::gateway::REORG_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const CHAIN_ID: u32 = 9000;
 const SOURCE_BTC: u32 = 1;
 const ASSET_A: [u8; 16] = [0xa1; 16];
@@ -36,7 +38,7 @@ fn sign_over(op: &TestOp, message: &[u8], context: &[u8]) -> SignerSig {
 }
 
 fn sign_fact(op: &TestOp, fact: &BridgeFact) -> SignerSig {
-    sign_over(op, &fact.attest_preimage(), ATTEST_DOMAIN)
+    sign_over(op, &fact.attest_preimage(DEST_ID), ATTEST_DOMAIN)
 }
 
 fn deposit_fact(source_ref: [u8; 32], asset: [u8; 16], amount: u128) -> BridgeFact {
@@ -62,7 +64,7 @@ fn build_gateway(ops: &[TestOp], threshold: usize, epoch_cap: u128) -> Gateway {
     for op in ops {
         set.register(op.id, op.pk);
     }
-    let mut gw = Gateway::new(CHAIN_ID, set, epoch_cap);
+    let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, epoch_cap);
     gw.register_corridor(SOURCE_BTC, 6);
     gw.register_asset_cap(ASSET_A, 1_000);
     gw.register_asset_cap(ASSET_B, 1_000);

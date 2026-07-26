@@ -14,6 +14,13 @@ use crate::http::{serve, SharedState};
 /// The Quantova destination chain the oracle mints against.
 pub const DEST_CHAIN: u32 = 9000;
 
+/// The destination chain's native u64 id, folded into every bridge attestation preimage so a
+/// sibling chain sharing the u32 `DEST_CHAIN` cannot replay a quorum. Zero is the unconfigured
+/// sentinel: a runtime left at zero refuses every operator quorum, so a misconfigured oracle fails
+/// closed rather than minting an attestation another chain could replay. A real deployment supplies
+/// its chain id through [`boot_with`].
+pub const DEST_CHAIN_ID: u64 = 0;
+
 /// The default rolling epoch mint budget the gateway enforces across every corridor.
 pub const DEFAULT_EPOCH_CAP: u128 = 1_000_000_000_000_000_000_000_000;
 
@@ -23,14 +30,14 @@ pub const DEFAULT_EPOCH_CAP: u128 = 1_000_000_000_000_000_000_000_000;
 /// and the proof-backed trustless path out of the box and safely refuses federated mints until an
 /// operator quorum and its independent sources are declared.
 pub fn boot() -> BridgeState {
-    boot_with(OperatorSet::new(0), DEFAULT_EPOCH_CAP)
+    boot_with(OperatorSet::new(0), DEST_CHAIN_ID, DEFAULT_EPOCH_CAP)
 }
 
 /// Build a seeded bridge state against a configured operator set and epoch budget. The federated
 /// corridors mint once their operators are registered here and their independent sources declared
 /// through [`declare_operator_source`].
-pub fn boot_with(operators: OperatorSet, epoch_cap: u128) -> BridgeState {
-    let gateway = Gateway::new(DEST_CHAIN, operators, epoch_cap);
+pub fn boot_with(operators: OperatorSet, dest_chain_id: u64, epoch_cap: u128) -> BridgeState {
+    let gateway = Gateway::new(DEST_CHAIN, dest_chain_id, operators, epoch_cap);
     BridgeState::seeded(gateway)
 }
 
@@ -81,6 +88,8 @@ mod tests {
     use qlc_bitcoin::tx::Transaction;
     use qlc_bitcoin::{BlockHeader, Checkpoint, Network as BtcNetwork, NetworkParams, U256};
     use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
+
+    const TEST_DEST_ID: u64 = 0x0000_002a_0000_2328;
 
     const EASY: NetworkParams = NetworkParams {
         network: BtcNetwork::Bitcoin,
@@ -223,7 +232,7 @@ mod tests {
     }
 
     fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(TEST_DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),
@@ -237,7 +246,7 @@ mod tests {
         for op in &ops {
             set.register(op.id, op.pk);
         }
-        let mut state = boot_with(set, DEFAULT_EPOCH_CAP);
+        let mut state = boot_with(set, TEST_DEST_ID, DEFAULT_EPOCH_CAP);
         for op in &ops {
             declare_operator_source(
                 &mut state,

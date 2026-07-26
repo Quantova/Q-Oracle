@@ -14,6 +14,8 @@ use qlc_stark::shake256_256;
 use qtv_crypto::sha3::shake256;
 use qtv_stark::sponge::{absorb_output, SHAKE256_RATE};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const PK_A: &str = "a491d1b0ecd9bb917989f0e74f0dea0422eac4a873e5e2644f368dffb9a6e20fd6e10c1b77654d067c0618f6e5a7f79a";
 const PK_B: &str = "b301803f8b5ac4a1133581fc676dfedc60d891dd5fa99028805e5ea5b08d3491af75d0707adab3b70c6a6a580217bf81";
 const PK_C: &str = "b53d21a4cfd562c469cc81514d4ce5a6b577d8403d32a394dc265dd190b47fa9f829fdd7963afdf972e5e77854051f6f";
@@ -46,6 +48,7 @@ fn ctx() -> CorridorContext {
     CorridorContext {
         source_chain: 2,
         dest_chain: 9000,
+        dest_chain_id: DEST_ID,
         route_id: 7,
         required_confirmations: 6,
     }
@@ -74,7 +77,7 @@ fn a_verified_foreign_fact_becomes_two_pq_artifacts_and_nothing_foreign_crosses(
 
     let signer = SoftSigner::from_seed(0, &[0x09u8; 32]);
     let fact = translate(&lock(), &ctx(), 900_000);
-    let env = package(&fact, &signer);
+    let env = package(&fact, &signer, DEST_ID);
 
     let statement = corridor_statement(signer.operator_id(), &fact);
     let commitment = prove_statement(&statement);

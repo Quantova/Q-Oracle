@@ -117,7 +117,7 @@ impl<S: AttestationSigner> Operator<S> {
             return Err(OperatorError::AlreadySigned);
         }
 
-        let message = fact.attest_preimage();
+        let message = fact.attest_preimage(ctx.dest_chain_id);
         let signature = self.signer.sign(&message, ATTEST_DOMAIN);
         self.signed_refs.insert(lock.source_ref);
 
@@ -137,10 +137,13 @@ mod tests {
     use crate::signer::{AttestationSigner, SoftSigner};
     use qtv_crypto::ml_dsa::{self, SIGNATURE_BYTES};
 
+    const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
     fn ctx() -> CorridorContext {
         CorridorContext {
             source_chain: 1,
             dest_chain: 9000,
+            dest_chain_id: DEST_ID,
             route_id: 7,
             required_confirmations: 6,
         }
@@ -173,7 +176,7 @@ mod tests {
 
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&signed.sig.signature);
-        let preimage = signed.fact.attest_preimage();
+        let preimage = signed.fact.attest_preimage(DEST_ID);
         assert!(ml_dsa::verify(&pk, &preimage, &sig, ATTEST_DOMAIN));
     }
 
@@ -185,7 +188,7 @@ mod tests {
 
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&signed.sig.signature);
-        let preimage = signed.fact.attest_preimage();
+        let preimage = signed.fact.attest_preimage(DEST_ID);
         assert!(!ml_dsa::verify(&pk, &preimage, &sig, b"QUANTOVA/Q-ORACLE/REORG/v1"));
     }
 }

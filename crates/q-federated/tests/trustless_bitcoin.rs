@@ -14,6 +14,8 @@ use qlc_bitcoin::{
 };
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
+const DEST_ID: u64 = 0x0000_002a_0000_2328;
+
 const BITCOIN_CHAIN: u32 = 2;
 const DEST: u32 = 9000;
 
@@ -132,7 +134,7 @@ fn mk(id: u32) -> Op {
 }
 
 fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
     SignerSig {
         operator_id: op.id,
         signature: sig.to_vec(),
@@ -145,7 +147,7 @@ fn gateway_with_bitcoin_asset() -> Gateway {
     for op in &ops {
         set.register(op.id, op.pk);
     }
-    let mut gw = Gateway::new(DEST, set, 1_000_000_000_000);
+    let mut gw = Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000);
     install(&mut gw);
     gw.register_asset_cap(origin_tag(BITCOIN_CHAIN).0, 1_000_000_000);
     gw

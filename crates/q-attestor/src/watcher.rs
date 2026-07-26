@@ -18,6 +18,7 @@ pub struct ObservedLock {
 pub struct CorridorContext {
     pub source_chain: u32,
     pub dest_chain: u32,
+    pub dest_chain_id: u64,
     pub route_id: u32,
     pub required_confirmations: u32,
 }
