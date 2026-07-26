@@ -213,6 +213,31 @@ impl Transaction {
     }
 }
 
+/// Check a raw transaction is the claimed deposit. Its id must equal the id proven included in
+/// the proof of work chain, and its outputs must pay the bridge deposit script the claimed
+/// amount and name the claimed recipient. Every value is read from the transaction bytes, so a
+/// relayer cannot state an amount or a recipient the transaction does not carry. This is the
+/// content half of a trustless Bitcoin deposit, the inclusion half is the SPV Merkle proof.
+pub fn check_deposit_tx(
+    raw_tx: &[u8],
+    deposit_script: &[u8],
+    expected_txid: [u8; 32],
+    expected_amount: u128,
+    expected_recipient: [u8; 32],
+) -> Result<(), SpvError> {
+    let tx = Transaction::parse(raw_tx)?;
+    if tx.txid() != expected_txid {
+        return Err(SpvError::TransactionMismatch);
+    }
+    let (amount, recipient) = tx
+        .deposit_to(deposit_script)
+        .ok_or(SpvError::TransactionMismatch)?;
+    if amount != expected_amount || recipient != expected_recipient {
+        return Err(SpvError::TransactionMismatch);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,6 +335,40 @@ mod tests {
         let bytes = serialize_legacy(&tx);
         let parsed = Transaction::parse(&bytes).expect("parses");
         assert!(parsed.deposit_to(&bridge).is_none());
+    }
+
+    #[test]
+    fn check_deposit_tx_binds_the_transaction_to_the_claimed_values() {
+        let bridge = p2pkh([0x11; 20]);
+        let recipient = [0x42u8; 32];
+        let tx = build(vec![
+            TxOutput { value: 250_000, script: bridge.clone() },
+            TxOutput { value: 0, script: op_return(recipient) },
+        ]);
+        let raw = serialize_legacy(&tx);
+        let txid = tx.txid();
+        // The exact transaction values check out.
+        assert!(check_deposit_tx(&raw, &bridge, txid, 250_000, recipient).is_ok());
+        // A claimed amount the transaction does not pay is refused.
+        assert_eq!(
+            check_deposit_tx(&raw, &bridge, txid, 250_001, recipient),
+            Err(SpvError::TransactionMismatch)
+        );
+        // A claimed recipient the transaction does not name is refused.
+        assert_eq!(
+            check_deposit_tx(&raw, &bridge, txid, 250_000, [0x43u8; 32]),
+            Err(SpvError::TransactionMismatch)
+        );
+        // A transaction id other than this transaction's own is refused.
+        assert_eq!(
+            check_deposit_tx(&raw, &bridge, [0u8; 32], 250_000, recipient),
+            Err(SpvError::TransactionMismatch)
+        );
+        // Malformed transaction bytes are refused.
+        assert_eq!(
+            check_deposit_tx(&[0u8; 4], &bridge, txid, 250_000, recipient),
+            Err(SpvError::MalformedTransaction)
+        );
     }
 
     #[test]

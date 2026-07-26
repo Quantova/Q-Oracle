@@ -47,6 +47,7 @@ pub enum SpvError {
     HeightOutOfRange,
     InsufficientConfirmations { have: u32, need: u32 },
     MalformedTransaction,
+    TransactionMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
