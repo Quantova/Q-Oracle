@@ -132,21 +132,23 @@ impl<'a> Reader<'a> {
         Reader { buf, pos: 0 }
     }
 
-    pub fn u8(&mut self) -> Result<u8, CodecError> {
-        let end = self.pos + 1;
+    fn advance(&self, n: usize) -> Result<usize, CodecError> {
+        let end = self.pos.checked_add(n).ok_or(CodecError::ShortInput)?;
         if end > self.buf.len() {
             return Err(CodecError::ShortInput);
         }
+        Ok(end)
+    }
+
+    pub fn u8(&mut self) -> Result<u8, CodecError> {
+        let end = self.advance(1)?;
         let v = self.buf[self.pos];
         self.pos = end;
         Ok(v)
     }
 
     pub fn u32(&mut self) -> Result<u32, CodecError> {
-        let end = self.pos + 4;
-        if end > self.buf.len() {
-            return Err(CodecError::ShortInput);
-        }
+        let end = self.advance(4)?;
         let mut a = [0u8; 4];
         a.copy_from_slice(&self.buf[self.pos..end]);
         self.pos = end;
@@ -154,10 +156,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn u64(&mut self) -> Result<u64, CodecError> {
-        let end = self.pos + 8;
-        if end > self.buf.len() {
-            return Err(CodecError::ShortInput);
-        }
+        let end = self.advance(8)?;
         let mut a = [0u8; 8];
         a.copy_from_slice(&self.buf[self.pos..end]);
         self.pos = end;
@@ -165,10 +164,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn u128(&mut self) -> Result<u128, CodecError> {
-        let end = self.pos + 16;
-        if end > self.buf.len() {
-            return Err(CodecError::ShortInput);
-        }
+        let end = self.advance(16)?;
         let mut a = [0u8; 16];
         a.copy_from_slice(&self.buf[self.pos..end]);
         self.pos = end;
@@ -176,10 +172,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn fixed(&mut self, n: usize) -> Result<&'a [u8], CodecError> {
-        let end = self.pos + n;
-        if end > self.buf.len() {
-            return Err(CodecError::ShortInput);
-        }
+        let end = self.advance(n)?;
         let s = &self.buf[self.pos..end];
         self.pos = end;
         Ok(s)
@@ -200,10 +193,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn bytes_u16(&mut self) -> Result<&'a [u8], CodecError> {
-        let end = self.pos + 2;
-        if end > self.buf.len() {
-            return Err(CodecError::ShortInput);
-        }
+        let end = self.advance(2)?;
         let mut a = [0u8; 2];
         a.copy_from_slice(&self.buf[self.pos..end]);
         let len = u16::from_le_bytes(a) as usize;
@@ -212,10 +202,7 @@ impl<'a> Reader<'a> {
     }
 
     pub fn bytes_u32(&mut self) -> Result<&'a [u8], CodecError> {
-        let end = self.pos + 4;
-        if end > self.buf.len() {
-            return Err(CodecError::ShortInput);
-        }
+        let end = self.advance(4)?;
         let mut a = [0u8; 4];
         a.copy_from_slice(&self.buf[self.pos..end]);
         let len = u32::from_le_bytes(a) as usize;
@@ -394,6 +381,25 @@ mod tests {
             BridgeFact::decode(&bytes[..bytes.len() - 1]),
             Err(CodecError::ShortInput)
         );
+    }
+
+    #[test]
+    fn an_oversized_length_prefix_errors_and_does_not_panic() {
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&u32::MAX.to_le_bytes());
+        framed.push(0x01);
+        let mut r = Reader::new(&framed);
+        assert_eq!(r.bytes_u32(), Err(CodecError::ShortInput));
+
+        let mut framed16 = Vec::new();
+        framed16.extend_from_slice(&u16::MAX.to_le_bytes());
+        framed16.push(0x01);
+        let mut r16 = Reader::new(&framed16);
+        assert_eq!(r16.bytes_u16(), Err(CodecError::ShortInput));
+
+        let mut past = Reader::new(&framed);
+        let _ = past.fixed(framed.len());
+        assert_eq!(past.u8(), Err(CodecError::ShortInput));
     }
 
     #[test]
