@@ -31,11 +31,19 @@ pub struct EvmChainConfig {
     pub finality_depth: u32,
     pub deposit_contract: [u8; 20],
     pub max_deposit_base_units: u128,
+    pub electra_epoch: Option<u64>,
 }
 
 impl EvmChainConfig {
     pub fn epoch_at_slot(&self, slot: u64) -> u64 {
         slot / self.slots_per_epoch
+    }
+
+    pub fn is_electra_at_slot(&self, slot: u64) -> bool {
+        match self.electra_epoch {
+            Some(epoch) => self.epoch_at_slot(slot) >= epoch,
+            None => false,
+        }
     }
 
     pub fn sync_committee_period(&self, slot: u64) -> u64 {
@@ -68,6 +76,8 @@ impl EvmChainConfig {
         )
     }
 }
+
+pub const MAINNET_ELECTRA_EPOCH: u64 = 364_032;
 
 fn beacon_forks() -> Vec<Fork> {
     vec![
@@ -119,6 +129,7 @@ pub fn ethereum() -> EvmChainConfig {
         finality_depth: 64,
         deposit_contract: [0x11; 20],
         max_deposit_base_units: 1_000_000_000_000_000_000_000_000u128,
+        electra_epoch: Some(MAINNET_ELECTRA_EPOCH),
     }
 }
 
@@ -136,6 +147,7 @@ pub fn bnb_chain() -> EvmChainConfig {
         finality_depth: 15,
         deposit_contract: [0x22; 20],
         max_deposit_base_units: 1_000_000_000_000_000_000_000_000u128,
+        electra_epoch: None,
     }
 }
 
@@ -153,6 +165,7 @@ pub fn polygon() -> EvmChainConfig {
         finality_depth: 128,
         deposit_contract: [0x33; 20],
         max_deposit_base_units: 1_000_000_000_000_000_000_000_000u128,
+        electra_epoch: None,
     }
 }
 
@@ -170,6 +183,7 @@ pub fn avalanche() -> EvmChainConfig {
         finality_depth: 1,
         deposit_contract: [0x44; 20],
         max_deposit_base_units: 1_000_000_000_000_000_000_000_000u128,
+        electra_epoch: None,
     }
 }
 
@@ -187,6 +201,7 @@ pub fn arbitrum() -> EvmChainConfig {
         finality_depth: 64,
         deposit_contract: [0x55; 20],
         max_deposit_base_units: 1_000_000_000_000_000_000_000_000u128,
+        electra_epoch: Some(MAINNET_ELECTRA_EPOCH),
     }
 }
 
@@ -204,6 +219,7 @@ pub fn optimism() -> EvmChainConfig {
         finality_depth: 64,
         deposit_contract: [0x66; 20],
         max_deposit_base_units: 1_000_000_000_000_000_000_000_000u128,
+        electra_epoch: Some(MAINNET_ELECTRA_EPOCH),
     }
 }
 
@@ -221,6 +237,7 @@ pub fn base() -> EvmChainConfig {
         finality_depth: 64,
         deposit_contract: [0x77; 20],
         max_deposit_base_units: 1_000_000_000_000_000_000_000_000u128,
+        electra_epoch: Some(MAINNET_ELECTRA_EPOCH),
     }
 }
 
@@ -238,6 +255,7 @@ pub fn robinhood_chain() -> EvmChainConfig {
         finality_depth: 64,
         deposit_contract: [0x88; 20],
         max_deposit_base_units: 1_000_000_000_000_000_000_000_000u128,
+        electra_epoch: Some(MAINNET_ELECTRA_EPOCH),
     }
 }
 
@@ -325,6 +343,16 @@ mod tests {
         assert!(!bnb_chain().verifies_beacon_sync_committee());
         assert!(!polygon().verifies_beacon_sync_committee());
         assert!(!avalanche().verifies_beacon_sync_committee());
+    }
+
+    #[test]
+    fn the_electra_boundary_comes_from_the_pinned_config_and_is_fail_closed_when_unset() {
+        let eth = ethereum();
+        let boundary = eth.electra_epoch.expect("a beacon chain pins its electra epoch");
+        let slots_per_epoch = eth.slots_per_epoch;
+        assert!(!eth.is_electra_at_slot(boundary * slots_per_epoch - 1));
+        assert!(eth.is_electra_at_slot(boundary * slots_per_epoch));
+        assert!(!bnb_chain().is_electra_at_slot(u64::MAX));
     }
 
     #[test]

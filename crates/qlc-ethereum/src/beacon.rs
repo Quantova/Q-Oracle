@@ -13,6 +13,9 @@ pub const FINALIZED_ROOT_INDEX: u64 = 105;
 pub const NEXT_SYNC_COMMITTEE_DEPTH: usize = 5;
 pub const NEXT_SYNC_COMMITTEE_INDEX: u64 = 55;
 
+pub const CURRENT_SYNC_COMMITTEE_DEPTH: usize = 5;
+pub const CURRENT_SYNC_COMMITTEE_INDEX: u64 = 54;
+
 pub const EXECUTION_RECEIPTS_DEPTH: usize = 5;
 pub const EXECUTION_RECEIPTS_INDEX: u64 = 19;
 
@@ -22,8 +25,38 @@ pub const FINALIZED_ROOT_DEPTH_ELECTRA: usize = 7;
 pub const NEXT_SYNC_COMMITTEE_GINDEX_ELECTRA: u64 = 87;
 pub const NEXT_SYNC_COMMITTEE_DEPTH_ELECTRA: usize = 6;
 
-pub const ELECTRA_GINDEX_SHIFT_PENDING: &str =
-    "mainnet moved to the electra fork in may 2025 and the finalized checkpoint and next sync committee generalized indices widen from 105 at depth 6 and 55 at depth 5 to 169 at depth 7 and 87 at depth 6, this engine still follows forks only through deneb and a founder must confirm the electra fork entry and a depth aware branch check before mainnet ethereum finality proofs are trusted live";
+pub const CURRENT_SYNC_COMMITTEE_GINDEX_ELECTRA: u64 = 86;
+pub const CURRENT_SYNC_COMMITTEE_DEPTH_ELECTRA: usize = 6;
+
+pub fn finalized_root_layout(electra: bool) -> (u64, usize) {
+    if electra {
+        (FINALIZED_ROOT_GINDEX_ELECTRA, FINALIZED_ROOT_DEPTH_ELECTRA)
+    } else {
+        (FINALIZED_ROOT_INDEX, FINALIZED_ROOT_DEPTH)
+    }
+}
+
+pub fn next_sync_committee_layout(electra: bool) -> (u64, usize) {
+    if electra {
+        (
+            NEXT_SYNC_COMMITTEE_GINDEX_ELECTRA,
+            NEXT_SYNC_COMMITTEE_DEPTH_ELECTRA,
+        )
+    } else {
+        (NEXT_SYNC_COMMITTEE_INDEX, NEXT_SYNC_COMMITTEE_DEPTH)
+    }
+}
+
+pub fn current_sync_committee_layout(electra: bool) -> (u64, usize) {
+    if electra {
+        (
+            CURRENT_SYNC_COMMITTEE_GINDEX_ELECTRA,
+            CURRENT_SYNC_COMMITTEE_DEPTH_ELECTRA,
+        )
+    } else {
+        (CURRENT_SYNC_COMMITTEE_INDEX, CURRENT_SYNC_COMMITTEE_DEPTH)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BeaconBlockHeader {
@@ -247,7 +280,16 @@ mod tests {
     }
 
     #[test]
-    fn the_electra_fork_widens_both_generalized_indices_by_one_depth() {
+    fn the_current_sync_committee_gindex_is_the_state_top_level_field_index() {
+        let current_sync_committee_field = 22u64;
+        let state_gindex = (1u64 << 5) + current_sync_committee_field;
+        assert_eq!(state_gindex, CURRENT_SYNC_COMMITTEE_INDEX);
+        assert_eq!(CURRENT_SYNC_COMMITTEE_INDEX, 54);
+        assert_eq!(CURRENT_SYNC_COMMITTEE_DEPTH, 5);
+    }
+
+    #[test]
+    fn the_electra_fork_widens_every_generalized_index_by_one_depth() {
         assert_eq!(FINALIZED_ROOT_GINDEX_ELECTRA, 169);
         assert_eq!(FINALIZED_ROOT_DEPTH_ELECTRA, FINALIZED_ROOT_DEPTH + 1);
         assert_eq!(NEXT_SYNC_COMMITTEE_GINDEX_ELECTRA, 87);
@@ -255,10 +297,20 @@ mod tests {
             NEXT_SYNC_COMMITTEE_DEPTH_ELECTRA,
             NEXT_SYNC_COMMITTEE_DEPTH + 1
         );
+        assert_eq!(CURRENT_SYNC_COMMITTEE_GINDEX_ELECTRA, 86);
+        assert_eq!(
+            CURRENT_SYNC_COMMITTEE_DEPTH_ELECTRA,
+            CURRENT_SYNC_COMMITTEE_DEPTH + 1
+        );
     }
 
     #[test]
-    fn the_electra_shift_awaits_founder_confirmation() {
-        assert!(!ELECTRA_GINDEX_SHIFT_PENDING.is_empty());
+    fn the_fork_aware_layout_selects_deneb_or_electra_indices() {
+        assert_eq!(finalized_root_layout(false), (105, 6));
+        assert_eq!(finalized_root_layout(true), (169, 7));
+        assert_eq!(next_sync_committee_layout(false), (55, 5));
+        assert_eq!(next_sync_committee_layout(true), (87, 6));
+        assert_eq!(current_sync_committee_layout(false), (54, 5));
+        assert_eq!(current_sync_committee_layout(true), (86, 6));
     }
 }

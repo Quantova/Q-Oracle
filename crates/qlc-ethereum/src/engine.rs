@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::beacon::{
-    compute_domain, compute_signing_root, participating_pubkeys, BeaconBlockHeader, SyncAggregate,
-    SyncCommittee, DOMAIN_SYNC_COMMITTEE, EXECUTION_RECEIPTS_DEPTH, EXECUTION_RECEIPTS_INDEX,
-    FINALIZED_ROOT_DEPTH, FINALIZED_ROOT_INDEX, NEXT_SYNC_COMMITTEE_DEPTH,
-    NEXT_SYNC_COMMITTEE_INDEX,
+    compute_domain, compute_signing_root, finalized_root_layout, next_sync_committee_layout,
+    participating_pubkeys, BeaconBlockHeader, SyncAggregate, SyncCommittee, DOMAIN_SYNC_COMMITTEE,
+    EXECUTION_RECEIPTS_DEPTH, EXECUTION_RECEIPTS_INDEX,
 };
 use crate::bls::BlsAggregateVerifier;
 use crate::config::EvmChainConfig;
@@ -195,13 +194,14 @@ fn verify_sync_aggregate(
     Ok(())
 }
 
-fn verify_finality(update: &LightClientUpdate) -> Result<(), EthError> {
+fn verify_finality(update: &LightClientUpdate, electra: bool) -> Result<(), EthError> {
+    let (index, depth) = finalized_root_layout(electra);
     let leaf = update.finalized_header.hash_tree_root();
     if !ssz::is_valid_merkle_branch(
         &leaf,
         &update.finality_branch,
-        FINALIZED_ROOT_DEPTH,
-        FINALIZED_ROOT_INDEX,
+        depth,
+        index,
         &update.attested_header.state_root,
     ) {
         return Err(EthError::BadFinalityProof);
@@ -246,7 +246,8 @@ fn verify_deposit_core(
         update.signature_slot,
         verifier,
     )?;
-    verify_finality(update)?;
+    let electra = store.config.is_electra_at_slot(update.attested_header.slot);
+    verify_finality(update, electra)?;
     verify_execution(update)?;
 
     let key = rlp::encode_uint(deposit.receipt_index);
@@ -359,12 +360,14 @@ pub fn apply_sync_committee_update(
         update.signature_slot,
         verifier,
     )?;
+    let electra = store.config.is_electra_at_slot(update.attested_header.slot);
+    let (index, depth) = next_sync_committee_layout(electra);
     let leaf = update.next_sync_committee.hash_tree_root();
     if !ssz::is_valid_merkle_branch(
         &leaf,
         &update.next_sync_committee_branch,
-        NEXT_SYNC_COMMITTEE_DEPTH,
-        NEXT_SYNC_COMMITTEE_INDEX,
+        depth,
+        index,
         &update.attested_header.state_root,
     ) {
         return Err(EthError::BadSyncCommitteeProof);
@@ -387,6 +390,10 @@ pub fn advance_period(store: &mut LightClientStore) -> Result<(), EthError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::beacon::{
+        FINALIZED_ROOT_DEPTH, FINALIZED_ROOT_DEPTH_ELECTRA, FINALIZED_ROOT_GINDEX_ELECTRA,
+        FINALIZED_ROOT_INDEX, NEXT_SYNC_COMMITTEE_DEPTH, NEXT_SYNC_COMMITTEE_INDEX,
+    };
     use crate::bls::testkit::{model_pubkey, model_sign, HashCommitmentBls};
     use crate::bls::{BlsPubkey, BlsSignature};
     use crate::config;
@@ -460,7 +467,34 @@ mod tests {
         let recipient = [0x5c; 32];
         let asset_id = [0x77; 16];
         let receipt = deposit_receipt(&cfg.deposit_contract, &recipient, amount, &asset_id);
-        fixture_from_receipt(cfg, receipt, participation, recipient, amount, asset_id)
+        fixture_from_receipt(
+            cfg,
+            receipt,
+            participation,
+            recipient,
+            amount,
+            asset_id,
+            FINALIZED_ROOT_INDEX,
+            FINALIZED_ROOT_DEPTH,
+        )
+    }
+
+    fn build_electra_fixture(amount: u128, participation: Vec<bool>) -> Fixture {
+        let mut cfg = config::ethereum();
+        cfg.electra_epoch = Some(0);
+        let recipient = [0x5c; 32];
+        let asset_id = [0x77; 16];
+        let receipt = deposit_receipt(&cfg.deposit_contract, &recipient, amount, &asset_id);
+        fixture_from_receipt(
+            cfg,
+            receipt,
+            participation,
+            recipient,
+            amount,
+            asset_id,
+            FINALIZED_ROOT_GINDEX_ELECTRA,
+            FINALIZED_ROOT_DEPTH_ELECTRA,
+        )
     }
 
     fn fixture_from_receipt(
@@ -470,6 +504,8 @@ mod tests {
         recipient: [u8; 32],
         amount: u128,
         asset_id: [u8; 16],
+        fin_index: u64,
+        fin_depth: usize,
     ) -> Fixture {
         let mut entries = Vec::new();
         for i in 0..6u64 {
@@ -517,11 +553,11 @@ mod tests {
         };
         let finalized_root = finalized_header.hash_tree_root();
 
-        let finality_branch: Vec<[u8; 32]> = (0..FINALIZED_ROOT_DEPTH)
+        let finality_branch: Vec<[u8; 32]> = (0..fin_depth)
             .map(|i| [0xf0 + i as u8; 32])
             .collect();
         let attested_state_root =
-            ssz::merkle_root_from_branch(&finalized_root, &finality_branch, FINALIZED_ROOT_INDEX);
+            ssz::merkle_root_from_branch(&finalized_root, &finality_branch, fin_index);
 
         let attested_header = BeaconBlockHeader {
             slot: PERIOD * PERIOD_SLOTS + 60,
@@ -936,10 +972,41 @@ mod tests {
             rlp::encode_bytes(&[0u8; 256]),
             rlp::encode_list(&[log]),
         ]);
-        let f = fixture_from_receipt(cfg, receipt_bytes, full_participation(), recipient, 1_000, asset_id);
+        let f = fixture_from_receipt(
+            cfg,
+            receipt_bytes,
+            full_participation(),
+            recipient,
+            1_000,
+            asset_id,
+            FINALIZED_ROOT_INDEX,
+            FINALIZED_ROOT_DEPTH,
+        );
         assert_eq!(
             verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
             Err(EthError::Receipt(receipt::ReceiptError::NoDeposit))
+        );
+    }
+
+    #[test]
+    fn a_deneb_finality_proof_verifies_under_deneb_and_is_refused_under_electra() {
+        let mut f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        assert!(verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls).is_ok());
+        f.store.config.electra_epoch = Some(0);
+        assert_eq!(
+            verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::BadFinalityProof)
+        );
+    }
+
+    #[test]
+    fn an_electra_finality_proof_verifies_under_electra_and_is_refused_under_deneb() {
+        let mut f = build_electra_fixture(7_000_000_000_000_000_000u128, full_participation());
+        assert!(verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls).is_ok());
+        f.store.config.electra_epoch = None;
+        assert_eq!(
+            verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::BadFinalityProof)
         );
     }
 
