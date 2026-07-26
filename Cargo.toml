@@ -30,6 +30,7 @@ rust-version = "1.75"
 qtv-crypto = { path = "../Q-Crypto" }
 qlc-bitcoin = { path = "crates/qlc-bitcoin" }
 qlc-ethereum = { path = "crates/qlc-ethereum" }
+qlc-cosmos = { path = "crates/qlc-cosmos" }
 qtv-stark = { path = "../q-prover/crates/qtv-stark" }
 q-codec = { path = "crates/q-codec" }
 q-airlock = { path = "crates/q-airlock" }

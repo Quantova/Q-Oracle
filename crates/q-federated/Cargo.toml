@@ -16,8 +16,11 @@ q-gateway = { workspace = true }
 q-attestor = { workspace = true }
 q-isolation = { path = "../q-isolation" }
 qlc-bitcoin = { workspace = true }
+qlc-ethereum = { workspace = true }
+qlc-cosmos = { workspace = true }
 
 [dev-dependencies]
 qtv-crypto = { workspace = true }
 q-codec = { workspace = true }
 q-airlock = { workspace = true }
+qlc-cosmos = { workspace = true }
