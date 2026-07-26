@@ -15,4 +15,4 @@ qlc-ethereum = { workspace = true }
 
 [dev-dependencies]
 blst = "0.3.16"
-qlc-ethereum = { workspace = true }
+qlc-ethereum = { workspace = true, features = ["test-util"] }
