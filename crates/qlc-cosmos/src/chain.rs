@@ -8,7 +8,10 @@ pub struct ChainConfig {
     pub confirmation_depth: u32,
     pub overlap_numerator: u64,
     pub overlap_denominator: u64,
+    pub bridge_store_prefix: &'static [u8],
 }
+
+pub const BRIDGE_STORE_PREFIX: &[u8] = b"bridge/deposits/";
 
 impl ChainConfig {
     pub const fn new(chain_id: &'static str, corridor_id: u32, confirmation_depth: u32) -> ChainConfig {
@@ -18,6 +21,7 @@ impl ChainConfig {
             confirmation_depth,
             overlap_numerator: 2,
             overlap_denominator: 3,
+            bridge_store_prefix: BRIDGE_STORE_PREFIX,
         }
     }
 }
@@ -74,5 +78,13 @@ mod tests {
         let dydx = ChainConfig::new("dydx-mainnet-1", 13, 2);
         assert_eq!(dydx.chain_id, "dydx-mainnet-1");
         assert_eq!(dydx.overlap_denominator, 3);
+    }
+
+    #[test]
+    fn every_family_member_pins_a_non_empty_bridge_store_prefix() {
+        for c in FAMILY {
+            assert!(!c.bridge_store_prefix.is_empty());
+            assert_eq!(c.bridge_store_prefix, BRIDGE_STORE_PREFIX);
+        }
     }
 }
