@@ -17,6 +17,7 @@
 pub mod boot;
 pub mod http;
 pub mod json;
+pub mod watch;
 pub mod wire;
 
 pub use boot::{
@@ -24,4 +25,8 @@ pub use boot::{
 };
 pub use http::{serve, SharedState, MAX_BODY, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_HEAD};
 pub use json::Json;
+pub use watch::{
+    bitcoin_proof, cosmos_proof, ethereum_proof, federated_proof, ingest_once, ChainWatcher,
+    Ingested, WatchError, WatcherPool,
+};
 pub use wire::{decode_request, decode_response, encode_request, encode_response, method_of, WireError};
