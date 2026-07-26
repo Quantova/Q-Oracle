@@ -1,7 +1,7 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use crate::chain::VerifiedChain;
+use crate::chain::{Checkpoint, VerifiedChain};
 use crate::params::NetworkParams;
 use crate::tx::Transaction;
 use crate::{MerkleStep, SpvError};
@@ -23,11 +23,13 @@ pub struct TrustlessDeposit {
 pub fn verify_trustless_deposit(
     chain: &VerifiedChain,
     params: &NetworkParams,
+    checkpoint: &Checkpoint,
     deposit_height: u32,
     branch: &[MerkleStep],
     raw_tx: &[u8],
     deposit_script: &[u8],
 ) -> Result<TrustlessDeposit, SpvError> {
+    chain.anchored_to(checkpoint)?;
     let tx = Transaction::parse(raw_tx)?;
     let txid = tx.txid();
     let confirmed =
@@ -114,11 +116,31 @@ mod tests {
         let txid = Transaction::parse(&raw).unwrap().txid();
         let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
 
-        let proven = verify_trustless_deposit(&chain, &EASY, 0, &[], &raw, &bridge).unwrap();
+        let proven = verify_trustless_deposit(&chain, &EASY, &Checkpoint::accepting(&chain), 0, &[], &raw, &bridge).unwrap();
         assert_eq!(proven.txid, txid);
         assert_eq!(proven.amount, 250_000);
         assert_eq!(proven.recipient, recipient);
         assert_eq!(proven.confirmations, 1);
+    }
+
+    #[test]
+    fn a_deposit_on_a_chain_off_the_pinned_checkpoint_is_rejected() {
+        let bridge = p2pkh([0x11; 20]);
+        let recipient = [0x42u8; 32];
+        let raw = raw_deposit_tx(&[(250_000, bridge.clone()), (0, op_return(recipient))]);
+        let txid = Transaction::parse(&raw).unwrap().txid();
+        let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
+
+        let foreign = Checkpoint {
+            height: 0,
+            hash: [0x99u8; 32],
+            min_work: crate::work::U256::ZERO,
+        };
+        assert_eq!(
+            verify_trustless_deposit(&chain, &EASY, &foreign, 0, &[], &raw, &bridge),
+            Err(SpvError::CheckpointMismatch),
+            "a proof on a chain the caller mined off its own history cannot admit"
+        );
     }
 
     #[test]
@@ -133,7 +155,7 @@ mod tests {
         let txid = Transaction::parse(&raw).unwrap().txid();
         let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
 
-        let proven = verify_trustless_deposit(&chain, &EASY, 0, &[], &raw, &bridge).unwrap();
+        let proven = verify_trustless_deposit(&chain, &EASY, &Checkpoint::accepting(&chain), 0, &[], &raw, &bridge).unwrap();
         assert_eq!(proven.amount, 250_000);
         assert_eq!(proven.recipient, recipient);
     }
@@ -148,7 +170,7 @@ mod tests {
         let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
 
         assert_eq!(
-            verify_trustless_deposit(&chain, &EASY, 0, &[], &raw, &bridge),
+            verify_trustless_deposit(&chain, &EASY, &Checkpoint::accepting(&chain), 0, &[], &raw, &bridge),
             Err(SpvError::TransactionMismatch)
         );
     }
@@ -161,7 +183,7 @@ mod tests {
         let txid = Transaction::parse(&raw).unwrap().txid();
         let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
 
-        let proven = verify_trustless_deposit(&chain, &EASY, 0, &[], &raw, &bridge).unwrap();
+        let proven = verify_trustless_deposit(&chain, &EASY, &Checkpoint::accepting(&chain), 0, &[], &raw, &bridge).unwrap();
         assert_eq!(proven.amount, 250_000);
         assert!(check_deposit_tx(&raw, &bridge, proven.txid, 250_000, recipient).is_ok());
         assert_eq!(
@@ -187,7 +209,7 @@ mod tests {
         let chain = verify_chain(&[mined_block(txid)], 0, &deep).unwrap();
 
         assert_eq!(
-            verify_trustless_deposit(&chain, &deep, 0, &[], &raw, &bridge),
+            verify_trustless_deposit(&chain, &deep, &Checkpoint::accepting(&chain), 0, &[], &raw, &bridge),
             Err(SpvError::InsufficientConfirmations { have: 1, need: 3 })
         );
     }
@@ -202,7 +224,7 @@ mod tests {
         let chain = verify_chain(&[mined_block(other_txid)], 0, &EASY).unwrap();
 
         assert_eq!(
-            verify_trustless_deposit(&chain, &EASY, 0, &[], &raw, &bridge),
+            verify_trustless_deposit(&chain, &EASY, &Checkpoint::accepting(&chain), 0, &[], &raw, &bridge),
             Err(SpvError::MerkleMismatch)
         );
     }

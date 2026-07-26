@@ -467,6 +467,19 @@ mod tests {
     use crate::exits::{DeskConfig, ExitDesk, ExitState};
     use qlc_bitcoin::BITCOIN;
 
+    // Crafted-difficulty parameters for the fixtures below: the pow limit sits at the crafted
+    // header target so the min-difficulty floor admits them, exactly as the real network limit
+    // would admit real mainnet difficulty.
+    const EASY: NetworkParams = NetworkParams {
+        network: BITCOIN.network,
+        name: BITCOIN.name,
+        magic: BITCOIN.magic,
+        pow_limit_bits: 0x207f_ffff,
+        target_timespan: BITCOIN.target_timespan,
+        target_spacing: BITCOIN.target_spacing,
+        confirmation_depth: BITCOIN.confirmation_depth,
+    };
+
     fn statement() -> ExitStatement {
         ExitStatement {
             version: EXIT_STATEMENT_VERSION,
@@ -604,7 +617,7 @@ mod tests {
     }
 
     fn bitcoin_watcher(releases: Vec<BitcoinReleaseProof>) -> BitcoinPayoutWatcher {
-        BitcoinPayoutWatcher::new(1, [0xa1; 16], BITCOIN, BITCOIN.confirmation_depth, releases)
+        BitcoinPayoutWatcher::new(1, [0xa1; 16], EASY, EASY.confirmation_depth, releases)
     }
 
     fn to_nibbles(key: &[u8]) -> Vec<u8> {
@@ -793,7 +806,7 @@ mod tests {
         let mut release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
         release.headers[0].nonce = release.headers[0].nonce.wrapping_add(1);
         assert_eq!(
-            release.verify(&BITCOIN, BITCOIN.confirmation_depth),
+            release.verify(&EASY, EASY.confirmation_depth),
             Err(PayoutProofError::Spv(SpvError::PowNotMet))
         );
         let watcher = bitcoin_watcher(vec![release]);
@@ -806,7 +819,7 @@ mod tests {
         let mut release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
         release.branch[0].hash = [0x00; 32];
         assert_eq!(
-            release.verify(&BITCOIN, BITCOIN.confirmation_depth),
+            release.verify(&EASY, EASY.confirmation_depth),
             Err(PayoutProofError::Spv(SpvError::MerkleMismatch))
         );
         assert!(bitcoin_watcher(vec![release]).confirm(&s).is_none());
@@ -819,7 +832,7 @@ mod tests {
         let last = release.raw_tx.len() - 6;
         release.raw_tx[last] ^= 0xff;
         assert_eq!(
-            release.verify(&BITCOIN, BITCOIN.confirmation_depth),
+            release.verify(&EASY, EASY.confirmation_depth),
             Err(PayoutProofError::Spv(SpvError::MerkleMismatch))
         );
     }

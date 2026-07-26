@@ -14,7 +14,7 @@ pub mod witness;
 pub mod work;
 
 pub use chain::{
-    bits_expectation, check_retarget_boundary, heavier, verify_chain, ConfirmedDeposit,
+    bits_expectation, check_retarget_boundary, heavier, verify_chain, Checkpoint, ConfirmedDeposit,
     VerifiedChain,
 };
 pub use deposit::{verify_trustless_deposit, TrustlessDeposit};
@@ -41,6 +41,7 @@ pub struct BlockHeader {
 pub enum SpvError {
     ShortHeader,
     PowNotMet,
+    TargetBelowFloor { index: usize },
     BrokenLink { index: usize },
     EmptyChain,
     MerkleMismatch,
@@ -48,6 +49,9 @@ pub enum SpvError {
     RetargetMismatch { index: usize },
     HeightOutOfRange,
     InsufficientConfirmations { have: u32, need: u32 },
+    CheckpointNotInChain,
+    CheckpointMismatch,
+    InsufficientWork,
     MalformedTransaction,
     TransactionMismatch,
 }

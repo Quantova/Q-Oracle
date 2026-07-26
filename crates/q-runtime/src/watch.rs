@@ -141,7 +141,8 @@ mod tests {
     use q_federated::derive_asset_id;
     use q_qbridge::{DepositOutcome, Response};
     use qlc_bitcoin::{
-        verify_chain, verify_trustless_deposit, BlockHeader, Network as BtcNetwork, NetworkParams,
+        verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, Network as BtcNetwork,
+        NetworkParams,
     };
     use qlc_bitcoin::tx::Transaction;
 
@@ -228,8 +229,16 @@ mod tests {
             let chain =
                 verify_chain(&headers, 0, &EASY6).map_err(|_| WatchError::Rpc("bad chain".into()))?;
             let proven =
-                verify_trustless_deposit(&chain, &EASY6, 0, &[], &self.raw_tx, &self.bridge_script)
-                    .map_err(|_| WatchError::Rpc("deposit did not verify".into()))?;
+                verify_trustless_deposit(
+                    &chain,
+                    &EASY6,
+                    &Checkpoint::accepting(&chain),
+                    0,
+                    &[],
+                    &self.raw_tx,
+                    &self.bridge_script,
+                )
+                .map_err(|_| WatchError::Rpc("deposit did not verify".into()))?;
             let fact = BridgeFact {
                 version: FACT_VERSION,
                 source_chain: Network::Bitcoin.id(),
