@@ -262,8 +262,18 @@ fn scan_release_outputs(outputs: &[BitcoinOutput]) -> Option<([u8; 32], u64, [u8
         let mut word = [0u8; 32];
         word.copy_from_slice(&output.script[2..34]);
         match output.script[0] {
-            0x51 => payout = Some((word, output.value)),
-            0x6a => reference = Some(word),
+            0x51 => {
+                if payout.is_some() {
+                    return None;
+                }
+                payout = Some((word, output.value));
+            }
+            0x6a => {
+                if reference.is_some() {
+                    return None;
+                }
+                reference = Some(word);
+            }
             _ => {}
         }
     }
@@ -576,7 +586,10 @@ mod tests {
         amount: u64,
         burn_ref: &[u8; 32],
     ) -> BitcoinReleaseProof {
-        let raw_tx = release_tx(beneficiary, amount, burn_ref);
+        release_around(release_tx(beneficiary, amount, burn_ref))
+    }
+
+    fn release_around(raw_tx: Vec<u8>) -> BitcoinReleaseProof {
         let coinbase = [0xcb; 32];
         let release_txid = double_sha256(&raw_tx);
         let mut leaves = Vec::new();
@@ -889,6 +902,42 @@ mod tests {
         checkpoint: Checkpoint,
     ) -> BitcoinPayoutWatcher {
         BitcoinPayoutWatcher::new(1, [0xa1; 16], EASY, checkpoint, EASY.confirmation_depth, vec![release])
+    }
+
+    #[test]
+    fn a_release_with_two_candidate_payout_outputs_is_rejected() {
+        let s = statement();
+        let mut tx = Vec::new();
+        tx.extend_from_slice(&1u32.to_le_bytes());
+        put_varint(1, &mut tx);
+        tx.extend_from_slice(&[0u8; 32]);
+        tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        put_varint(0, &mut tx);
+        tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        put_varint(3, &mut tx);
+        tx.extend_from_slice(&500u64.to_le_bytes());
+        let mut first = vec![0x51u8, 0x20];
+        first.extend_from_slice(&s.beneficiary);
+        put_varint(first.len() as u64, &mut tx);
+        tx.extend_from_slice(&first);
+        tx.extend_from_slice(&999u64.to_le_bytes());
+        let mut second = vec![0x51u8, 0x20];
+        second.extend_from_slice(&[0x66u8; 32]);
+        put_varint(second.len() as u64, &mut tx);
+        tx.extend_from_slice(&second);
+        tx.extend_from_slice(&0u64.to_le_bytes());
+        let mut reference = vec![0x6au8, 0x20];
+        reference.extend_from_slice(&s.burn_ref);
+        put_varint(reference.len() as u64, &mut tx);
+        tx.extend_from_slice(&reference);
+        tx.extend_from_slice(&0u32.to_le_bytes());
+
+        let release = release_around(tx);
+        assert_eq!(
+            release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
+            Err(PayoutProofError::UnboundPayout),
+            "two candidate payout outputs must be refused rather than bound to the last"
+        );
     }
 
     #[test]
