@@ -47,7 +47,7 @@ pub struct Gateway {
     operators: OperatorSet,
     governance: OperatorSet,
     used_refs: BTreeSet<[u8; 32]>,
-    highest_nonce: BTreeMap<(u32, u8), u64>,
+    highest_nonce: BTreeMap<(u32, u32, u8), u64>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     per_asset_cap: BTreeMap<[u8; 16], u128>,
     epoch_cap: u128,
@@ -518,7 +518,7 @@ impl Gateway {
             return Err(GatewayError::ReplayedReference);
         }
 
-        let direction_key = (fact.route_id, fact.direction.tag());
+        let direction_key = (fact.source_chain, fact.route_id, fact.direction.tag());
         if let Some(&high_water) = self.highest_nonce.get(&direction_key) {
             if fact.nonce <= high_water {
                 return Err(GatewayError::StaleOrReplayedNonce {
@@ -660,6 +660,35 @@ mod tests {
         assert_eq!(
             gw.set_corridor_quorum(1, 0),
             Err(GatewayError::ThinQuorum { quorum: 0, size: 9 })
+        );
+    }
+
+    #[test]
+    fn two_corridors_sharing_a_route_id_keep_independent_nonce_high_water() {
+        let (s, mut gw) = nine_op_gateway(3);
+        gw.register_corridor(2, 6);
+        gw.register_asset_cap([0xb2; 16], 1_000);
+
+        let mut a = fact();
+        a.source_chain = 1;
+        a.route_id = 7;
+        a.nonce = 5;
+        assert_eq!(
+            gw.process_deposit(&envelope(&s[0..3], &a)).expect("first corridor admits").amount,
+            500
+        );
+
+        let mut b = fact();
+        b.source_chain = 2;
+        b.route_id = 7;
+        b.nonce = 2;
+        b.source_ref = SourceRef([0x22; 32]);
+        b.asset_id = AssetId([0xb2; 16]);
+        assert_eq!(
+            gw.process_deposit(&envelope(&s[0..3], &b))
+                .expect("a second corridor sharing the route is not blocked by the first's higher nonce")
+                .amount,
+            500
         );
     }
 
