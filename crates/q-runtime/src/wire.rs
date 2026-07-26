@@ -537,6 +537,9 @@ fn pool_err_json(e: &PoolError) -> Json {
         PoolError::DuplicatePool => tagged("pool", "duplicate_pool", vec![]),
         PoolError::AssetIdMismatch => tagged("pool", "asset_id_mismatch", vec![]),
         PoolError::TierMismatch => tagged("pool", "tier_mismatch", vec![]),
+        PoolError::RegistryFull { max } => {
+            tagged("pool", "registry_full", vec![("max", usizej(*max))])
+        }
     }
 }
 
@@ -563,6 +566,9 @@ fn pool_err_from(j: &Json) -> Result<PoolError, WireError> {
         "duplicate_pool" => Ok(PoolError::DuplicatePool),
         "asset_id_mismatch" => Ok(PoolError::AssetIdMismatch),
         "tier_mismatch" => Ok(PoolError::TierMismatch),
+        "registry_full" => Ok(PoolError::RegistryFull {
+            max: as_usize(field(j, "max")?, "max")?,
+        }),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }

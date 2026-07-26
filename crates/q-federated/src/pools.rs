@@ -18,6 +18,9 @@ pub const MAX_DECIMALS: u8 = 36;
 pub const MIN_CAP: u128 = 1;
 pub const MAX_CAP: u128 = u128::MAX >> 1;
 pub const DEFAULT_CONFIRMATION_DEPTH: u32 = 32;
+/// The most pools the permissionless registry will hold. Creation stays open to any client, but the
+/// registry cannot be grown without bound behind the global mutex, and squatting is capped here.
+pub const MAX_POOLS: usize = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PoolError {
@@ -30,6 +33,7 @@ pub enum PoolError {
     DuplicatePool,
     AssetIdMismatch,
     TierMismatch,
+    RegistryFull { max: usize },
 }
 
 pub fn derive_asset_id(network: Network, identifier: &str) -> AssetId {
@@ -220,6 +224,9 @@ impl PoolRegistry {
     }
 
     pub fn register(&mut self, spec: PoolSpec) -> Result<(), PoolError> {
+        if self.by_asset.len() >= MAX_POOLS {
+            return Err(PoolError::RegistryFull { max: MAX_POOLS });
+        }
         self.validate(&spec)?;
         let key = (spec.network.id(), spec.identifier.clone());
         self.by_key.insert(key, spec.asset_id.0);
@@ -345,6 +352,23 @@ mod tests {
         );
         assert_eq!(spec.tier, Tier::Federated);
         assert_eq!(spec.asset_id, derive_asset_id(Network::Polygon, "GHO"));
+    }
+
+    #[test]
+    fn pool_creation_is_bounded_by_the_registry_cap() {
+        let mut registry = PoolRegistry::new();
+        for i in 0..MAX_POOLS {
+            registry
+                .create_pool(&request(Network::Polygon.id(), &format!("T{i}")))
+                .unwrap_or_else(|e| panic!("pool {i} lists under the cap, got {e:?}"));
+        }
+        assert_eq!(registry.len(), MAX_POOLS);
+        assert_eq!(
+            registry.create_pool(&request(Network::Polygon.id(), "OVERFLOW")),
+            Err(PoolError::RegistryFull { max: MAX_POOLS }),
+            "creation past the cap is refused"
+        );
+        assert_eq!(registry.len(), MAX_POOLS);
     }
 
     #[test]
