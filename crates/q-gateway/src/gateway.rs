@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{BridgeFact, CodecError, Direction, Writer, ATTEST_DOMAIN};
+use q_codec::{BridgeFact, CodecError, Direction, Reader, Writer, ATTEST_DOMAIN};
 
 use crate::errors::GatewayError;
 use crate::operators::{verify_quorum, OperatorSet};
@@ -16,6 +16,7 @@ pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
+const GUARD_SNAPSHOT_VERSION: u8 = 1;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
@@ -628,6 +629,137 @@ impl Gateway {
             source_ref: fact.source_ref.0,
         })
     }
+
+    pub fn encode_guard(&self) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.u8(GUARD_SNAPSHOT_VERSION);
+        w.u8(self.global_pause as u8);
+        w.u64(self.frozen_until);
+        w.u128(self.epoch_minted);
+        w.u32(self.used_refs.len() as u32);
+        for reference in &self.used_refs {
+            w.fixed(reference);
+        }
+        w.u32(self.highest_nonce.len() as u32);
+        for ((source_chain, route_id, direction), nonce) in &self.highest_nonce {
+            w.u32(*source_chain);
+            w.u32(*route_id);
+            w.u8(*direction);
+            w.u64(*nonce);
+        }
+        w.u32(self.per_asset_minted.len() as u32);
+        for (asset_id, minted) in &self.per_asset_minted {
+            w.fixed(asset_id);
+            w.u128(*minted);
+        }
+        w.u32(self.paused_sources.len() as u32);
+        for source_chain in &self.paused_sources {
+            w.u32(*source_chain);
+        }
+        w.u32(self.corridor_cursor.len() as u32);
+        for (source_chain, cursor) in &self.corridor_cursor {
+            w.u32(*source_chain);
+            w.u64(*cursor);
+        }
+        w.finish()
+    }
+
+    pub fn rehydrate_guard(&mut self, bytes: &[u8]) -> Result<(), CodecError> {
+        let state = decode_guard(bytes)?;
+        self.global_pause = state.global_pause;
+        self.frozen_until = state.frozen_until;
+        self.epoch_minted = state.epoch_minted;
+        self.used_refs = state.used_refs;
+        self.highest_nonce = state.highest_nonce;
+        self.per_asset_minted = state.per_asset_minted;
+        self.paused_sources = state.paused_sources;
+        self.corridor_cursor = state.corridor_cursor;
+        Ok(())
+    }
+}
+
+struct GuardState {
+    global_pause: bool,
+    frozen_until: u64,
+    epoch_minted: u128,
+    used_refs: BTreeSet<[u8; 32]>,
+    highest_nonce: BTreeMap<(u32, u32, u8), u64>,
+    per_asset_minted: BTreeMap<[u8; 16], u128>,
+    paused_sources: BTreeSet<u32>,
+    corridor_cursor: BTreeMap<u32, u64>,
+}
+
+fn bounded_count(r: &mut Reader, item_size: usize) -> Result<usize, CodecError> {
+    let count = r.u32()? as usize;
+    if count > r.remaining() / item_size {
+        return Err(CodecError::LengthMismatch);
+    }
+    Ok(count)
+}
+
+fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
+    let mut r = Reader::new(bytes);
+    let version = r.u8()?;
+    if version != GUARD_SNAPSHOT_VERSION {
+        return Err(CodecError::BadVersion(version));
+    }
+    let global_pause = match r.u8()? {
+        0 => false,
+        1 => true,
+        other => return Err(CodecError::UnknownTag(other)),
+    };
+    let frozen_until = r.u64()?;
+    let epoch_minted = r.u128()?;
+
+    let count = bounded_count(&mut r, 32)?;
+    let mut used_refs = BTreeSet::new();
+    for _ in 0..count {
+        used_refs.insert(r.array32()?);
+    }
+
+    let count = bounded_count(&mut r, 17)?;
+    let mut highest_nonce = BTreeMap::new();
+    for _ in 0..count {
+        let source_chain = r.u32()?;
+        let route_id = r.u32()?;
+        let direction = r.u8()?;
+        let nonce = r.u64()?;
+        highest_nonce.insert((source_chain, route_id, direction), nonce);
+    }
+
+    let count = bounded_count(&mut r, 32)?;
+    let mut per_asset_minted = BTreeMap::new();
+    for _ in 0..count {
+        let asset_id = r.array16()?;
+        let minted = r.u128()?;
+        per_asset_minted.insert(asset_id, minted);
+    }
+
+    let count = bounded_count(&mut r, 4)?;
+    let mut paused_sources = BTreeSet::new();
+    for _ in 0..count {
+        paused_sources.insert(r.u32()?);
+    }
+
+    let count = bounded_count(&mut r, 12)?;
+    let mut corridor_cursor = BTreeMap::new();
+    for _ in 0..count {
+        let source_chain = r.u32()?;
+        let cursor = r.u64()?;
+        corridor_cursor.insert(source_chain, cursor);
+    }
+
+    r.finish()?;
+    Ok(GuardState {
+        global_pause,
+        frozen_until,
+        epoch_minted,
+        used_refs,
+        highest_nonce,
+        per_asset_minted,
+        paused_sources,
+        corridor_cursor,
+    })
 }
 
 pub fn attestation_message(fact: &BridgeFact, dest_chain_id: u64) -> Vec<u8> {
@@ -925,5 +1057,63 @@ mod tests {
         assert_eq!(gw.asset_cap(&[0xb2; 16]), None);
         gw.register_asset_cap([0xb2; 16], 7_000);
         assert_eq!(gw.asset_cap(&[0xb2; 16]), Some(7_000));
+    }
+
+    #[test]
+    fn a_restart_from_the_guard_snapshot_still_rejects_the_replay_and_keeps_the_caps() {
+        let (s, mut gw) = nine_op_gateway(3);
+        let f = fact();
+        let receipt = gw.process_deposit(&envelope(&s[0..6], &f)).expect("a supermajority admits");
+        assert_eq!(receipt.amount, 500);
+
+        let snapshot = gw.encode_guard();
+        drop(gw);
+
+        let (_s2, mut restored) = nine_op_gateway(3);
+        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+        assert!(
+            restored.is_reference_used(&f.source_ref.0),
+            "the reserved reference survives the restart"
+        );
+        assert_eq!(restored.minted_of_asset(&f.asset_id.0), 500);
+        assert_eq!(restored.epoch_minted(), 500);
+        assert_eq!(
+            restored.process_deposit(&envelope(&s[0..6], &f)),
+            Err(GatewayError::ReplayedReference),
+            "the same deposit is a replay once the guard is rehydrated"
+        );
+
+        let mut fresh_ref = f.clone();
+        fresh_ref.source_ref = SourceRef([0x99; 32]);
+        assert!(
+            matches!(
+                restored.process_deposit(&envelope(&s[0..6], &fresh_ref)),
+                Err(GatewayError::StaleOrReplayedNonce { .. })
+            ),
+            "the nonce high water survives the restart"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_guard_snapshot_is_refused_rather_than_rehydrating_an_empty_guard() {
+        let (s, mut gw) = nine_op_gateway(3);
+        let f = fact();
+        gw.process_deposit(&envelope(&s[0..6], &f)).expect("seed a reserved reference");
+        let mut snapshot = gw.encode_guard();
+        snapshot.truncate(snapshot.len() - 1);
+
+        let (_s2, mut restored) = nine_op_gateway(3);
+        assert!(
+            restored.rehydrate_guard(&snapshot).is_err(),
+            "a truncated snapshot fails closed"
+        );
+        assert!(
+            !restored.is_reference_used(&f.source_ref.0),
+            "a failed rehydrate applies nothing"
+        );
+        assert!(
+            restored.rehydrate_guard(&[0xff, 0xff, 0xff, 0xff]).is_err(),
+            "garbage bytes are refused"
+        );
     }
 }
