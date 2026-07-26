@@ -102,19 +102,14 @@ fn build_rotation() -> Rotation {
     let participation = full_participation();
     let aggregate = aggregate_over(&current_secrets, &participation, &root);
 
-    let store = LightClientStore {
-        config,
-        period: PERIOD,
-        current_sync_committee: current,
-        next_sync_committee: None,
-        finalized_header: BeaconBlockHeader {
-            slot: PERIOD * PERIOD_SLOTS + 40,
-            proposer_index: 99,
-            parent_root: [0x01; 32],
-            state_root: [0x02; 32],
-            body_root: [0x05; 32],
-        },
+    let finalized_header = BeaconBlockHeader {
+        slot: PERIOD * PERIOD_SLOTS + 40,
+        proposer_index: 99,
+        parent_root: [0x01; 32],
+        state_root: [0x02; 32],
+        body_root: [0x05; 32],
     };
+    let store = LightClientStore::from_trusted_committee(config, PERIOD, current, finalized_header);
 
     let update = SyncCommitteeUpdate {
         attested_header: attested,
@@ -143,13 +138,10 @@ fn a_real_sync_committee_aggregate_over_a_finalized_header_drives_a_rotation() {
         &Bls12381AggregateVerifier::new(),
     );
     assert!(result.is_ok());
-    assert_eq!(
-        rotation.store.next_sync_committee,
-        Some(rotation.next.clone())
-    );
+    assert_eq!(rotation.store.next_sync_committee(), Some(&rotation.next));
     assert!(advance_period(&mut rotation.store).is_ok());
     assert_eq!(rotation.store.period, PERIOD + 1);
-    assert_eq!(rotation.store.current_sync_committee, rotation.next);
+    assert_eq!(rotation.store.current_sync_committee(), &rotation.next);
 }
 
 #[test]

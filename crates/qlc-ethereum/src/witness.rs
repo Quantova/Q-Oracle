@@ -214,13 +214,7 @@ mod tests {
             signature,
         };
 
-        let store = LightClientStore {
-            config: cfg,
-            period: PERIOD,
-            current_sync_committee: committee,
-            next_sync_committee: None,
-            finalized_header,
-        };
+        let store = LightClientStore::from_trusted_committee(cfg, PERIOD, committee, finalized_header);
 
         let update = LightClientUpdate {
             attested_header,

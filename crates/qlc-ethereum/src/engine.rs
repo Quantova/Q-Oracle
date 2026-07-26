@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::beacon::{
-    compute_domain, compute_signing_root, finalized_root_layout, next_sync_committee_layout,
-    participating_pubkeys, BeaconBlockHeader, SyncAggregate, SyncCommittee, DOMAIN_SYNC_COMMITTEE,
-    EXECUTION_RECEIPTS_DEPTH, EXECUTION_RECEIPTS_INDEX,
+    compute_domain, compute_signing_root, current_sync_committee_layout, finalized_root_layout,
+    next_sync_committee_layout, participating_pubkeys, BeaconBlockHeader, SyncAggregate,
+    SyncCommittee, DOMAIN_SYNC_COMMITTEE, EXECUTION_RECEIPTS_DEPTH, EXECUTION_RECEIPTS_INDEX,
 };
 use crate::bls::BlsAggregateVerifier;
 use crate::config::EvmChainConfig;
@@ -135,9 +135,71 @@ struct CoreDeposit {
 pub struct LightClientStore {
     pub config: EvmChainConfig,
     pub period: u64,
-    pub current_sync_committee: SyncCommittee,
-    pub next_sync_committee: Option<SyncCommittee>,
+    current_sync_committee: SyncCommittee,
+    next_sync_committee: Option<SyncCommittee>,
     pub finalized_header: BeaconBlockHeader,
+}
+
+impl LightClientStore {
+    pub fn current_sync_committee(&self) -> &SyncCommittee {
+        &self.current_sync_committee
+    }
+
+    pub fn next_sync_committee(&self) -> Option<&SyncCommittee> {
+        self.next_sync_committee.as_ref()
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn from_trusted_committee(
+        config: EvmChainConfig,
+        period: u64,
+        current_sync_committee: SyncCommittee,
+        finalized_header: BeaconBlockHeader,
+    ) -> LightClientStore {
+        LightClientStore {
+            config,
+            period,
+            current_sync_committee,
+            next_sync_committee: None,
+            finalized_header,
+        }
+    }
+}
+
+/// Bootstrap a light client store from a pinned weak-subjectivity checkpoint. The checkpoint header
+/// is trusted out of band, and the current sync committee only enters the store once it is proven
+/// against that header's state root under the fork-aware current-sync-committee generalized index.
+/// A committee that does not merkle to the pinned checkpoint state root is refused, so no caller can
+/// seat a forged committee.
+pub fn bootstrap(
+    config: EvmChainConfig,
+    period: u64,
+    checkpoint_header: BeaconBlockHeader,
+    current_sync_committee: SyncCommittee,
+    current_sync_committee_branch: Vec<[u8; 32]>,
+) -> Result<LightClientStore, EthError> {
+    if !config.verifies_beacon_sync_committee() {
+        return Err(EthError::NotBeaconChain);
+    }
+    let electra = config.is_electra_at_slot(checkpoint_header.slot);
+    let (index, depth) = current_sync_committee_layout(electra);
+    let leaf = current_sync_committee.hash_tree_root();
+    if !ssz::is_valid_merkle_branch(
+        &leaf,
+        &current_sync_committee_branch,
+        depth,
+        index,
+        &checkpoint_header.state_root,
+    ) {
+        return Err(EthError::BadSyncCommitteeProof);
+    }
+    Ok(LightClientStore {
+        config,
+        period,
+        current_sync_committee,
+        next_sync_committee: None,
+        finalized_header: checkpoint_header,
+    })
 }
 
 fn select_committee(
@@ -801,6 +863,37 @@ mod tests {
         assert!(advance_period(&mut store).is_ok());
         assert_eq!(store.period, PERIOD + 1);
         assert_eq!(store.current_sync_committee, next);
+    }
+
+    #[test]
+    fn a_committee_proven_against_the_checkpoint_state_root_bootstraps_the_store() {
+        use crate::beacon::{current_sync_committee_layout, CURRENT_SYNC_COMMITTEE_DEPTH};
+        let cfg = config::ethereum();
+        let (committee, _) = committee(0xaa);
+        let (index, _depth) = current_sync_committee_layout(false);
+        let branch: Vec<[u8; 32]> = (0..CURRENT_SYNC_COMMITTEE_DEPTH)
+            .map(|i| [0xd0 + i as u8; 32])
+            .collect();
+        let leaf = committee.hash_tree_root();
+        let state_root = ssz::merkle_root_from_branch(&leaf, &branch, index);
+        let checkpoint = BeaconBlockHeader {
+            slot: PERIOD * PERIOD_SLOTS + 8,
+            proposer_index: 7,
+            parent_root: [0x01; 32],
+            state_root,
+            body_root: [0x02; 32],
+        };
+        let store =
+            bootstrap(cfg, PERIOD, checkpoint, committee.clone(), branch.clone()).unwrap();
+        assert_eq!(store.current_sync_committee(), &committee);
+        assert_eq!(store.next_sync_committee(), None);
+
+        let mut wrong = branch;
+        wrong[0][0] ^= 0xff;
+        assert_eq!(
+            bootstrap(config::ethereum(), PERIOD, checkpoint, committee, wrong),
+            Err(EthError::BadSyncCommitteeProof)
+        );
     }
 
     #[test]
