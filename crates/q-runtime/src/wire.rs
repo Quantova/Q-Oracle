@@ -943,6 +943,17 @@ fn eth_err_json(e: &EthError) -> Json {
             vec![("got", usizej(*got)), ("needed", usizej(*needed))],
         ),
         EthError::WrongPeriod => tagged("eth", "wrong_period", vec![]),
+        EthError::InconsistentSlots {
+            signature_slot,
+            attested_slot,
+        } => tagged(
+            "eth",
+            "inconsistent_slots",
+            vec![
+                ("signature_slot", Json::Int(*signature_slot)),
+                ("attested_slot", Json::Int(*attested_slot)),
+            ],
+        ),
         EthError::BadFinalityProof => tagged("eth", "bad_finality_proof", vec![]),
         EthError::BadExecutionProof => tagged("eth", "bad_execution_proof", vec![]),
         EthError::BadSyncCommitteeProof => tagged("eth", "bad_sync_committee_proof", vec![]),
@@ -970,6 +981,10 @@ fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
             needed: as_usize(field(j, "needed")?, "needed")?,
         }),
         "wrong_period" => Ok(EthError::WrongPeriod),
+        "inconsistent_slots" => Ok(EthError::InconsistentSlots {
+            signature_slot: as_u64(field(j, "signature_slot")?, "signature_slot")?,
+            attested_slot: as_u64(field(j, "attested_slot")?, "attested_slot")?,
+        }),
         "bad_finality_proof" => Ok(EthError::BadFinalityProof),
         "bad_execution_proof" => Ok(EthError::BadExecutionProof),
         "bad_sync_committee_proof" => Ok(EthError::BadSyncCommitteeProof),
@@ -1945,6 +1960,9 @@ mod tests {
         round_response(Response::Error(ApiError::EthereumVerify(EthError::BadSignature)));
         round_response(Response::Error(ApiError::EthereumVerify(
             EthError::InsufficientParticipation { got: 300, needed: 342 },
+        )));
+        round_response(Response::Error(ApiError::EthereumVerify(
+            EthError::InconsistentSlots { signature_slot: 60, attested_slot: 100 },
         )));
         round_response(Response::Error(ApiError::EthereumVerify(EthError::Receipt(
             ReceiptError::NoDeposit,

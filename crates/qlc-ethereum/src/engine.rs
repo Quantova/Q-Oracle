@@ -24,6 +24,7 @@ pub enum EthError {
     InvalidParticipationLength { got: usize, expected: usize },
     InsufficientParticipation { got: usize, needed: usize },
     WrongPeriod,
+    InconsistentSlots { signature_slot: u64, attested_slot: u64 },
     BadFinalityProof,
     BadExecutionProof,
     BadSyncCommitteeProof,
@@ -296,6 +297,15 @@ fn verify_deposit_core(
     if !store.config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
+    if update.signature_slot < update.attested_header.slot
+        || store.config.sync_committee_period(update.signature_slot)
+            != store.config.sync_committee_period(update.attested_header.slot)
+    {
+        return Err(EthError::InconsistentSlots {
+            signature_slot: update.signature_slot,
+            attested_slot: update.attested_header.slot,
+        });
+    }
     verify_sync_aggregate(
         store,
         &update.attested_header,
@@ -303,7 +313,7 @@ fn verify_deposit_core(
         update.signature_slot,
         verifier,
     )?;
-    let electra = store.config.is_electra_at_slot(update.attested_header.slot);
+    let electra = store.config.is_electra_at_slot(update.signature_slot);
     verify_finality(update, electra)?;
     verify_execution(update)?;
 
@@ -728,6 +738,35 @@ mod tests {
             Err(EthError::InvalidParticipationLength {
                 got: 853,
                 expected: 512
+            })
+        );
+    }
+
+    #[test]
+    fn a_signature_slot_before_the_attested_header_is_refused() {
+        let mut f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        let attested = f.update.attested_header.slot;
+        f.update.signature_slot = attested - 5;
+        assert_eq!(
+            verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::InconsistentSlots {
+                signature_slot: attested - 5,
+                attested_slot: attested,
+            })
+        );
+    }
+
+    #[test]
+    fn a_signature_slot_in_another_period_is_refused() {
+        let mut f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        let attested = f.update.attested_header.slot;
+        let crossed = (PERIOD + 1) * PERIOD_SLOTS + 10;
+        f.update.signature_slot = crossed;
+        assert_eq!(
+            verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::InconsistentSlots {
+                signature_slot: crossed,
+                attested_slot: attested,
             })
         );
     }
