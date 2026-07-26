@@ -145,13 +145,13 @@ fn gateway_with_bitcoin_asset() -> Gateway {
 #[test]
 fn a_crafted_bitcoin_deposit_proves_and_clears_the_trustless_gate() {
     let c = bitcoin_corridor();
-    let gw = gateway_with_bitcoin_asset();
+    let mut gw = gateway_with_bitcoin_asset();
     let bridge = p2pkh([0x11; 20]);
     let recipient = [0x42u8; 32];
     let (proven, _raw) = prove_crafted_deposit(&bridge, recipient, 250_000);
     let f = bitcoin_fact(&c, &proven);
 
-    let mint = admit_bitcoin_trustless(&gw, &c, &proven, &f).expect("proven deposit clears the gate");
+    let mint = admit_bitcoin_trustless(&mut gw, &c, &proven, &f).expect("proven deposit clears the gate");
     assert_eq!(mint.amount, 250_000);
     assert_eq!(mint.recipient, recipient);
     assert_eq!(mint.source_ref, proven.txid);
@@ -162,7 +162,7 @@ fn a_crafted_bitcoin_deposit_proves_and_clears_the_trustless_gate() {
 #[test]
 fn a_fact_that_overstates_a_proven_deposit_is_refused() {
     let c = bitcoin_corridor();
-    let gw = gateway_with_bitcoin_asset();
+    let mut gw = gateway_with_bitcoin_asset();
     let bridge = p2pkh([0x11; 20]);
     let recipient = [0x42u8; 32];
     let (proven, _raw) = prove_crafted_deposit(&bridge, recipient, 250_000);
@@ -170,7 +170,7 @@ fn a_fact_that_overstates_a_proven_deposit_is_refused() {
     f.amount = 5_000_000;
 
     assert_eq!(
-        admit_bitcoin_trustless(&gw, &c, &proven, &f),
+        admit_bitcoin_trustless(&mut gw, &c, &proven, &f),
         Err(TrustlessError::AmountMismatch {
             proven: 250_000,
             fact: 5_000_000
@@ -212,7 +212,7 @@ fn a_source_reference_already_spent_at_the_gateway_cannot_be_replayed() {
 
     let f = bitcoin_fact(&c, &proven);
     assert_eq!(
-        admit_bitcoin_trustless(&gw, &c, &proven, &f),
+        admit_bitcoin_trustless(&mut gw, &c, &proven, &f),
         Err(TrustlessError::ReplayedReference)
     );
 }

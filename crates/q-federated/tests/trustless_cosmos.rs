@@ -197,12 +197,12 @@ fn gateway_with_cosmos_asset() -> Gateway {
 #[test]
 fn a_signed_cosmos_deposit_proves_and_clears_the_trustless_gate() {
     let c = cosmos_corridor();
-    let gw = gateway_with_cosmos_asset();
+    let mut gw = gateway_with_cosmos_asset();
     let recipient = [0x51u8; 32];
     let proven = prove_cosmos_deposit(recipient, COSMOS_ASSET, 7_500_000);
     let f = cosmos_fact(&c, &proven, COSMOS_ASSET);
 
-    let mint = admit_cosmos_trustless(&gw, &c, &proven, &f).expect("proven deposit clears the gate");
+    let mint = admit_cosmos_trustless(&mut gw, &c, &proven, &f).expect("proven deposit clears the gate");
     assert_eq!(mint.amount, 7_500_000);
     assert_eq!(mint.recipient, recipient);
     assert_eq!(mint.source_ref, proven.source_ref);
@@ -213,14 +213,14 @@ fn a_signed_cosmos_deposit_proves_and_clears_the_trustless_gate() {
 #[test]
 fn a_fact_that_overstates_a_proven_cosmos_deposit_is_refused() {
     let c = cosmos_corridor();
-    let gw = gateway_with_cosmos_asset();
+    let mut gw = gateway_with_cosmos_asset();
     let recipient = [0x51u8; 32];
     let proven = prove_cosmos_deposit(recipient, COSMOS_ASSET, 7_500_000);
     let mut f = cosmos_fact(&c, &proven, COSMOS_ASSET);
     f.amount = 9_000_000;
 
     assert_eq!(
-        admit_cosmos_trustless(&gw, &c, &proven, &f),
+        admit_cosmos_trustless(&mut gw, &c, &proven, &f),
         Err(TrustlessError::AmountMismatch {
             proven: 7_500_000,
             fact: 9_000_000
@@ -261,7 +261,7 @@ fn a_source_reference_already_spent_at_the_gateway_cannot_be_replayed() {
 
     let f = cosmos_fact(&c, &proven, COSMOS_ASSET);
     assert_eq!(
-        admit_cosmos_trustless(&gw, &c, &proven, &f),
+        admit_cosmos_trustless(&mut gw, &c, &proven, &f),
         Err(TrustlessError::ReplayedReference)
     );
 }

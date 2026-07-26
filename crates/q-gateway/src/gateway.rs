@@ -421,6 +421,52 @@ impl Gateway {
         Ok(ticket)
     }
 
+    /// Authoritatively admit a proof-backed deposit whose light-client proof the caller has already
+    /// verified. The reference is bound against replay and the per-asset and epoch budgets are
+    /// reserved, and all three are committed only when every check passes. This is the accounting the
+    /// on-chain mint reconciles against, so a repeat of the same reference or a deposit past a cap is
+    /// refused here rather than silently re-admitted.
+    pub fn admit_trustless(
+        &mut self,
+        asset_id: [u8; 16],
+        source_ref: [u8; 32],
+        amount: u128,
+    ) -> Result<(), GatewayError> {
+        if self.used_refs.contains(&source_ref) {
+            return Err(GatewayError::ReplayedReference);
+        }
+        let cap = *self
+            .per_asset_cap
+            .get(&asset_id)
+            .ok_or(GatewayError::AssetNotRegistered)?;
+        let minted = *self.per_asset_minted.get(&asset_id).unwrap_or(&0);
+        let asset_after = minted
+            .checked_add(amount)
+            .ok_or(GatewayError::AssetCapExceeded { minted, cap, add: amount })?;
+        if asset_after > cap {
+            return Err(GatewayError::AssetCapExceeded { minted, cap, add: amount });
+        }
+        let epoch_after =
+            self.epoch_minted
+                .checked_add(amount)
+                .ok_or(GatewayError::EpochCapExceeded {
+                    minted: self.epoch_minted,
+                    cap: self.epoch_cap,
+                    add: amount,
+                })?;
+        if epoch_after > self.epoch_cap {
+            return Err(GatewayError::EpochCapExceeded {
+                minted: self.epoch_minted,
+                cap: self.epoch_cap,
+                add: amount,
+            });
+        }
+        self.used_refs.insert(source_ref);
+        self.per_asset_minted.insert(asset_id, asset_after);
+        self.epoch_minted = epoch_after;
+        Ok(())
+    }
+
     pub fn process_deposit(
         &mut self,
         env: &AttestationEnvelope,
