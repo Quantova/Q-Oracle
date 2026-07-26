@@ -1,0 +1,25 @@
+# Copyright 2026 Quantova Inc
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
+[package]
+name = "q-qbridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The qbridge runtime endpoint layer. A pure dispatcher over the pool registry and the gateway that lists a foreign token as a bridge pool, reads pools back, and routes a deposit to the federated or trustless admission path it belongs to. The dispatcher is transport free so a thin server attaches at one documented seam, and the authoritative on-chain mint for a proof-backed corridor stays at the trustless deposit seam it already lives behind."
+
+[dependencies]
+q-assets = { workspace = true }
+q-codec = { workspace = true }
+q-airlock = { workspace = true }
+q-gateway = { workspace = true }
+q-federated = { workspace = true }
+qlc-bitcoin = { workspace = true }
+qlc-ethereum = { workspace = true }
+qlc-cosmos = { workspace = true }
+
+[dev-dependencies]
+qtv-crypto = { workspace = true }
+q-codec = { workspace = true }
+q-airlock = { workspace = true }
