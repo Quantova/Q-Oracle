@@ -47,6 +47,7 @@ pub enum SpvError {
     MerkleMismatch,
     RetargetOnANonBoundary { index: usize },
     RetargetMismatch { index: usize },
+    HeightOverflow,
     HeightOutOfRange,
     InsufficientConfirmations { have: u32, need: u32 },
     CheckpointNotInChain,

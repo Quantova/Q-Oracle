@@ -481,6 +481,7 @@ fn spv_err_json(e: &SpvError) -> Json {
         SpvError::RetargetMismatch { index } => {
             tagged("spv", "retarget_mismatch", vec![("index", usizej(*index))])
         }
+        SpvError::HeightOverflow => tagged("spv", "height_overflow", vec![]),
         SpvError::HeightOutOfRange => tagged("spv", "height_out_of_range", vec![]),
         SpvError::InsufficientConfirmations { have, need } => tagged(
             "spv",
@@ -513,6 +514,7 @@ fn spv_err_from(j: &Json) -> Result<SpvError, WireError> {
         "retarget_mismatch" => Ok(SpvError::RetargetMismatch {
             index: as_usize(field(j, "index")?, "index")?,
         }),
+        "height_overflow" => Ok(SpvError::HeightOverflow),
         "height_out_of_range" => Ok(SpvError::HeightOutOfRange),
         "insufficient_confirmations" => Ok(SpvError::InsufficientConfirmations {
             have: as_u32(field(j, "have")?, "have")?,
