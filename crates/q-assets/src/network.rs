@@ -81,6 +81,49 @@ impl Network {
     pub fn id(self) -> u32 {
         self as u32
     }
+
+    pub fn from_id(id: u32) -> Option<Network> {
+        Network::ALL.into_iter().find(|n| n.id() == id)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Network::Bitcoin => "Bitcoin",
+            Network::BitcoinCash => "Bitcoin Cash",
+            Network::Ethereum => "Ethereum",
+            Network::BnbChain => "BNB Chain",
+            Network::Polygon => "Polygon",
+            Network::Avalanche => "Avalanche",
+            Network::Arbitrum => "Arbitrum",
+            Network::Optimism => "Optimism",
+            Network::Fantom => "Fantom",
+            Network::Celo => "Celo",
+            Network::Cosmos => "Cosmos",
+            Network::Osmosis => "Osmosis",
+            Network::Celestia => "Celestia",
+            Network::Injective => "Injective",
+            Network::Sei => "Sei",
+            Network::Kava => "Kava",
+            Network::Solana => "Solana",
+            Network::Tron => "Tron",
+            Network::Ripple => "Ripple",
+            Network::Cardano => "Cardano",
+            Network::Near => "Near",
+            Network::Sui => "Sui",
+            Network::Aptos => "Aptos",
+            Network::Hedera => "Hedera",
+            Network::Algorand => "Algorand",
+            Network::Ton => "Ton",
+            Network::Stellar => "Stellar",
+            Network::RobinhoodChain => "Robinhood Chain",
+            Network::Monero => "Monero",
+            Network::Litecoin => "Litecoin",
+            Network::Dogecoin => "Dogecoin",
+            Network::Zcash => "Zcash",
+            Network::Filecoin => "Filecoin",
+            Network::Cronos => "Cronos",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -103,6 +146,26 @@ mod tests {
     fn every_origin_network_id_is_distinct() {
         let ids: BTreeSet<u32> = Network::ALL.iter().map(|n| n.id()).collect();
         assert_eq!(ids.len(), Network::ALL.len());
+    }
+
+    #[test]
+    fn every_network_round_trips_through_its_id() {
+        for network in Network::ALL {
+            assert_eq!(Network::from_id(network.id()), Some(network));
+        }
+    }
+
+    #[test]
+    fn an_id_outside_the_registry_resolves_to_nothing() {
+        assert_eq!(Network::from_id(8), None);
+        assert_eq!(Network::from_id(999), None);
+    }
+
+    #[test]
+    fn every_network_has_a_non_empty_distinct_name() {
+        let names: BTreeSet<&'static str> = Network::ALL.iter().map(|n| n.name()).collect();
+        assert_eq!(names.len(), Network::ALL.len());
+        assert!(Network::ALL.iter().all(|n| !n.name().is_empty()));
     }
 
     #[test]
