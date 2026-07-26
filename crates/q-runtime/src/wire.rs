@@ -7,12 +7,11 @@ use q_codec::{BridgeFact, CodecError};
 use q_federated::{FederatedError, PoolError, PoolRequest, TrustlessError, TrustlessMint};
 use q_gateway::{GatewayError, MintReceipt};
 use q_qbridge::{
-    ApiError, DepositOutcome, DepositProof, DepositRequest, DepositStatusRequest, DepositStatusView,
-    GetPoolRequest, ListPoolsRequest, PoolView, Request, Response,
+    ApiError, BitcoinProofMaterial, DepositOutcome, DepositProof, DepositRequest,
+    DepositStatusRequest, DepositStatusView, GetPoolRequest, ListPoolsRequest, PoolView, Request,
+    Response,
 };
-use qlc_bitcoin::TrustlessDeposit as BitcoinDeposit;
-use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
-use qlc_ethereum::TrustlessDeposit as EthereumDeposit;
+use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
 
 use crate::json::{from_hex, object, to_hex, Json};
 
@@ -199,49 +198,35 @@ fn encode_proof(proof: &DepositProof) -> Json {
             ("kind", Json::str("federated")),
             ("envelope", hexs(&env.encode())),
         ]),
-        DepositProof::Bitcoin { proven, fact } => object(vec![
+        DepositProof::Bitcoin { material, fact } => object(vec![
             ("kind", Json::str("bitcoin")),
             (
-                "proven",
-                object(vec![
-                    ("txid", hexs(&proven.txid)),
-                    ("amount", u128s(proven.amount)),
-                    ("recipient", hexs(&proven.recipient)),
-                    ("confirmations", u32j(proven.confirmations)),
-                ]),
+                "headers",
+                Json::Array(material.headers.iter().map(|h| hexs(&h.serialize())).collect()),
             ),
-            ("fact", hexs(&fact.encode())),
-        ]),
-        DepositProof::Ethereum { proven, fact } => object(vec![
-            ("kind", Json::str("ethereum")),
+            ("start_height", u32j(material.start_height)),
+            ("deposit_height", u32j(material.deposit_height)),
             (
-                "proven",
-                object(vec![
-                    ("source_ref", hexs(&proven.source_ref)),
-                    ("amount", u128s(proven.amount)),
-                    ("recipient", hexs(&proven.recipient)),
-                    ("asset_id", hexs(&proven.asset_id)),
-                    ("block_number", Json::Int(proven.block_number)),
-                    ("finality_depth", u32j(proven.finality_depth)),
-                ]),
+                "branch",
+                Json::Array(
+                    material
+                        .branch
+                        .iter()
+                        .map(|s| {
+                            object(vec![
+                                ("hash", hexs(&s.hash)),
+                                ("sibling_on_left", Json::Bool(s.sibling_on_left)),
+                            ])
+                        })
+                        .collect(),
+                ),
             ),
+            ("raw_tx", hexs(&material.raw_tx)),
+            ("deposit_script", hexs(&material.deposit_script)),
             ("fact", hexs(&fact.encode())),
         ]),
-        DepositProof::Cosmos { proven, fact } => object(vec![
-            ("kind", Json::str("cosmos")),
-            (
-                "proven",
-                object(vec![
-                    ("source_ref", hexs(&proven.source_ref)),
-                    ("amount", u128s(proven.amount)),
-                    ("recipient", hexs(&proven.recipient)),
-                    ("asset_id", hexs(&proven.asset_id)),
-                    ("height", Json::Int(proven.height)),
-                    ("confirmations", u32j(proven.confirmations)),
-                ]),
-            ),
-            ("fact", hexs(&fact.encode())),
-        ]),
+        DepositProof::Ethereum { .. } => object(vec![("kind", Json::str("ethereum"))]),
+        DepositProof::Cosmos { .. } => object(vec![("kind", Json::str("cosmos"))]),
     }
 }
 
@@ -260,45 +245,37 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
             }
         }
         "bitcoin" => {
-            let p = field(j, "proven")?;
+            let headers_json = field(j, "headers")?
+                .as_array()
+                .ok_or(WireError::BadType("headers"))?;
+            let mut headers = Vec::with_capacity(headers_json.len());
+            for h in headers_json {
+                let bytes = as_hex(h, "headers")?;
+                headers.push(BlockHeader::parse(&bytes).map_err(|_| WireError::BadField("headers"))?);
+            }
+            let branch_json = field(j, "branch")?
+                .as_array()
+                .ok_or(WireError::BadType("branch"))?;
+            let mut branch = Vec::with_capacity(branch_json.len());
+            for s in branch_json {
+                branch.push(MerkleStep {
+                    hash: hex_array::<32>(field(s, "hash")?, "hash")?,
+                    sibling_on_left: as_bool(field(s, "sibling_on_left")?, "sibling_on_left")?,
+                });
+            }
             Ok(DepositProof::Bitcoin {
-                proven: BitcoinDeposit {
-                    txid: hex_array::<32>(field(p, "txid")?, "txid")?,
-                    amount: as_u128(field(p, "amount")?, "amount")?,
-                    recipient: hex_array::<32>(field(p, "recipient")?, "recipient")?,
-                    confirmations: as_u32(field(p, "confirmations")?, "confirmations")?,
+                material: BitcoinProofMaterial {
+                    headers,
+                    start_height: as_u32(field(j, "start_height")?, "start_height")?,
+                    deposit_height: as_u32(field(j, "deposit_height")?, "deposit_height")?,
+                    branch,
+                    raw_tx: as_hex(field(j, "raw_tx")?, "raw_tx")?,
+                    deposit_script: as_hex(field(j, "deposit_script")?, "deposit_script")?,
                 },
                 fact: decode_fact(j)?,
             })
         }
-        "ethereum" => {
-            let p = field(j, "proven")?;
-            Ok(DepositProof::Ethereum {
-                proven: EthereumDeposit {
-                    source_ref: hex_array::<32>(field(p, "source_ref")?, "source_ref")?,
-                    amount: as_u128(field(p, "amount")?, "amount")?,
-                    recipient: hex_array::<32>(field(p, "recipient")?, "recipient")?,
-                    asset_id: hex_array::<16>(field(p, "asset_id")?, "asset_id")?,
-                    block_number: as_u64(field(p, "block_number")?, "block_number")?,
-                    finality_depth: as_u32(field(p, "finality_depth")?, "finality_depth")?,
-                },
-                fact: decode_fact(j)?,
-            })
-        }
-        "cosmos" => {
-            let p = field(j, "proven")?;
-            Ok(DepositProof::Cosmos {
-                proven: CosmosDeposit {
-                    source_ref: hex_array::<32>(field(p, "source_ref")?, "source_ref")?,
-                    amount: as_u128(field(p, "amount")?, "amount")?,
-                    recipient: hex_array::<32>(field(p, "recipient")?, "recipient")?,
-                    asset_id: hex_array::<16>(field(p, "asset_id")?, "asset_id")?,
-                    height: as_u64(field(p, "height")?, "height")?,
-                    confirmations: as_u32(field(p, "confirmations")?, "confirmations")?,
-                },
-                fact: decode_fact(j)?,
-            })
-        }
+        "ethereum" | "cosmos" => Err(WireError::BadProofKind(kind.to_string())),
         other => Err(WireError::BadProofKind(other.to_string())),
     }
 }
@@ -478,9 +455,75 @@ fn api_json(api: &ApiError) -> Json {
             ],
         ),
         ApiError::ProofTierMismatch => tagged("api", "proof_tier_mismatch", vec![]),
+        ApiError::NoAnchor(id) => tagged("api", "no_anchor", vec![("network_id", u32j(*id))]),
+        ApiError::BitcoinSpv(e) => tagged("api", "bitcoin_spv", vec![("spv", spv_err_json(e))]),
         ApiError::Pool(e) => pool_err_json(e),
         ApiError::Federated(e) => federated_err_json(e),
         ApiError::Trustless(e) => trustless_err_json(e),
+    }
+}
+
+fn spv_err_json(e: &SpvError) -> Json {
+    match e {
+        SpvError::ShortHeader => tagged("spv", "short_header", vec![]),
+        SpvError::PowNotMet => tagged("spv", "pow_not_met", vec![]),
+        SpvError::TargetBelowFloor { index } => {
+            tagged("spv", "target_below_floor", vec![("index", usizej(*index))])
+        }
+        SpvError::BrokenLink { index } => {
+            tagged("spv", "broken_link", vec![("index", usizej(*index))])
+        }
+        SpvError::EmptyChain => tagged("spv", "empty_chain", vec![]),
+        SpvError::MerkleMismatch => tagged("spv", "merkle_mismatch", vec![]),
+        SpvError::RetargetOnANonBoundary { index } => {
+            tagged("spv", "retarget_on_a_non_boundary", vec![("index", usizej(*index))])
+        }
+        SpvError::RetargetMismatch { index } => {
+            tagged("spv", "retarget_mismatch", vec![("index", usizej(*index))])
+        }
+        SpvError::HeightOutOfRange => tagged("spv", "height_out_of_range", vec![]),
+        SpvError::InsufficientConfirmations { have, need } => tagged(
+            "spv",
+            "insufficient_confirmations",
+            vec![("have", u32j(*have)), ("need", u32j(*need))],
+        ),
+        SpvError::CheckpointNotInChain => tagged("spv", "checkpoint_not_in_chain", vec![]),
+        SpvError::CheckpointMismatch => tagged("spv", "checkpoint_mismatch", vec![]),
+        SpvError::InsufficientWork => tagged("spv", "insufficient_work", vec![]),
+        SpvError::MalformedTransaction => tagged("spv", "malformed_transaction", vec![]),
+        SpvError::TransactionMismatch => tagged("spv", "transaction_mismatch", vec![]),
+    }
+}
+
+fn spv_err_from(j: &Json) -> Result<SpvError, WireError> {
+    match code_of(j)? {
+        "short_header" => Ok(SpvError::ShortHeader),
+        "pow_not_met" => Ok(SpvError::PowNotMet),
+        "target_below_floor" => Ok(SpvError::TargetBelowFloor {
+            index: as_usize(field(j, "index")?, "index")?,
+        }),
+        "broken_link" => Ok(SpvError::BrokenLink {
+            index: as_usize(field(j, "index")?, "index")?,
+        }),
+        "empty_chain" => Ok(SpvError::EmptyChain),
+        "merkle_mismatch" => Ok(SpvError::MerkleMismatch),
+        "retarget_on_a_non_boundary" => Ok(SpvError::RetargetOnANonBoundary {
+            index: as_usize(field(j, "index")?, "index")?,
+        }),
+        "retarget_mismatch" => Ok(SpvError::RetargetMismatch {
+            index: as_usize(field(j, "index")?, "index")?,
+        }),
+        "height_out_of_range" => Ok(SpvError::HeightOutOfRange),
+        "insufficient_confirmations" => Ok(SpvError::InsufficientConfirmations {
+            have: as_u32(field(j, "have")?, "have")?,
+            need: as_u32(field(j, "need")?, "need")?,
+        }),
+        "checkpoint_not_in_chain" => Ok(SpvError::CheckpointNotInChain),
+        "checkpoint_mismatch" => Ok(SpvError::CheckpointMismatch),
+        "insufficient_work" => Ok(SpvError::InsufficientWork),
+        "malformed_transaction" => Ok(SpvError::MalformedTransaction),
+        "transaction_mismatch" => Ok(SpvError::TransactionMismatch),
+        other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }
 
@@ -500,6 +543,11 @@ fn api_from(j: &Json) -> Result<ApiError, WireError> {
                 pool_network: as_u32(field(j, "pool_network")?, "pool_network")?,
             }),
             "proof_tier_mismatch" => Ok(ApiError::ProofTierMismatch),
+            "no_anchor" => Ok(ApiError::NoAnchor(as_u32(
+                field(j, "network_id")?,
+                "network_id",
+            )?)),
+            "bitcoin_spv" => Ok(ApiError::BitcoinSpv(spv_err_from(field(j, "spv")?)?)),
             other => Err(WireError::UnknownErrorCode(other.to_string())),
         },
         "pool" => Ok(ApiError::Pool(pool_err_from(j)?)),
@@ -1022,52 +1070,49 @@ mod tests {
     }
 
     #[test]
-    fn a_bitcoin_deposit_round_trips_through_the_proof_and_fact_frames() {
+    fn a_bitcoin_deposit_round_trips_its_raw_material_and_fact() {
+        let material = BitcoinProofMaterial {
+            headers: vec![BlockHeader {
+                version: 1,
+                prev_block: [0xaa; 32],
+                merkle_root: [0xbb; 32],
+                timestamp: 1_700_000_000,
+                bits: 0x207f_ffff,
+                nonce: 42,
+            }],
+            start_height: 100,
+            deposit_height: 100,
+            branch: vec![MerkleStep {
+                hash: [0xcc; 32],
+                sibling_on_left: true,
+            }],
+            raw_tx: vec![0x01, 0x02, 0x03, 0x04],
+            deposit_script: vec![0x76, 0xa9, 0x14],
+        };
         round_request(Request::SubmitDeposit(DepositRequest {
             proof: DepositProof::Bitcoin {
-                proven: BitcoinDeposit {
-                    txid: [0x11; 32],
-                    amount: 250_000,
-                    recipient: [0x42; 32],
-                    confirmations: 6,
-                },
+                material,
                 fact: sample_fact(),
             },
         }));
     }
 
     #[test]
-    fn an_ethereum_deposit_round_trips() {
-        round_request(Request::SubmitDeposit(DepositRequest {
-            proof: DepositProof::Ethereum {
-                proven: EthereumDeposit {
-                    source_ref: [0x33; 32],
-                    amount: 7_000_000,
-                    recipient: [0x42; 32],
-                    asset_id: [0x77; 16],
-                    block_number: 20_000_000,
-                    finality_depth: 64,
-                },
-                fact: sample_fact(),
-            },
-        }));
+    fn an_ethereum_proof_from_an_untrusted_client_is_refused() {
+        let body = object(vec![("proof", object(vec![("kind", Json::str("ethereum"))]))]);
+        assert!(matches!(
+            decode_request("submit_deposit", &body),
+            Err(WireError::BadProofKind(_))
+        ));
     }
 
     #[test]
-    fn a_cosmos_deposit_round_trips() {
-        round_request(Request::SubmitDeposit(DepositRequest {
-            proof: DepositProof::Cosmos {
-                proven: CosmosDeposit {
-                    source_ref: [0x55; 32],
-                    amount: 7_500_000,
-                    recipient: [0x51; 32],
-                    asset_id: [0x22; 16],
-                    height: 18_500_000,
-                    confirmations: 2,
-                },
-                fact: sample_fact(),
-            },
-        }));
+    fn a_cosmos_proof_from_an_untrusted_client_is_refused() {
+        let body = object(vec![("proof", object(vec![("kind", Json::str("cosmos"))]))]);
+        assert!(matches!(
+            decode_request("submit_deposit", &body),
+            Err(WireError::BadProofKind(_))
+        ));
     }
 
     #[test]

@@ -26,8 +26,9 @@ use std::collections::BTreeMap;
 
 use q_airlock::AttestationEnvelope;
 use q_codec::BridgeFact;
-use q_qbridge::{handle, DepositProof, DepositRequest, Request, Response};
-use qlc_bitcoin::TrustlessDeposit as BitcoinDeposit;
+use q_qbridge::{
+    handle, BitcoinProofMaterial, DepositProof, DepositRequest, Request, Response,
+};
 use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
 use qlc_ethereum::TrustlessDeposit as EthereumDeposit;
 
@@ -54,10 +55,8 @@ pub fn federated_proof(envelope: AttestationEnvelope) -> DepositProof {
     DepositProof::Federated(envelope)
 }
 
-/// A Bitcoin deposit proven by [`qlc_bitcoin::verify_trustless_deposit`], paired with the fact that
-/// names the intended mint, ready for the trustless admission path.
-pub fn bitcoin_proof(proven: BitcoinDeposit, fact: BridgeFact) -> DepositProof {
-    DepositProof::Bitcoin { proven, fact }
+pub fn bitcoin_proof(material: BitcoinProofMaterial, fact: BridgeFact) -> DepositProof {
+    DepositProof::Bitcoin { material, fact }
 }
 
 /// An Ethereum deposit proven by the `qlc_ethereum` engine, paired with its fact.
@@ -139,11 +138,8 @@ mod tests {
     use q_assets::Network;
     use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
     use q_federated::derive_asset_id;
-    use q_qbridge::{DepositOutcome, Response};
-    use qlc_bitcoin::{
-        verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, Network as BtcNetwork,
-        NetworkParams,
-    };
+    use q_qbridge::{BitcoinAnchor, DepositOutcome, Response};
+    use qlc_bitcoin::{BlockHeader, Checkpoint, Network as BtcNetwork, NetworkParams, U256};
     use qlc_bitcoin::tx::Transaction;
 
     const EASY6: NetworkParams = NetworkParams {
@@ -201,13 +197,23 @@ mod tests {
         header
     }
 
-    /// A mock RPC watcher that runs the real Bitcoin verifier over a crafted six-deep chain and
-    /// emits the verified deposit. This stands in for the concrete Bitcoin RPC client that attaches
-    /// at the same seam, so the verifier really runs behind the watcher here.
+    fn crafted_chain(txid: [u8; 32]) -> Vec<BlockHeader> {
+        let mut headers = vec![mine([0u8; 32], txid)];
+        let mut prev = headers[0].block_hash();
+        for i in 0..5u8 {
+            let block = mine(prev, [i + 1; 32]);
+            prev = block.block_hash();
+            headers.push(block);
+        }
+        headers
+    }
+
     struct BitcoinNode {
         raw_tx: Vec<u8>,
         bridge_script: Vec<u8>,
         asset_id: [u8; 16],
+        recipient: [u8; 32],
+        amount: u128,
     }
 
     impl ChainWatcher for BitcoinNode {
@@ -219,26 +225,14 @@ mod tests {
             let txid = Transaction::parse(&self.raw_tx)
                 .map_err(|_| WatchError::Rpc("unparseable transaction".to_string()))?
                 .txid();
-            let mut headers = vec![mine([0u8; 32], txid)];
-            let mut prev = headers[0].block_hash();
-            for i in 0..5u8 {
-                let block = mine(prev, [i + 1; 32]);
-                prev = block.block_hash();
-                headers.push(block);
-            }
-            let chain =
-                verify_chain(&headers, 0, &EASY6).map_err(|_| WatchError::Rpc("bad chain".into()))?;
-            let proven =
-                verify_trustless_deposit(
-                    &chain,
-                    &EASY6,
-                    &Checkpoint::accepting(&chain),
-                    0,
-                    &[],
-                    &self.raw_tx,
-                    &self.bridge_script,
-                )
-                .map_err(|_| WatchError::Rpc("deposit did not verify".into()))?;
+            let material = BitcoinProofMaterial {
+                headers: crafted_chain(txid),
+                start_height: 0,
+                deposit_height: 0,
+                branch: vec![],
+                raw_tx: self.raw_tx.clone(),
+                deposit_script: self.bridge_script.clone(),
+            };
             let fact = BridgeFact {
                 version: FACT_VERSION,
                 source_chain: Network::Bitcoin.id(),
@@ -246,15 +240,15 @@ mod tests {
                 route_id: 1,
                 direction: Direction::Deposit,
                 nonce: 1,
-                source_ref: SourceRef(proven.txid),
+                source_ref: SourceRef(txid),
                 asset_id: AssetId(self.asset_id),
-                amount: proven.amount,
-                recipient: Recipient(proven.recipient),
-                finality_depth: proven.confirmations,
+                amount: self.amount,
+                recipient: Recipient(self.recipient),
+                finality_depth: 6,
                 observed_height: 800_000,
                 expiry_height: 900_000,
             };
-            Ok(vec![bitcoin_proof(proven, fact)])
+            Ok(vec![bitcoin_proof(material, fact)])
         }
     }
 
@@ -277,13 +271,24 @@ mod tests {
         let raw = raw_deposit_tx(&[(250_000, bridge.clone()), (0, op_return(recipient))]);
         let txid = Transaction::parse(&raw).unwrap().txid();
         let asset_id = derive_asset_id(Network::Bitcoin, "BTC").0;
+        let checkpoint = Checkpoint {
+            height: 0,
+            hash: crafted_chain(txid)[0].block_hash(),
+            min_work: U256::ZERO,
+        };
 
         let state = shared(boot());
+        state
+            .lock()
+            .unwrap()
+            .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6 });
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(BitcoinNode {
             raw_tx: raw,
             bridge_script: bridge,
             asset_id,
+            recipient,
+            amount: 250_000,
         }));
 
         let ingested = ingest_once(&state, &pool);
