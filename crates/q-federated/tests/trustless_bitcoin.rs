@@ -8,7 +8,9 @@ use q_federated::{admit_bitcoin_trustless, install, Corridor, TrustlessError, SO
 use q_gateway::{Gateway, OperatorSet};
 use qlc_bitcoin::params::Network;
 use qlc_bitcoin::tx::Transaction;
-use qlc_bitcoin::{verify_chain, verify_trustless_deposit, BlockHeader, NetworkParams, TrustlessDeposit};
+use qlc_bitcoin::{
+    verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, NetworkParams, TrustlessDeposit,
+};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
 const BITCOIN_CHAIN: u32 = 2;
@@ -86,7 +88,9 @@ fn prove_crafted_deposit(bridge: &[u8], recipient: [u8; 32], amount: u64) -> (Tr
     let raw = raw_deposit_tx(&[(amount, bridge.to_vec()), (0, op_return(recipient))]);
     let txid = Transaction::parse(&raw).unwrap().txid();
     let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
-    let proven = verify_trustless_deposit(&chain, &EASY, 0, &[], &raw, bridge).unwrap();
+    let proven =
+        verify_trustless_deposit(&chain, &EASY, &Checkpoint::accepting(&chain), 0, &[], &raw, bridge)
+            .unwrap();
     (proven, raw)
 }
 

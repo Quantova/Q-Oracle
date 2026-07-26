@@ -4,7 +4,7 @@
 use crate::params::NetworkParams;
 use crate::retarget::compute_retarget;
 use crate::work::{block_work, U256};
-use crate::{fold_merkle_branch, BlockHeader, MerkleStep, SpvError};
+use crate::{compact_to_target, fold_merkle_branch, BlockHeader, MerkleStep, SpvError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedChain {
@@ -13,6 +13,31 @@ pub struct VerifiedChain {
     pub tip_hash: [u8; 32],
     pub work: U256,
     headers: Vec<BlockHeader>,
+}
+
+/// A pinned trust root for the Bitcoin chain: a block known good at a given height, plus the minimum
+/// cumulative work a chain descending from it must carry. It comes from config or genesis, never from
+/// the submitted proof, so a chain a caller supplies has to descend from a checkpoint it did not pick.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checkpoint {
+    pub height: u32,
+    pub hash: [u8; 32],
+    pub min_work: U256,
+}
+
+impl Checkpoint {
+    /// A checkpoint that anchors a chain to its own start with no work floor. For tests and fixtures
+    /// that exercise the chain machinery rather than the trust root.
+    pub fn accepting(chain: &VerifiedChain) -> Checkpoint {
+        Checkpoint {
+            height: chain.start_height,
+            hash: chain
+                .header_at(chain.start_height)
+                .map(|h| h.block_hash())
+                .unwrap_or([0u8; 32]),
+            min_work: U256::ZERO,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,10 +70,14 @@ pub fn verify_chain(
     if headers.is_empty() {
         return Err(SpvError::EmptyChain);
     }
+    let pow_limit = compact_to_target(params.pow_limit_bits);
     let mut work = U256::ZERO;
     for (i, h) in headers.iter().enumerate() {
         if !h.meets_pow() {
             return Err(SpvError::PowNotMet);
+        }
+        if h.target() > pow_limit {
+            return Err(SpvError::TargetBelowFloor { index: i });
         }
         let height = start_height + i as u32;
         if i > 0 {
@@ -99,6 +128,22 @@ pub fn heavier<'a>(a: &'a VerifiedChain, b: &'a VerifiedChain) -> &'a VerifiedCh
 }
 
 impl VerifiedChain {
+    /// Require this chain to descend from a pinned checkpoint and to carry the checkpoint's minimum
+    /// cumulative work. The checkpoint block must appear in the chain at its height with its hash, so
+    /// a chain a caller mined off some other history is refused, and a low-work chain cannot pass.
+    pub fn anchored_to(&self, checkpoint: &Checkpoint) -> Result<(), SpvError> {
+        let header = self
+            .header_at(checkpoint.height)
+            .ok_or(SpvError::CheckpointNotInChain)?;
+        if header.block_hash() != checkpoint.hash {
+            return Err(SpvError::CheckpointMismatch);
+        }
+        if self.work < checkpoint.min_work {
+            return Err(SpvError::InsufficientWork);
+        }
+        Ok(())
+    }
+
     pub fn header_at(&self, height: u32) -> Option<&BlockHeader> {
         if height < self.start_height || height > self.tip_height {
             return None;
@@ -229,6 +274,59 @@ mod tests {
             verify_chain(&headers, 0, &BITCOIN),
             Err(SpvError::BrokenLink { index: 2 })
         );
+    }
+
+    #[test]
+    fn a_trivial_difficulty_header_is_rejected_below_the_pow_floor() {
+        let mut trivial = BlockHeader {
+            version: 1,
+            prev_block: [0u8; 32],
+            merkle_root: [0x11u8; 32],
+            timestamp: 1_700_000_000,
+            bits: 0x207f_ffff,
+            nonce: 0,
+        };
+        while !trivial.meets_pow() {
+            trivial.nonce = trivial.nonce.wrapping_add(1);
+        }
+        assert_eq!(
+            verify_chain(&[trivial], 0, &BITCOIN),
+            Err(SpvError::TargetBelowFloor { index: 0 }),
+            "a header easier than the network pow limit cannot forge a chain"
+        );
+    }
+
+    #[test]
+    fn a_chain_that_does_not_descend_from_the_checkpoint_is_rejected() {
+        let chain = verify_chain(&early_chain(), 0, &BITCOIN).unwrap();
+
+        let good = Checkpoint {
+            height: 0,
+            hash: header(B0).block_hash(),
+            min_work: U256::ZERO,
+        };
+        assert!(chain.anchored_to(&good).is_ok(), "the genuine anchored chain verifies");
+
+        let wrong_hash = Checkpoint {
+            height: 0,
+            hash: [0x99u8; 32],
+            min_work: U256::ZERO,
+        };
+        assert_eq!(chain.anchored_to(&wrong_hash), Err(SpvError::CheckpointMismatch));
+
+        let out_of_range = Checkpoint {
+            height: 999,
+            hash: header(B0).block_hash(),
+            min_work: U256::ZERO,
+        };
+        assert_eq!(chain.anchored_to(&out_of_range), Err(SpvError::CheckpointNotInChain));
+
+        let too_light = Checkpoint {
+            height: 0,
+            hash: header(B0).block_hash(),
+            min_work: U256::from_u64(u64::MAX),
+        };
+        assert_eq!(chain.anchored_to(&too_light), Err(SpvError::InsufficientWork));
     }
 
     #[test]
