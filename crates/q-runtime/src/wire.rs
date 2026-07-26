@@ -605,6 +605,9 @@ fn trustless_err_json(e: &TrustlessError) -> Json {
                 ("add", u128s(*add)),
             ],
         ),
+        TrustlessError::Gateway(g) => {
+            tagged("trustless", "gateway", vec![("gateway", gateway_err_json(g))])
+        }
     }
 }
 
@@ -633,6 +636,7 @@ fn trustless_err_from(j: &Json) -> Result<TrustlessError, WireError> {
             cap: as_u128(field(j, "cap")?, "cap")?,
             add: as_u128(field(j, "add")?, "add")?,
         }),
+        "gateway" => Ok(TrustlessError::Gateway(gateway_err_from(field(j, "gateway")?)?)),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }

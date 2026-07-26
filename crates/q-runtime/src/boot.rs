@@ -230,8 +230,8 @@ mod tests {
                 assert_eq!(mint.amount, 250_000);
                 assert_eq!(mint.source_ref, txid);
                 assert!(
-                    !state.gateway.is_reference_used(&txid),
-                    "the trustless seam admits without minting on chain here"
+                    state.gateway.is_reference_used(&txid),
+                    "the trustless admission binds the reference so it cannot be replayed"
                 );
             }
             other => panic!("expected a trustless admission, got {other:?}"),

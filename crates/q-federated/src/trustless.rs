@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_codec::BridgeFact;
-use q_gateway::Gateway;
+use q_gateway::{Gateway, GatewayError};
 use qlc_bitcoin::TrustlessDeposit;
 use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
 use qlc_ethereum::TrustlessDeposit as EthereumDeposit;
@@ -21,6 +21,7 @@ pub enum TrustlessError {
     ReplayedReference,
     AssetNotRegistered,
     AssetCapExceeded { minted: u128, cap: u128, add: u128 },
+    Gateway(GatewayError),
 }
 
 /// A trustless deposit that has passed the fact-match gate and is cleared to mint. Every field is
@@ -88,13 +89,12 @@ pub fn match_bitcoin_deposit(
 }
 
 /// The trustless admission path, run alongside the federated `admit`. It clears the fact-match
-/// gate, then applies the gateway's replay and per-asset cap checks against current state. The
-/// gateway is read only here: the authoritative mint, which inserts the source reference and
-/// advances the minted total under the same replay and cap invariants, is the seam this returns
-/// to. That mint entry point is not opened on the gateway because a proof-backed deposit must not
-/// mint without the corridor's STARK verified on chain, a founder-level gateway change.
+/// gate, then authoritatively binds the source reference against replay and reserves the per-asset
+/// and epoch budget on the gateway, committing only when every check passes. The on-chain token
+/// mint stays downstream, gated on the corridor's STARK verified on chain, and reconciles against
+/// this reservation.
 pub fn admit_bitcoin_trustless(
-    gateway: &Gateway,
+    gateway: &mut Gateway,
     corridor: &Corridor,
     proven: &TrustlessDeposit,
     fact: &BridgeFact,
@@ -104,29 +104,20 @@ pub fn admit_bitcoin_trustless(
     Ok(mint)
 }
 
-fn apply_replay_and_cap(gateway: &Gateway, mint: &TrustlessMint) -> Result<(), TrustlessError> {
-    if gateway.is_reference_used(&mint.source_ref) {
-        return Err(TrustlessError::ReplayedReference);
-    }
-    let cap = gateway
-        .asset_cap(&mint.asset_id)
-        .ok_or(TrustlessError::AssetNotRegistered)?;
-    let minted = gateway.minted_of_asset(&mint.asset_id);
-    let after = minted
-        .checked_add(mint.amount)
-        .ok_or(TrustlessError::AssetCapExceeded {
-            minted,
-            cap,
-            add: mint.amount,
-        })?;
-    if after > cap {
-        return Err(TrustlessError::AssetCapExceeded {
-            minted,
-            cap,
-            add: mint.amount,
-        });
-    }
-    Ok(())
+/// Authoritatively commit the admission: bind the source reference against replay and reserve the
+/// per-asset and epoch budget on the gateway. A repeat of the same reference or a deposit past a cap
+/// is refused, and the reserved total is advanced only when it admits, so caps actually bind.
+fn apply_replay_and_cap(gateway: &mut Gateway, mint: &TrustlessMint) -> Result<(), TrustlessError> {
+    gateway
+        .admit_trustless(mint.asset_id, mint.source_ref, mint.amount)
+        .map_err(|e| match e {
+            GatewayError::ReplayedReference => TrustlessError::ReplayedReference,
+            GatewayError::AssetNotRegistered => TrustlessError::AssetNotRegistered,
+            GatewayError::AssetCapExceeded { minted, cap, add } => {
+                TrustlessError::AssetCapExceeded { minted, cap, add }
+            }
+            other => TrustlessError::Gateway(other),
+        })
 }
 
 /// The pure verification-plus-fact-match gate for a proof-backed Ethereum corridor. A verified
@@ -180,11 +171,10 @@ pub fn match_ethereum_deposit(
 }
 
 /// The trustless admission path for an Ethereum corridor. It clears the fact-match gate, then
-/// applies the gateway's replay and per-asset cap checks against current state. The gateway is read
-/// only here: the authoritative mint is left at the same seam the Bitcoin path documents, not
-/// opened for a proof-backed deposit without the corridor's STARK verified on chain.
+/// authoritatively binds the reference and reserves the per-asset and epoch budget on the gateway,
+/// as the Bitcoin path documents. The on-chain token mint stays downstream on the corridor's STARK.
 pub fn admit_ethereum_trustless(
-    gateway: &Gateway,
+    gateway: &mut Gateway,
     corridor: &Corridor,
     proven: &EthereumDeposit,
     fact: &BridgeFact,
@@ -244,12 +234,11 @@ pub fn match_cosmos_deposit(
     })
 }
 
-/// The trustless admission path for a Cosmos corridor. It clears the fact-match gate, then applies
-/// the gateway's replay and per-asset cap checks against current state. The gateway is read only
-/// here: the authoritative mint is left at the same seam the Bitcoin path documents, not opened for
-/// a proof-backed deposit without the corridor's STARK verified on chain.
+/// The trustless admission path for a Cosmos corridor. It clears the fact-match gate, then
+/// authoritatively binds the reference and reserves the per-asset and epoch budget on the gateway,
+/// as the Bitcoin path documents. The on-chain token mint stays downstream on the corridor's STARK.
 pub fn admit_cosmos_trustless(
-    gateway: &Gateway,
+    gateway: &mut Gateway,
     corridor: &Corridor,
     proven: &CosmosDeposit,
     fact: &BridgeFact,
@@ -444,25 +433,25 @@ mod tests {
     #[test]
     fn admission_clears_within_the_asset_cap() {
         let c = corridor(Tier::ProofBacked);
-        let gw = gateway_with_cap(c.origin_asset.0, 1_000_000);
+        let mut gw = gateway_with_cap(c.origin_asset.0, 1_000_000);
         let txid = [0x11u8; 32];
         let recipient = [0x42u8; 32];
         let p = proven(txid, 250_000, recipient, 6);
         let f = fact_for(&c, txid, 250_000, recipient);
-        let mint = admit_bitcoin_trustless(&gw, &c, &p, &f).expect("within cap");
+        let mint = admit_bitcoin_trustless(&mut gw, &c, &p, &f).expect("within cap");
         assert_eq!(mint.amount, 250_000);
     }
 
     #[test]
     fn admission_refuses_an_unregistered_asset() {
         let c = corridor(Tier::ProofBacked);
-        let gw = Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000);
+        let mut gw = Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000);
         let txid = [0x11u8; 32];
         let recipient = [0x42u8; 32];
         let p = proven(txid, 250_000, recipient, 6);
         let f = fact_for(&c, txid, 250_000, recipient);
         assert_eq!(
-            admit_bitcoin_trustless(&gw, &c, &p, &f),
+            admit_bitcoin_trustless(&mut gw, &c, &p, &f),
             Err(TrustlessError::AssetNotRegistered)
         );
     }
@@ -470,19 +459,60 @@ mod tests {
     #[test]
     fn admission_refuses_a_deposit_over_the_asset_cap() {
         let c = corridor(Tier::ProofBacked);
-        let gw = gateway_with_cap(c.origin_asset.0, 249_999);
+        let mut gw = gateway_with_cap(c.origin_asset.0, 249_999);
         let txid = [0x11u8; 32];
         let recipient = [0x42u8; 32];
         let p = proven(txid, 250_000, recipient, 6);
         let f = fact_for(&c, txid, 250_000, recipient);
         assert_eq!(
-            admit_bitcoin_trustless(&gw, &c, &p, &f),
+            admit_bitcoin_trustless(&mut gw, &c, &p, &f),
             Err(TrustlessError::AssetCapExceeded {
                 minted: 0,
                 cap: 249_999,
                 add: 250_000
             })
         );
+    }
+
+    #[test]
+    fn a_second_admit_of_the_same_reference_is_rejected() {
+        let c = corridor(Tier::ProofBacked);
+        let mut gw = gateway_with_cap(c.origin_asset.0, 1_000_000);
+        let txid = [0x11u8; 32];
+        let recipient = [0x42u8; 32];
+        let p = proven(txid, 250_000, recipient, 6);
+        let f = fact_for(&c, txid, 250_000, recipient);
+        admit_bitcoin_trustless(&mut gw, &c, &p, &f).expect("the first admit clears and records");
+        assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 250_000);
+        assert!(gw.is_reference_used(&txid));
+        assert_eq!(
+            admit_bitcoin_trustless(&mut gw, &c, &p, &f),
+            Err(TrustlessError::ReplayedReference),
+            "the same reference cannot be admitted twice"
+        );
+        assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 250_000);
+    }
+
+    #[test]
+    fn the_asset_cap_binds_across_two_admits() {
+        let c = corridor(Tier::ProofBacked);
+        let mut gw = gateway_with_cap(c.origin_asset.0, 400_000);
+        let recipient = [0x42u8; 32];
+        let p1 = proven([0x11u8; 32], 250_000, recipient, 6);
+        let f1 = fact_for(&c, [0x11u8; 32], 250_000, recipient);
+        admit_bitcoin_trustless(&mut gw, &c, &p1, &f1).expect("the first admit reserves budget");
+        let p2 = proven([0x22u8; 32], 250_000, recipient, 6);
+        let f2 = fact_for(&c, [0x22u8; 32], 250_000, recipient);
+        assert_eq!(
+            admit_bitcoin_trustless(&mut gw, &c, &p2, &f2),
+            Err(TrustlessError::AssetCapExceeded {
+                minted: 250_000,
+                cap: 400_000,
+                add: 250_000
+            }),
+            "the second admit is refused because the first reserved the budget"
+        );
+        assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 250_000);
     }
 
     const ETH_CHAIN: u32 = 1;
@@ -688,12 +718,12 @@ mod tests {
     #[test]
     fn ethereum_admission_clears_within_the_asset_cap() {
         let c = eth_corridor(Tier::ProofBacked);
-        let gw = gateway_with_cap(ETH_ASSET, 1_000_000);
+        let mut gw = gateway_with_cap(ETH_ASSET, 1_000_000);
         let r = [0x33u8; 32];
         let recipient = [0x42u8; 32];
         let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
         let f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
-        let mint = admit_ethereum_trustless(&gw, &c, &p, &f).expect("within cap");
+        let mint = admit_ethereum_trustless(&mut gw, &c, &p, &f).expect("within cap");
         assert_eq!(mint.amount, 250_000);
         assert_eq!(mint.asset_id, ETH_ASSET);
     }
@@ -701,13 +731,13 @@ mod tests {
     #[test]
     fn ethereum_admission_refuses_an_unregistered_asset() {
         let c = eth_corridor(Tier::ProofBacked);
-        let gw = Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000);
+        let mut gw = Gateway::new(DEST, OperatorSet::new(0), 1_000_000_000_000);
         let r = [0x33u8; 32];
         let recipient = [0x42u8; 32];
         let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
         let f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
         assert_eq!(
-            admit_ethereum_trustless(&gw, &c, &p, &f),
+            admit_ethereum_trustless(&mut gw, &c, &p, &f),
             Err(TrustlessError::AssetNotRegistered)
         );
     }
@@ -715,13 +745,13 @@ mod tests {
     #[test]
     fn ethereum_admission_refuses_a_deposit_over_the_asset_cap() {
         let c = eth_corridor(Tier::ProofBacked);
-        let gw = gateway_with_cap(ETH_ASSET, 249_999);
+        let mut gw = gateway_with_cap(ETH_ASSET, 249_999);
         let r = [0x33u8; 32];
         let recipient = [0x42u8; 32];
         let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);
         let f = fact_with_asset(&c, r, 250_000, recipient, ETH_ASSET);
         assert_eq!(
-            admit_ethereum_trustless(&gw, &c, &p, &f),
+            admit_ethereum_trustless(&mut gw, &c, &p, &f),
             Err(TrustlessError::AssetCapExceeded {
                 minted: 0,
                 cap: 249_999,
@@ -815,12 +845,12 @@ mod tests {
     #[test]
     fn cosmos_admission_clears_within_the_asset_cap() {
         let c = cosmos_corridor(Tier::ProofBacked);
-        let gw = gateway_with_cap(COSMOS_ASSET, 1_000_000_000);
+        let mut gw = gateway_with_cap(COSMOS_ASSET, 1_000_000_000);
         let r = [0x55u8; 32];
         let recipient = [0x51u8; 32];
         let p = cosmos_proven(r, 7_500_000, recipient, COSMOS_ASSET, 2);
         let f = fact_with_asset(&c, r, 7_500_000, recipient, COSMOS_ASSET);
-        let mint = admit_cosmos_trustless(&gw, &c, &p, &f).expect("within cap");
+        let mint = admit_cosmos_trustless(&mut gw, &c, &p, &f).expect("within cap");
         assert_eq!(mint.amount, 7_500_000);
         assert_eq!(mint.asset_id, COSMOS_ASSET);
     }
@@ -828,13 +858,13 @@ mod tests {
     #[test]
     fn cosmos_admission_refuses_a_deposit_over_the_asset_cap() {
         let c = cosmos_corridor(Tier::ProofBacked);
-        let gw = gateway_with_cap(COSMOS_ASSET, 7_499_999);
+        let mut gw = gateway_with_cap(COSMOS_ASSET, 7_499_999);
         let r = [0x55u8; 32];
         let recipient = [0x51u8; 32];
         let p = cosmos_proven(r, 7_500_000, recipient, COSMOS_ASSET, 2);
         let f = fact_with_asset(&c, r, 7_500_000, recipient, COSMOS_ASSET);
         assert_eq!(
-            admit_cosmos_trustless(&gw, &c, &p, &f),
+            admit_cosmos_trustless(&mut gw, &c, &p, &f),
             Err(TrustlessError::AssetCapExceeded {
                 minted: 0,
                 cap: 7_499_999,

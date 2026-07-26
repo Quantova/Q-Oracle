@@ -291,13 +291,13 @@ mod tests {
 
         let guard = state.lock().unwrap();
         assert!(
-            !guard.gateway.is_reference_used(&txid),
-            "the ingestion seam consumes no reference on chain"
+            guard.gateway.is_reference_used(&txid),
+            "the ingestion seam binds the reference authoritatively"
         );
         assert_eq!(
             guard.gateway.minted_of_asset(&asset_id),
-            0,
-            "a proof-backed deposit is admitted, not minted, at this seam"
+            250_000,
+            "a proof-backed deposit reserves its per-asset budget at this seam"
         );
     }
 

@@ -219,17 +219,17 @@ fn dispatch_deposit(
             Ok(DepositOutcome::Minted(receipt))
         }
         (Tier::ProofBacked, Network::Bitcoin, DepositProof::Bitcoin { proven, fact }) => {
-            let mint = admit_bitcoin_trustless(&state.gateway, &corridor, proven, fact)
+            let mint = admit_bitcoin_trustless(&mut state.gateway, &corridor, proven, fact)
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
         (Tier::ProofBacked, Network::Ethereum, DepositProof::Ethereum { proven, fact }) => {
-            let mint = admit_ethereum_trustless(&state.gateway, &corridor, proven, fact)
+            let mint = admit_ethereum_trustless(&mut state.gateway, &corridor, proven, fact)
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
         (Tier::ProofBacked, Network::Cosmos, DepositProof::Cosmos { proven, fact }) => {
-            let mint = admit_cosmos_trustless(&state.gateway, &corridor, proven, fact)
+            let mint = admit_cosmos_trustless(&mut state.gateway, &corridor, proven, fact)
                 .map_err(ApiError::Trustless)?;
             Ok(DepositOutcome::AdmittedPendingChainMint(mint))
         }
@@ -517,8 +517,8 @@ mod tests {
         );
         match status {
             Response::Status(view) => {
-                assert!(!view.minted, "the trustless seam does not mint here");
-                assert_eq!(view.asset_minted_total, 0);
+                assert!(view.minted, "the trustless admission binds the reference authoritatively");
+                assert_eq!(view.asset_minted_total, 250_000);
             }
             other => panic!("expected Status, got {:?}", other),
         }
