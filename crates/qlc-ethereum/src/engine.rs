@@ -71,12 +71,57 @@ pub struct DepositProof {
 /// by a sync committee supermajority. Nothing here is taken on a relayer's word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrustlessDeposit {
-    pub source_ref: [u8; 32],
-    pub amount: u128,
-    pub recipient: [u8; 32],
-    pub asset_id: [u8; 16],
-    pub block_number: u64,
-    pub finality_depth: u32,
+    source_ref: [u8; 32],
+    amount: u128,
+    recipient: [u8; 32],
+    asset_id: [u8; 16],
+    block_number: u64,
+    finality_depth: u32,
+}
+
+impl TrustlessDeposit {
+    pub fn source_ref(&self) -> [u8; 32] {
+        self.source_ref
+    }
+
+    pub fn amount(&self) -> u128 {
+        self.amount
+    }
+
+    pub fn recipient(&self) -> [u8; 32] {
+        self.recipient
+    }
+
+    pub fn asset_id(&self) -> [u8; 16] {
+        self.asset_id
+    }
+
+    pub fn block_number(&self) -> u64 {
+        self.block_number
+    }
+
+    pub fn finality_depth(&self) -> u32 {
+        self.finality_depth
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn new_for_test(
+        source_ref: [u8; 32],
+        amount: u128,
+        recipient: [u8; 32],
+        asset_id: [u8; 16],
+        block_number: u64,
+        finality_depth: u32,
+    ) -> TrustlessDeposit {
+        TrustlessDeposit {
+            source_ref,
+            amount,
+            recipient,
+            asset_id,
+            block_number,
+            finality_depth,
+        }
+    }
 }
 
 struct CoreDeposit {
@@ -813,6 +858,18 @@ mod tests {
         assert_eq!(proven.block_number, 20_000_000);
         assert_eq!(proven.finality_depth, 64);
         assert_ne!(proven.source_ref, [0u8; 32]);
+    }
+
+    #[test]
+    fn a_trustless_deposit_is_only_readable_through_the_verifier_output() {
+        let f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        let proven =
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls).unwrap();
+        assert_eq!(proven.amount(), f.amount);
+        assert_eq!(proven.recipient(), f.recipient);
+        assert_eq!(proven.asset_id(), f.asset_id);
+        assert_eq!(proven.finality_depth(), 64);
+        assert_ne!(proven.source_ref(), [0u8; 32]);
     }
 
     #[test]

@@ -156,10 +156,10 @@ fn cosmos_fact(c: &Corridor, proven: &TrustlessDeposit, asset: [u8; 16]) -> Brid
         route_id: 1,
         direction: Direction::Deposit,
         nonce: 1,
-        source_ref: SourceRef(proven.source_ref),
+        source_ref: SourceRef(proven.source_ref()),
         asset_id: AssetId(asset),
-        amount: proven.amount,
-        recipient: Recipient(proven.recipient),
+        amount: proven.amount(),
+        recipient: Recipient(proven.recipient()),
         finality_depth: c.confirmation_depth,
         observed_height: 800_000,
         expiry_height: 900_000,
@@ -211,7 +211,7 @@ fn a_signed_cosmos_deposit_proves_and_clears_the_trustless_gate() {
     let mint = admit_cosmos_trustless(&mut gw, &c, &proven, &f).expect("proven deposit clears the gate");
     assert_eq!(mint.amount, 7_500_000);
     assert_eq!(mint.recipient, recipient);
-    assert_eq!(mint.source_ref, proven.source_ref);
+    assert_eq!(mint.source_ref, proven.source_ref());
     assert_eq!(mint.source_chain, COSMOS_HUB.corridor_id);
     assert_eq!(mint.asset_id, COSMOS_ASSET);
 }
@@ -250,7 +250,7 @@ fn a_source_reference_already_spent_at_the_gateway_cannot_be_replayed() {
         route_id: 7,
         direction: Direction::Deposit,
         nonce: 1,
-        source_ref: SourceRef(proven.source_ref),
+        source_ref: SourceRef(proven.source_ref()),
         asset_id: AssetId(solana),
         amount: 10,
         recipient: Recipient([0x9u8; 32]),
@@ -263,7 +263,7 @@ fn a_source_reference_already_spent_at_the_gateway_cannot_be_replayed() {
         signatures: vec![attest(&ops[0], &spent), attest(&ops[1], &spent), attest(&ops[2], &spent)],
     };
     gw.process_deposit(&env).expect("the federated mint consumes the reference");
-    assert!(gw.is_reference_used(&proven.source_ref));
+    assert!(gw.is_reference_used(&proven.source_ref()));
 
     let f = cosmos_fact(&c, &proven, COSMOS_ASSET);
     assert_eq!(
