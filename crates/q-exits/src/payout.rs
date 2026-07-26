@@ -8,7 +8,9 @@ use q_codec::{Reader, Writer};
 
 use crate::certificate::shake256_256;
 
-use qlc_bitcoin::{double_sha256, verify_chain, BlockHeader, MerkleStep, NetworkParams, SpvError};
+use qlc_bitcoin::{
+    double_sha256, verify_chain, BlockHeader, Checkpoint, MerkleStep, NetworkParams, SpvError,
+};
 use qlc_ethereum::keccak::keccak256;
 use qlc_ethereum::mpt::{self, MptError};
 use qlc_ethereum::receipt::{self, ReceiptError};
@@ -153,10 +155,12 @@ impl BitcoinReleaseProof {
     pub fn verify(
         &self,
         params: &NetworkParams,
+        checkpoint: &Checkpoint,
         confirmation_depth: u32,
     ) -> Result<VerifiedPayout, PayoutProofError> {
         let chain =
             verify_chain(&self.headers, self.start_height, params).map_err(PayoutProofError::Spv)?;
+        chain.anchored_to(checkpoint).map_err(PayoutProofError::Spv)?;
         let txid = double_sha256(&self.raw_tx);
         let confirmed = chain
             .verify_deposit(self.release_height, txid, &self.branch, confirmation_depth)
@@ -273,6 +277,7 @@ pub struct BitcoinPayoutWatcher {
     corridor: u32,
     asset_id: [u8; 16],
     params: NetworkParams,
+    checkpoint: Checkpoint,
     confirmation_depth: u32,
     releases: Vec<BitcoinReleaseProof>,
     consumed: RefCell<BTreeSet<[u8; 32]>>,
@@ -283,6 +288,7 @@ impl BitcoinPayoutWatcher {
         corridor: u32,
         asset_id: [u8; 16],
         params: NetworkParams,
+        checkpoint: Checkpoint,
         confirmation_depth: u32,
         releases: Vec<BitcoinReleaseProof>,
     ) -> BitcoinPayoutWatcher {
@@ -290,6 +296,7 @@ impl BitcoinPayoutWatcher {
             corridor,
             asset_id,
             params,
+            checkpoint,
             confirmation_depth,
             releases,
             consumed: RefCell::new(BTreeSet::new()),
@@ -305,7 +312,7 @@ impl BitcoinPayoutWatcher {
         }
         let mut last = PayoutProofError::MissingReceipt;
         for release in &self.releases {
-            let payout = match release.verify(&self.params, self.confirmation_depth) {
+            let payout = match release.verify(&self.params, &self.checkpoint, self.confirmation_depth) {
                 Ok(p) => p,
                 Err(e) => {
                     last = e;
@@ -465,7 +472,7 @@ mod tests {
     use super::*;
     use crate::certificate::{ExitCertificate, ExitProver, HashStark, EXIT_STATEMENT_VERSION};
     use crate::exits::{DeskConfig, ExitDesk, ExitState};
-    use qlc_bitcoin::BITCOIN;
+    use qlc_bitcoin::{BITCOIN, U256};
 
     const EASY: NetworkParams = NetworkParams {
         network: BITCOIN.network,
@@ -613,8 +620,17 @@ mod tests {
         }
     }
 
+    fn checkpoint_for(release: &BitcoinReleaseProof) -> Checkpoint {
+        Checkpoint {
+            height: release.start_height,
+            hash: release.headers[0].block_hash(),
+            min_work: U256::ZERO,
+        }
+    }
+
     fn bitcoin_watcher(releases: Vec<BitcoinReleaseProof>) -> BitcoinPayoutWatcher {
-        BitcoinPayoutWatcher::new(1, [0xa1; 16], EASY, EASY.confirmation_depth, releases)
+        let checkpoint = checkpoint_for(&releases[0]);
+        BitcoinPayoutWatcher::new(1, [0xa1; 16], EASY, checkpoint, EASY.confirmation_depth, releases)
     }
 
     fn to_nibbles(key: &[u8]) -> Vec<u8> {
@@ -803,7 +819,7 @@ mod tests {
         let mut release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
         release.headers[0].nonce = release.headers[0].nonce.wrapping_add(1);
         assert_eq!(
-            release.verify(&EASY, EASY.confirmation_depth),
+            release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
             Err(PayoutProofError::Spv(SpvError::PowNotMet))
         );
         let watcher = bitcoin_watcher(vec![release]);
@@ -816,7 +832,7 @@ mod tests {
         let mut release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
         release.branch[0].hash = [0x00; 32];
         assert_eq!(
-            release.verify(&EASY, EASY.confirmation_depth),
+            release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
             Err(PayoutProofError::Spv(SpvError::MerkleMismatch))
         );
         assert!(bitcoin_watcher(vec![release]).confirm(&s).is_none());
@@ -829,9 +845,50 @@ mod tests {
         let last = release.raw_tx.len() - 6;
         release.raw_tx[last] ^= 0xff;
         assert_eq!(
-            release.verify(&EASY, EASY.confirmation_depth),
+            release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
             Err(PayoutProofError::Spv(SpvError::MerkleMismatch))
         );
+    }
+
+    #[test]
+    fn a_trivial_difficulty_release_chain_is_rejected_without_the_pinned_work() {
+        let s = statement();
+        let release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
+        let heavy = Checkpoint {
+            height: release.start_height,
+            hash: release.headers[0].block_hash(),
+            min_work: U256::from_u64(u64::MAX),
+        };
+        assert_eq!(
+            release.verify(&EASY, &heavy, EASY.confirmation_depth),
+            Err(PayoutProofError::Spv(SpvError::InsufficientWork)),
+            "a floor-difficulty release chain cannot forge a payout below the pinned work"
+        );
+        assert!(bitcoin_watcher_with(release, heavy).confirm(&s).is_none());
+    }
+
+    #[test]
+    fn a_release_chain_off_the_pinned_checkpoint_is_rejected() {
+        let s = statement();
+        let release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
+        let foreign = Checkpoint {
+            height: release.start_height,
+            hash: [0x99u8; 32],
+            min_work: U256::ZERO,
+        };
+        assert_eq!(
+            release.verify(&EASY, &foreign, EASY.confirmation_depth),
+            Err(PayoutProofError::Spv(SpvError::CheckpointMismatch)),
+            "a release proof on a chain off the pinned checkpoint cannot release the vault"
+        );
+        assert!(bitcoin_watcher_with(release, foreign).confirm(&s).is_none());
+    }
+
+    fn bitcoin_watcher_with(
+        release: BitcoinReleaseProof,
+        checkpoint: Checkpoint,
+    ) -> BitcoinPayoutWatcher {
+        BitcoinPayoutWatcher::new(1, [0xa1; 16], EASY, checkpoint, EASY.confirmation_depth, vec![release])
     }
 
     #[test]
