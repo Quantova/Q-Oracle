@@ -82,14 +82,49 @@ pub fn encode_deposit_value(recipient: &[u8; 32], asset_id: &[u8; 16], amount: u
 pub enum ProofError {
     RootMismatch,
     BadValueLength,
+    MalformedProofOp,
+    ForeignStoreKey,
 }
 
-pub fn extract_deposit(app_hash: &[u8; 32], proof: &ExistenceProof) -> Result<Deposit, ProofError> {
+const LEAF_MARKER: u8 = 0x00;
+const MAX_OP_PREFIX_LEN: usize = 64;
+const MAX_INNER_SUFFIX_LEN: usize = 64;
+
+fn canonical_ops(proof: &ExistenceProof) -> Result<(), ProofError> {
+    if proof.leaf.prefix.first() != Some(&LEAF_MARKER) {
+        return Err(ProofError::MalformedProofOp);
+    }
+    if proof.leaf.prefix.len() > MAX_OP_PREFIX_LEN {
+        return Err(ProofError::MalformedProofOp);
+    }
+    for op in &proof.path {
+        if op.prefix.is_empty() || op.prefix.len() > MAX_OP_PREFIX_LEN {
+            return Err(ProofError::MalformedProofOp);
+        }
+        if op.prefix.first() == Some(&LEAF_MARKER) {
+            return Err(ProofError::MalformedProofOp);
+        }
+        if op.suffix.len() > MAX_INNER_SUFFIX_LEN {
+            return Err(ProofError::MalformedProofOp);
+        }
+    }
+    Ok(())
+}
+
+pub fn extract_deposit(
+    app_hash: &[u8; 32],
+    store_prefix: &[u8],
+    proof: &ExistenceProof,
+) -> Result<Deposit, ProofError> {
+    canonical_ops(proof)?;
     if &proof.calculate_root() != app_hash {
         return Err(ProofError::RootMismatch);
     }
     if proof.value.len() != DEPOSIT_VALUE_LEN {
         return Err(ProofError::BadValueLength);
+    }
+    if store_prefix.is_empty() || !proof.key.starts_with(store_prefix) {
+        return Err(ProofError::ForeignStoreKey);
     }
     let mut recipient = [0u8; 32];
     recipient.copy_from_slice(&proof.value[0..32]);
@@ -111,12 +146,14 @@ pub fn extract_deposit(app_hash: &[u8; 32], proof: &ExistenceProof) -> Result<De
 mod tests {
     use super::*;
 
+    const STORE_PREFIX: &[u8] = b"bridge/deposits/";
+
     fn sample_proof() -> (ExistenceProof, Deposit) {
         let recipient = [0x51u8; 32];
         let asset_id = [0x22u8; 16];
         let amount: u128 = 4_200_000_000u128;
         let value = encode_deposit_value(&recipient, &asset_id, amount);
-        let key = b"transfer/deposits/quantova-recipient".to_vec();
+        let key = b"bridge/deposits/quantova-recipient".to_vec();
 
         let proof = ExistenceProof {
             key: key.clone(),
@@ -140,14 +177,14 @@ mod tests {
     fn a_valid_proof_extracts_the_deposit() {
         let (proof, expected) = sample_proof();
         let app_hash = proof.calculate_root();
-        assert_eq!(extract_deposit(&app_hash, &proof), Ok(expected));
+        assert_eq!(extract_deposit(&app_hash, STORE_PREFIX, &proof), Ok(expected));
     }
 
     #[test]
     fn the_amount_is_carried_in_base_units() {
         let (proof, _) = sample_proof();
         let app_hash = proof.calculate_root();
-        let deposit = extract_deposit(&app_hash, &proof).unwrap();
+        let deposit = extract_deposit(&app_hash, STORE_PREFIX, &proof).unwrap();
         assert_eq!(deposit.amount, 4_200_000_000u128);
     }
 
@@ -156,7 +193,7 @@ mod tests {
         let (mut proof, _) = sample_proof();
         let app_hash = proof.calculate_root();
         proof.value[48] ^= 0x01;
-        assert_eq!(extract_deposit(&app_hash, &proof), Err(ProofError::RootMismatch));
+        assert_eq!(extract_deposit(&app_hash, STORE_PREFIX, &proof), Err(ProofError::RootMismatch));
     }
 
     #[test]
@@ -164,7 +201,7 @@ mod tests {
         let (mut proof, _) = sample_proof();
         let app_hash = proof.calculate_root();
         proof.key[0] ^= 0x01;
-        assert_eq!(extract_deposit(&app_hash, &proof), Err(ProofError::RootMismatch));
+        assert_eq!(extract_deposit(&app_hash, STORE_PREFIX, &proof), Err(ProofError::RootMismatch));
     }
 
     #[test]
@@ -172,13 +209,63 @@ mod tests {
         let (mut proof, _) = sample_proof();
         let app_hash = proof.calculate_root();
         proof.path[1].suffix[0] ^= 0x01;
-        assert_eq!(extract_deposit(&app_hash, &proof), Err(ProofError::RootMismatch));
+        assert_eq!(extract_deposit(&app_hash, STORE_PREFIX, &proof), Err(ProofError::RootMismatch));
     }
 
     #[test]
     fn a_proof_against_a_foreign_app_hash_is_rejected() {
         let (proof, _) = sample_proof();
         let foreign = [0x99u8; 32];
-        assert_eq!(extract_deposit(&foreign, &proof), Err(ProofError::RootMismatch));
+        assert_eq!(extract_deposit(&foreign, STORE_PREFIX, &proof), Err(ProofError::RootMismatch));
+    }
+
+    #[test]
+    fn a_key_outside_the_bridge_store_is_rejected() {
+        let recipient = [0x51u8; 32];
+        let asset_id = [0x22u8; 16];
+        let value = encode_deposit_value(&recipient, &asset_id, 4_200_000_000u128);
+        let proof = ExistenceProof {
+            key: b"staking/deposits/quantova-recipient".to_vec(),
+            value,
+            leaf: LeafOp { prefix: vec![0x00, 0x02, 0x00] },
+            path: vec![
+                InnerOp { prefix: vec![0x01, 0xaa], suffix: vec![0xbb, 0xcc] },
+                InnerOp { prefix: vec![0x01], suffix: vec![0xde, 0xad, 0xbe, 0xef] },
+            ],
+        };
+        let app_hash = proof.calculate_root();
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_PREFIX, &proof),
+            Err(ProofError::ForeignStoreKey)
+        );
+    }
+
+    #[test]
+    fn an_empty_store_prefix_is_fail_closed() {
+        let (proof, _) = sample_proof();
+        let app_hash = proof.calculate_root();
+        assert_eq!(extract_deposit(&app_hash, b"", &proof), Err(ProofError::ForeignStoreKey));
+    }
+
+    #[test]
+    fn an_inner_op_posing_as_a_leaf_is_rejected() {
+        let (mut proof, _) = sample_proof();
+        proof.path[0].prefix = vec![0x00, 0xaa];
+        let app_hash = proof.calculate_root();
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_PREFIX, &proof),
+            Err(ProofError::MalformedProofOp)
+        );
+    }
+
+    #[test]
+    fn a_leaf_without_the_leaf_marker_is_rejected() {
+        let (mut proof, _) = sample_proof();
+        proof.leaf.prefix = vec![0x01, 0x02, 0x00];
+        let app_hash = proof.calculate_root();
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_PREFIX, &proof),
+            Err(ProofError::MalformedProofOp)
+        );
     }
 }

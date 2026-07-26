@@ -135,7 +135,7 @@ fn verify_deposit_core(
     let mut app_hash = [0u8; 32];
     app_hash.copy_from_slice(&header.app_hash);
 
-    let deposit = extract_deposit(&app_hash, proof).map_err(CorridorError::Proof)?;
+    let deposit = extract_deposit(&app_hash, cfg.bridge_store_prefix, proof).map_err(CorridorError::Proof)?;
     Ok((deposit, signed_power))
 }
 
@@ -228,7 +228,7 @@ mod tests {
         let asset_id = *b"qATOM.atom\0\0\0\0\0\0";
         let amount: u128 = 7_500_000u128;
         ExistenceProof {
-            key: b"transfer/deposit/0x1a2b".to_vec(),
+            key: b"bridge/deposits/0x1a2b".to_vec(),
             value: encode_deposit_value(&recipient, &asset_id, amount),
             leaf: LeafOp { prefix: vec![0x00, 0x02, 0x00] },
             path: vec![
@@ -381,6 +381,49 @@ mod tests {
         assert_eq!(
             verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
             Err(CorridorError::Proof(ProofError::RootMismatch))
+        );
+    }
+
+    #[test]
+    fn a_deposit_outside_the_bridge_store_produces_no_statement() {
+        let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
+        let set = ValidatorSet::new(vs.iter().map(|k| k.info).collect());
+
+        let recipient = [0x51u8; 32];
+        let asset_id = *b"qATOM.atom\0\0\0\0\0\0";
+        let proof = ExistenceProof {
+            key: b"staking/deposits/0x1a2b".to_vec(),
+            value: encode_deposit_value(&recipient, &asset_id, 7_500_000u128),
+            leaf: LeafOp { prefix: vec![0x00, 0x02, 0x00] },
+            path: vec![
+                InnerOp { prefix: vec![0x01, 0x0a], suffix: vec![0x1b, 0x2c] },
+                InnerOp { prefix: vec![0x01], suffix: vec![0x33, 0x44, 0x55] },
+            ],
+        };
+        let app_hash = proof.calculate_root();
+
+        let header = Header {
+            version_block: 11,
+            version_app: 0,
+            chain_id: COSMOS_HUB.chain_id.to_string(),
+            height: 18_500_000,
+            time: Timestamp { seconds: 1_700_000_000, nanos: 9 },
+            last_block_id: BlockId { hash: vec![0xaa; 32], part_total: 1, part_hash: vec![0xbb; 32] },
+            last_commit_hash: vec![0x01; 32],
+            data_hash: vec![0x02; 32],
+            validators_hash: set.hash().to_vec(),
+            next_validators_hash: set.hash().to_vec(),
+            consensus_hash: vec![0x03; 32],
+            app_hash: app_hash.to_vec(),
+            last_results_hash: vec![0x05; 32],
+            evidence_hash: vec![0x06; 32],
+            proposer_address: set.validators[0].address().to_vec(),
+        };
+        let commit = resign(&header, &set);
+
+        assert_eq!(
+            verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof),
+            Err(CorridorError::Proof(ProofError::ForeignStoreKey))
         );
     }
 
