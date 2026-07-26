@@ -1,0 +1,14 @@
+# Copyright 2026 Quantova Inc
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
+[package]
+name = "qlc-cosmos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Off-chain Tendermint light client for the Cosmos family corridor. It verifies a commit signed by more than two thirds of the validator set with Ed25519 over a signed header, tracks validator set changes with the two thirds overlap rule, and extracts a deposit through an inclusion proof against the header app hash. Ed25519 runs off chain here. The verified fact is carried to the chain as an ML-DSA attestation and a hash STARK, never as foreign cryptography. One engine serves Cosmos Hub, Osmosis, Celestia, Injective, Sei and the rest through a chain config."
+
+[dependencies]
+qlc-core = { path = "../../../Q-Lightclient/crates/qlc-core" }
+qlc-stark = { path = "../../../Q-Lightclient/crates/qlc-stark" }

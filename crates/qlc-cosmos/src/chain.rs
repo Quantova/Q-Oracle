@@ -1,0 +1,78 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChainConfig {
+    pub chain_id: &'static str,
+    pub corridor_id: u32,
+    pub confirmation_depth: u32,
+    pub overlap_numerator: u64,
+    pub overlap_denominator: u64,
+}
+
+impl ChainConfig {
+    pub const fn new(chain_id: &'static str, corridor_id: u32, confirmation_depth: u32) -> ChainConfig {
+        ChainConfig {
+            chain_id,
+            corridor_id,
+            confirmation_depth,
+            overlap_numerator: 2,
+            overlap_denominator: 3,
+        }
+    }
+}
+
+pub const COSMOS_HUB: ChainConfig = ChainConfig::new("cosmoshub-4", 8, 2);
+pub const OSMOSIS: ChainConfig = ChainConfig::new("osmosis-1", 9, 2);
+pub const CELESTIA: ChainConfig = ChainConfig::new("celestia", 10, 2);
+pub const INJECTIVE: ChainConfig = ChainConfig::new("injective-1", 11, 2);
+pub const SEI: ChainConfig = ChainConfig::new("pacific-1", 12, 2);
+
+pub const FAMILY: [ChainConfig; 5] = [COSMOS_HUB, OSMOSIS, CELESTIA, INJECTIVE, SEI];
+
+pub fn by_chain_id(chain_id: &str) -> Option<ChainConfig> {
+    FAMILY.into_iter().find(|c| c.chain_id == chain_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn cosmos_hub_matches_the_registry_corridor() {
+        assert_eq!(COSMOS_HUB.corridor_id, 8);
+        assert_eq!(COSMOS_HUB.chain_id, "cosmoshub-4");
+    }
+
+    #[test]
+    fn the_whole_family_shares_one_engine_through_config() {
+        for c in FAMILY {
+            assert_eq!(c.overlap_numerator, 2);
+            assert_eq!(c.overlap_denominator, 3);
+            assert!(c.confirmation_depth > 0);
+        }
+    }
+
+    #[test]
+    fn each_family_member_carries_a_distinct_corridor() {
+        let ids: BTreeSet<u32> = FAMILY.iter().map(|c| c.corridor_id).collect();
+        assert_eq!(ids.len(), FAMILY.len());
+    }
+
+    #[test]
+    fn a_chain_id_resolves_to_its_config() {
+        assert_eq!(by_chain_id("osmosis-1"), Some(OSMOSIS));
+        assert_eq!(by_chain_id("celestia"), Some(CELESTIA));
+        assert_eq!(by_chain_id("injective-1"), Some(INJECTIVE));
+        assert_eq!(by_chain_id("pacific-1"), Some(SEI));
+        assert_eq!(by_chain_id("not-a-cosmos-chain"), None);
+    }
+
+    #[test]
+    fn any_chain_can_be_configured_without_new_code() {
+        let dydx = ChainConfig::new("dydx-mainnet-1", 13, 2);
+        assert_eq!(dydx.chain_id, "dydx-mainnet-1");
+        assert_eq!(dydx.overlap_denominator, 3);
+    }
+}

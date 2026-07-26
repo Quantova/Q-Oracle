@@ -1,0 +1,272 @@
+// Copyright 2026 Quantova Inc
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+use crate::chain::ChainConfig;
+use crate::commit::{verify_commit, Commit, CommitError, Header};
+use crate::validator::{overlap_meets, ValidatorSet};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustedState {
+    pub height: i64,
+    pub header_hash: [u8; 32],
+    pub validators: ValidatorSet,
+    pub next_validators_hash: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LightError {
+    ChainMismatch,
+    NotProgressing,
+    UntrustedValidatorSet,
+    InsufficientOverlap { overlap: u64, trusted_total: u64 },
+    NotAdjacent,
+    NextValidatorMismatch,
+    Commit(CommitError),
+}
+
+fn check_header(cfg: &ChainConfig, trusted: &TrustedState, new_header: &Header, new_set: &ValidatorSet) -> Result<(), LightError> {
+    if new_header.chain_id != cfg.chain_id {
+        return Err(LightError::ChainMismatch);
+    }
+    if new_header.height <= trusted.height {
+        return Err(LightError::NotProgressing);
+    }
+    if new_header.validators_hash != new_set.hash().to_vec() {
+        return Err(LightError::UntrustedValidatorSet);
+    }
+    Ok(())
+}
+
+fn adopt(new_header: &Header, new_set: &ValidatorSet) -> TrustedState {
+    TrustedState {
+        height: new_header.height,
+        header_hash: new_header.hash(),
+        validators: new_set.clone(),
+        next_validators_hash: new_header.next_validators_hash.clone(),
+    }
+}
+
+pub fn verify_transition(
+    cfg: &ChainConfig,
+    trusted: &TrustedState,
+    new_header: &Header,
+    new_commit: &Commit,
+    new_set: &ValidatorSet,
+) -> Result<TrustedState, LightError> {
+    check_header(cfg, trusted, new_header, new_set)?;
+
+    if !overlap_meets(&trusted.validators, new_set, cfg.overlap_numerator, cfg.overlap_denominator) {
+        return Err(LightError::InsufficientOverlap {
+            overlap: crate::validator::overlap_power(&trusted.validators, new_set),
+            trusted_total: trusted.validators.total_power(),
+        });
+    }
+
+    verify_commit(cfg.chain_id, new_header, new_commit, new_set).map_err(LightError::Commit)?;
+
+    Ok(adopt(new_header, new_set))
+}
+
+pub fn verify_adjacent(
+    cfg: &ChainConfig,
+    trusted: &TrustedState,
+    new_header: &Header,
+    new_commit: &Commit,
+    new_set: &ValidatorSet,
+) -> Result<TrustedState, LightError> {
+    check_header(cfg, trusted, new_header, new_set)?;
+
+    if new_header.height != trusted.height + 1 {
+        return Err(LightError::NotAdjacent);
+    }
+    if new_header.validators_hash != trusted.next_validators_hash {
+        return Err(LightError::NextValidatorMismatch);
+    }
+
+    verify_commit(cfg.chain_id, new_header, new_commit, new_set).map_err(LightError::Commit)?;
+
+    Ok(adopt(new_header, new_set))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chain::COSMOS_HUB;
+    use crate::commit::{BlockIdFlag, CommitSig};
+    use crate::ed25519::{public_key_from_seed, sign};
+    use crate::proto::{vote_sign_bytes, BlockId, CanonicalVote, Timestamp, PRECOMMIT_TYPE};
+    use crate::validator::ValidatorInfo;
+
+    struct Keyed {
+        seed: [u8; 32],
+        info: ValidatorInfo,
+    }
+
+    fn keyed(byte: u8, power: u64) -> Keyed {
+        let seed = [byte; 32];
+        Keyed {
+            seed,
+            info: ValidatorInfo {
+                pubkey: public_key_from_seed(&seed),
+                voting_power: power,
+            },
+        }
+    }
+
+    fn make_set(members: &[&Keyed]) -> ValidatorSet {
+        ValidatorSet::new(members.iter().map(|k| k.info).collect())
+    }
+
+    fn header_for(height: i64, set: &ValidatorSet, next: &ValidatorSet) -> Header {
+        Header {
+            version_block: 11,
+            version_app: 0,
+            chain_id: COSMOS_HUB.chain_id.to_string(),
+            height,
+            time: Timestamp { seconds: 1_700_000_000 + height, nanos: 7 },
+            last_block_id: BlockId { hash: vec![0xaa; 32], part_total: 1, part_hash: vec![0xbb; 32] },
+            last_commit_hash: vec![0x01; 32],
+            data_hash: vec![0x02; 32],
+            validators_hash: set.hash().to_vec(),
+            next_validators_hash: next.hash().to_vec(),
+            consensus_hash: vec![0x03; 32],
+            app_hash: vec![0x04; 32],
+            last_results_hash: vec![0x05; 32],
+            evidence_hash: vec![0x06; 32],
+            proposer_address: set.validators[0].address().to_vec(),
+        }
+    }
+
+    fn signed_commit(header: &Header, signers: &[&Keyed]) -> Commit {
+        let block_id = BlockId { hash: header.hash().to_vec(), part_total: 1, part_hash: vec![0xcc; 32] };
+        let mut signatures = Vec::new();
+        for k in signers {
+            let timestamp = Timestamp { seconds: 1_700_000_500, nanos: k.seed[0] as i32 };
+            let vote = CanonicalVote {
+                vote_type: PRECOMMIT_TYPE,
+                height: header.height,
+                round: 0,
+                block_id: block_id.clone(),
+                timestamp,
+                chain_id: COSMOS_HUB.chain_id.to_string(),
+            };
+            signatures.push(CommitSig {
+                flag: BlockIdFlag::Commit,
+                validator_address: k.info.address(),
+                timestamp,
+                signature: sign(&k.seed, &vote_sign_bytes(&vote)).to_vec(),
+            });
+        }
+        Commit { height: header.height, round: 0, block_id, signatures }
+    }
+
+    fn trusted_from(height: i64, set: &ValidatorSet, next: &ValidatorSet) -> TrustedState {
+        TrustedState {
+            height,
+            header_hash: [0u8; 32],
+            validators: set.clone(),
+            next_validators_hash: next.hash().to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_transition_with_more_than_two_thirds_overlap_verifies() {
+        let a = keyed(1, 40);
+        let b = keyed(2, 40);
+        let c = keyed(3, 20);
+        let d = keyed(4, 20);
+        let old = make_set(&[&a, &b, &c]);
+        let new = make_set(&[&a, &b, &d]);
+        let trusted = trusted_from(100, &old, &old);
+        let header = header_for(150, &new, &new);
+        let commit = signed_commit(&header, &[&a, &b, &d]);
+
+        let result = verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &new).unwrap();
+        assert_eq!(result.height, 150);
+        assert_eq!(result.validators, new);
+    }
+
+    #[test]
+    fn a_transition_with_two_thirds_or_less_overlap_fails() {
+        let a = keyed(1, 40);
+        let b = keyed(2, 40);
+        let c = keyed(3, 20);
+        let d = keyed(4, 30);
+        let e = keyed(5, 30);
+        let old = make_set(&[&a, &b, &c]);
+        let new = make_set(&[&a, &d, &e]);
+        let trusted = trusted_from(100, &old, &old);
+        let header = header_for(150, &new, &new);
+        let commit = signed_commit(&header, &[&a, &d, &e]);
+
+        assert_eq!(
+            verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &new),
+            Err(LightError::InsufficientOverlap { overlap: 40, trusted_total: 100 })
+        );
+    }
+
+    #[test]
+    fn a_transition_whose_new_commit_is_short_fails_at_the_commit() {
+        let a = keyed(1, 40);
+        let b = keyed(2, 40);
+        let c = keyed(3, 20);
+        let d = keyed(4, 20);
+        let old = make_set(&[&a, &b, &c]);
+        let new = make_set(&[&a, &b, &d]);
+        let trusted = trusted_from(100, &old, &old);
+        let header = header_for(150, &new, &new);
+        let commit = signed_commit(&header, &[&a]);
+
+        assert!(matches!(
+            verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &new),
+            Err(LightError::Commit(CommitError::NotEnoughVotingPower { .. }))
+        ));
+    }
+
+    #[test]
+    fn a_header_that_does_not_progress_is_refused() {
+        let a = keyed(1, 100);
+        let old = make_set(&[&a]);
+        let trusted = trusted_from(150, &old, &old);
+        let header = header_for(150, &old, &old);
+        let commit = signed_commit(&header, &[&a]);
+        assert_eq!(
+            verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &old),
+            Err(LightError::NotProgressing)
+        );
+    }
+
+    #[test]
+    fn a_header_from_another_chain_is_refused() {
+        let a = keyed(1, 100);
+        let old = make_set(&[&a]);
+        let trusted = trusted_from(100, &old, &old);
+        let mut header = header_for(150, &old, &old);
+        header.chain_id = "osmosis-1".to_string();
+        let commit = signed_commit(&header, &[&a]);
+        assert_eq!(
+            verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &old),
+            Err(LightError::ChainMismatch)
+        );
+    }
+
+    #[test]
+    fn an_adjacent_step_follows_the_next_validator_hash() {
+        let a = keyed(1, 60);
+        let b = keyed(2, 40);
+        let set = make_set(&[&a, &b]);
+        let trusted = trusted_from(149, &set, &set);
+        let header = header_for(150, &set, &set);
+        let commit = signed_commit(&header, &[&a, &b]);
+
+        let ok = verify_adjacent(&COSMOS_HUB, &trusted, &header, &commit, &set).unwrap();
+        assert_eq!(ok.height, 150);
+
+        let mut wrong = trusted.clone();
+        wrong.next_validators_hash = vec![0x00; 32];
+        assert_eq!(
+            verify_adjacent(&COSMOS_HUB, &wrong, &header, &commit, &set),
+            Err(LightError::NextValidatorMismatch)
+        );
+    }
+}
