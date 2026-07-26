@@ -17,3 +17,6 @@ pub mod sha512;
 pub mod statement;
 pub mod validator;
 pub mod witness;
+
+pub use chain::{by_chain_id, ChainConfig, CELESTIA, COSMOS_HUB, FAMILY, INJECTIVE, OSMOSIS, SEI};
+pub use statement::{verify_trustless_deposit, CorridorError, TrustlessDeposit};
