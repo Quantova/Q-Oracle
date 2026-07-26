@@ -7,14 +7,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Executable reference model of the on-chain q-exits contract. A finalized Quantova burn yields a hash-based exit certificate over an exit statement, an over-collateralized vault is assigned collateral above the value it custodies, and that collateral is released when a native payout attestation binds the payout within the window or slashed to pay the user at a premium when it does not. There is no trusted signer and no threshold key. The hash-based STARK prover and the foreign payout watcher are the two off-chain seams, and the chain sees only Quantova-native artifacts."
+description = "Executable reference model of the outward bridge release layer. A finalized Quantova burn is proven post-quantum end to end: the QORUS committee finality certificate over the block header is verified with the light client's own check anchored to a pinned committee, the burn event leaf is proven included under the header event root by a SHA-3 Merkle path, and the release amount, asset, beneficiary, and burn_ref are read only from that proven leaf. A release then requires an M-of-N operator quorum that signs the release authorization with ML-DSA over a domain-separated preimage binding the burn. The burn_ref is the replay key, recorded before release so no burn releases twice. This path links nothing classical; it verifies our own chain. It is a library and is not wired to any live caller."
 
 [dependencies]
 q-codec = { workspace = true }
 qtv-crypto = { workspace = true }
-qlc-bitcoin = { workspace = true }
-qlc-ethereum = { workspace = true }
+qtv-block = { path = "../../../Quantova-Chain/crates/qtv-block" }
+qtv-codec = { path = "../../../Quantova-Chain/crates/qtv-codec" }
+qtv-attest = { path = "../../../QRC-CONSENSUS/crates/qtv-attest" }
+qtv-sampler = { path = "../../../QRC-CONSENSUS/crates/qtv-sampler" }
 
 [dev-dependencies]
 q-codec = { workspace = true }
 qtv-crypto = { workspace = true }
+qtv-attest = { path = "../../../QRC-CONSENSUS/crates/qtv-attest", features = ["test-fixtures"] }
+qtv-sampler = { path = "../../../QRC-CONSENSUS/crates/qtv-sampler", features = ["test-fixtures"] }
