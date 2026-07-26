@@ -30,7 +30,7 @@ use q_qbridge::{
     handle, BitcoinProofMaterial, DepositProof, DepositRequest, Request, Response,
 };
 use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
-use qlc_ethereum::TrustlessDeposit as EthereumDeposit;
+use qlc_ethereum::{DepositProof as EthDepositProof, LightClientUpdate};
 
 use crate::http::SharedState;
 
@@ -77,9 +77,17 @@ pub fn bitcoin_proof(material: BitcoinProofMaterial, fact: BridgeFact) -> Deposi
     DepositProof::Bitcoin { material, fact }
 }
 
-/// An Ethereum deposit proven by the `qlc_ethereum` engine, paired with its fact.
-pub fn ethereum_proof(proven: EthereumDeposit, fact: BridgeFact) -> DepositProof {
-    DepositProof::Ethereum { proven, fact }
+/// The raw Ethereum light-client material a watcher pulls, for the server to verify and admit.
+pub fn ethereum_proof(
+    update: LightClientUpdate,
+    deposit: EthDepositProof,
+    fact: BridgeFact,
+) -> DepositProof {
+    DepositProof::Ethereum {
+        update,
+        deposit,
+        fact,
+    }
 }
 
 /// A Cosmos deposit proven by the `qlc_cosmos` light client, paired with its fact.
