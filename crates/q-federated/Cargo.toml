@@ -15,6 +15,7 @@ q-airlock = { workspace = true }
 q-gateway = { workspace = true }
 q-attestor = { workspace = true }
 q-isolation = { path = "../q-isolation" }
+qlc-bitcoin = { workspace = true }
 
 [dev-dependencies]
 qtv-crypto = { workspace = true }
