@@ -403,6 +403,14 @@ impl Gateway {
     }
 
     pub fn finalize_exit(&mut self, exit_id: u64) -> Result<ExitTicket, GatewayError> {
+        if self.global_pause {
+            return Err(GatewayError::GlobalPause);
+        }
+        if self.current_height < self.frozen_until {
+            return Err(GatewayError::Frozen {
+                until: self.frozen_until,
+            });
+        }
         let ticket = self
             .pending_exits
             .get(&exit_id)
@@ -415,6 +423,17 @@ impl Gateway {
             });
         }
         self.pending_exits.remove(&exit_id);
+        Ok(ticket)
+    }
+
+    pub fn cancel_exit(&mut self, exit_id: u64) -> Result<ExitTicket, GatewayError> {
+        let ticket = self
+            .pending_exits
+            .remove(&exit_id)
+            .ok_or(GatewayError::UnknownExit(exit_id))?;
+        let minted = *self.per_asset_minted.get(&ticket.asset_id).unwrap_or(&0);
+        self.per_asset_minted
+            .insert(ticket.asset_id, minted.saturating_add(ticket.amount));
         Ok(ticket)
     }
 
@@ -843,6 +862,57 @@ mod tests {
         gw.advance_to(until);
         assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1), Ok(()));
         assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
+    }
+
+    #[test]
+    fn a_freeze_halts_finalize_and_a_cancel_restores_the_burned_balance() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+        gw.admit_trustless([0xa1; 16], [0xab; 32], 400, 1)
+            .expect("seed a minted balance to exit");
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 400);
+
+        let ticket = gw
+            .request_exit([0xa1; 16], 300, [0x22; 32])
+            .expect("the exit burns the bridged units");
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
+
+        let until = 5_000u64;
+        let mut w = Writer::new();
+        w.u64(until);
+        let message = w.finish();
+        let sigs: Vec<SignerSig> = s
+            .iter()
+            .map(|(id, _, sk)| SignerSig {
+                operator_id: *id,
+                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32]).unwrap().to_vec(),
+            })
+            .collect();
+        gw.emergency_freeze(until, &sigs).expect("a quorum freezes");
+        assert_eq!(
+            gw.finalize_exit(ticket.exit_id),
+            Err(GatewayError::Frozen { until }),
+            "a freeze halts a finalize even once the unlock height has passed"
+        );
+
+        let cancelled = gw.cancel_exit(ticket.exit_id).expect("the pending exit cancels");
+        assert_eq!(cancelled.amount, 300);
+        assert_eq!(
+            gw.minted_of_asset(&[0xa1; 16]),
+            400,
+            "cancel restores the units the exit burned"
+        );
+        gw.advance_to(until);
+        assert_eq!(
+            gw.finalize_exit(ticket.exit_id),
+            Err(GatewayError::UnknownExit(ticket.exit_id))
+        );
     }
 
     #[test]
