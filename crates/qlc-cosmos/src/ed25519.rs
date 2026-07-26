@@ -122,6 +122,14 @@ impl Point {
         }
         bytes
     }
+
+    fn is_identity(&self) -> bool {
+        self.x.is_zero() && self.y.sub(&self.z).is_zero()
+    }
+
+    fn is_small_order(&self) -> bool {
+        self.double().double().double().is_identity()
+    }
 }
 
 fn base() -> Point {
@@ -221,12 +229,21 @@ pub fn verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bo
         Some(p) => p,
         None => return false,
     };
+    if a_point.is_small_order() {
+        return false;
+    }
     let neg_a = a_point.negate();
 
     let mut r_bytes = [0u8; 32];
     r_bytes.copy_from_slice(&signature[0..32]);
     let mut s_bytes = [0u8; 32];
     s_bytes.copy_from_slice(&signature[32..64]);
+
+    if let Some(r_point) = decompress(&r_bytes) {
+        if r_point.is_small_order() {
+            return false;
+        }
+    }
 
     let s = match Scalar::from_canonical_32(&s_bytes) {
         Some(s) => s,
@@ -378,5 +395,21 @@ mod tests {
         let seed = arr32("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20");
         let msg = b"same message same signature";
         assert_eq!(sign(&seed, msg), sign(&seed, msg));
+    }
+
+    #[test]
+    fn an_identity_public_key_forgery_is_rejected() {
+        let mut a = [0u8; 32];
+        a[0] = 1;
+        let identity = decompress(&a).unwrap();
+        assert!(identity.is_small_order());
+
+        let s = Scalar::from_u64(12345);
+        let r_point = scalar_mul(&s, &base());
+        let mut sig = [0u8; 64];
+        sig[0..32].copy_from_slice(&r_point.compress());
+        sig[32..64].copy_from_slice(&s.to_bytes_le());
+
+        assert!(!verify(&a, b"forge anything under an identity key", &sig));
     }
 }
