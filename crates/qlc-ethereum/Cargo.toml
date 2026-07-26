@@ -12,7 +12,7 @@ description = "Off-chain Ethereum and EVM light client for the bridge. Altair sy
 [dependencies]
 qlc-core = { path = "../../../Q-Lightclient/crates/qlc-core" }
 qlc-stark = { path = "../../../Q-Lightclient/crates/qlc-stark" }
-qlc-bitcoin = { path = "../../../Q-Lightclient/crates/qlc-bitcoin" }
+qlc-bitcoin = { path = "../qlc-bitcoin" }
 
 [dev-dependencies]
 qlc-airlock = { path = "../../../Q-Lightclient/crates/qlc-airlock" }
