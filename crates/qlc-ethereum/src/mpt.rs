@@ -119,7 +119,7 @@ pub fn verify_proof(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub mod builder {
     use super::*;
 
