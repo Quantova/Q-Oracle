@@ -205,6 +205,10 @@ impl Gateway {
         *self.per_asset_minted.get(asset_id).unwrap_or(&0)
     }
 
+    pub fn asset_cap(&self, asset_id: &[u8; 16]) -> Option<u128> {
+        self.per_asset_cap.get(asset_id).copied()
+    }
+
     pub fn minted_by_asset(&self) -> &BTreeMap<[u8; 16], u128> {
         &self.per_asset_minted
     }
@@ -657,5 +661,13 @@ mod tests {
             gw.set_corridor_quorum(1, 0),
             Err(GatewayError::ThinQuorum { quorum: 0, size: 9 })
         );
+    }
+
+    #[test]
+    fn the_registered_asset_cap_reads_back() {
+        let (_s, mut gw) = nine_op_gateway(3);
+        assert_eq!(gw.asset_cap(&[0xb2; 16]), None);
+        gw.register_asset_cap([0xb2; 16], 7_000);
+        assert_eq!(gw.asset_cap(&[0xb2; 16]), Some(7_000));
     }
 }
