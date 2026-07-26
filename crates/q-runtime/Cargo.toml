@@ -1,0 +1,28 @@
+# Copyright 2026 Quantova Inc
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
+[package]
+name = "q-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The oracle data plane. A bounded, hand-rolled HTTP server over std::net wraps the transport-free qbridge dispatcher, decoding a bounded request frame, calling handle over a shared bridge state behind a mutex, and encoding the answer. The runtime boots every seeded corridor and pool and exposes the per-chain block-ingestion watcher seam the concrete RPC clients attach to. The authoritative on-chain mint stays at the trustless deposit seam it already lives behind."
+
+[[bin]]
+name = "q-oracle"
+path = "src/main.rs"
+
+[dependencies]
+q-qbridge = { path = "../q-qbridge" }
+q-federated = { workspace = true }
+q-gateway = { workspace = true }
+q-assets = { workspace = true }
+q-codec = { workspace = true }
+q-airlock = { workspace = true }
+qlc-bitcoin = { workspace = true }
+qlc-ethereum = { workspace = true }
+qlc-cosmos = { workspace = true }
+
+[dev-dependencies]
+qtv-crypto = { workspace = true }

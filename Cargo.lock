@@ -178,6 +178,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "q-runtime"
+version = "0.1.0"
+dependencies = [
+ "q-airlock",
+ "q-assets",
+ "q-codec",
+ "q-federated",
+ "q-gateway",
+ "q-qbridge",
+ "qlc-bitcoin",
+ "qlc-cosmos",
+ "qlc-ethereum",
+ "qtv-crypto 0.3.0",
+]
+
+[[package]]
 name = "q-watchtower"
 version = "0.1.0"
 dependencies = [
