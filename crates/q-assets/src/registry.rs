@@ -148,7 +148,7 @@ pub const ASSETS: &[AssetRecord] = &[
     foreign(Network::Litecoin, "LTC", 8),
     foreign(Network::Dogecoin, "DOGE", 8),
     foreign(Network::Zcash, "ZEC", 8),
-    foreign(Network::Sei, "SEI", 6),
+    foreign(Network::Sei, "SEI", 18),
     foreign(Network::Kava, "KAVA", 6),
     foreign(Network::Filecoin, "FIL", 18),
     foreign(Network::Celo, "CELO", 18),
