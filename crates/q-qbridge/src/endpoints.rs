@@ -288,6 +288,9 @@ fn dispatch_deposit(
                     .bitcoin_anchor
                     .as_ref()
                     .ok_or(ApiError::NoAnchor(Network::Bitcoin.id()))?;
+                if anchor.checkpoint.min_work.is_zero() {
+                    return Err(ApiError::NoAnchor(Network::Bitcoin.id()));
+                }
                 (anchor.params, anchor.checkpoint.clone())
             };
             let chain = verify_chain(&material.headers, material.start_height, &params)
@@ -508,7 +511,7 @@ mod tests {
         let checkpoint = Checkpoint {
             height: 0,
             hash: headers[0].block_hash(),
-            min_work: U256::ZERO,
+            min_work: U256::ONE,
         };
         let material = BitcoinProofMaterial {
             headers,
@@ -743,7 +746,7 @@ mod tests {
             checkpoint: Checkpoint {
                 height: 0,
                 hash: [0x99u8; 32],
-                min_work: U256::ZERO,
+                min_work: U256::ONE,
             },
             params: EASY,
         };
@@ -760,6 +763,53 @@ mod tests {
             Response::Error(ApiError::BitcoinSpv(SpvError::CheckpointMismatch))
         );
         assert_eq!(state.gateway.minted_of_asset(&view.asset_id), 0);
+    }
+
+    #[test]
+    fn a_present_bitcoin_anchor_with_a_zero_work_floor_is_refused_fail_closed() {
+        let mut state = empty_state(0);
+        let view = bitcoin_pool(&mut state);
+        let bridge = p2pkh([0x11; 20]);
+        let recipient = [0x42u8; 32];
+        let (material, anchor, txid) = bitcoin_deposit(&bridge, recipient, 250_000);
+        let unset = BitcoinAnchor {
+            checkpoint: Checkpoint {
+                min_work: U256::ZERO,
+                ..anchor.checkpoint.clone()
+            },
+            params: anchor.params,
+        };
+        state.set_bitcoin_anchor(unset);
+        let fact = bitcoin_fact(view.asset_id, txid, recipient, 250_000);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Bitcoin {
+                    material: material.clone(),
+                    fact: fact.clone(),
+                },
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Error(ApiError::NoAnchor(Network::Bitcoin.id())),
+            "a present anchor with a zero cumulative-work floor cannot verify: a self-mined floor-difficulty chain must not admit"
+        );
+        assert_eq!(state.gateway.minted_of_asset(&view.asset_id), 0);
+
+        state.set_bitcoin_anchor(anchor);
+        let admitted = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Bitcoin { material, fact },
+            }),
+        );
+        match admitted {
+            Response::DepositAdmitted(DepositOutcome::AdmittedPendingChainMint(mint)) => {
+                assert_eq!(mint.amount, 250_000);
+            }
+            other => panic!("a non-trivial work floor must verify, got {:?}", other),
+        }
     }
 
     #[test]
