@@ -3,7 +3,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use qtv_attest::{Attestation, Block, Certificate, Envelope, Parent};
 use qtv_codec::Decoder;
@@ -67,9 +67,13 @@ impl RpcBurnSource {
         stream.write_all(body.as_bytes()).map_err(io_err)?;
         stream.flush().ok();
 
+        let deadline = Instant::now() + self.timeout;
         let mut raw = Vec::new();
         let mut buf = [0u8; 8192];
         loop {
+            if Instant::now() >= deadline {
+                return Err(BurnWatchError::Rpc("the response timed out".to_string()));
+            }
             match stream.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
