@@ -9,6 +9,8 @@ pub mod burn_proof;
 pub mod desk;
 pub mod errors;
 pub mod ledger;
+pub mod orchestrator;
+pub mod payout;
 pub mod release;
 pub mod store;
 pub mod watch;
@@ -25,6 +27,8 @@ pub use errors::ExitError;
 pub use ledger::{
     MemoryLedger, PersistentLedger, ReplayLedger, LEDGER_VERSION, MAX_LEDGER_ENTRIES,
 };
+pub use orchestrator::{ExitConfig, ReleasePipeline};
+pub use payout::{FailClosedPayout, PayoutCustody, PayoutExecutor, PayoutReceipt};
 pub use release::{
     OperatorQuorum, OperatorSig, ReleaseAuthorization, ReleaseTerms, RELEASE_DOMAIN,
     RELEASE_VERSION,
