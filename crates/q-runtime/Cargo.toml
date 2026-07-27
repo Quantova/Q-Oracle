@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 q-qbridge = { path = "../q-qbridge" }
+q-exits = { path = "../q-exits" }
 q-federated = { workspace = true }
 q-gateway = { workspace = true }
 q-assets = { workspace = true }

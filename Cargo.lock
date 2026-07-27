@@ -187,6 +187,7 @@ dependencies = [
  "q-airlock",
  "q-assets",
  "q-codec",
+ "q-exits",
  "q-federated",
  "q-gateway",
  "q-qbridge",
