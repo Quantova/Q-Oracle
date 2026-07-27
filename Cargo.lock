@@ -111,6 +111,8 @@ name = "q-exits"
 version = "0.1.0"
 dependencies = [
  "q-codec",
+ "qlc-bitcoin",
+ "qlc-ethereum",
  "qtv-attest",
  "qtv-block",
  "qtv-codec",
