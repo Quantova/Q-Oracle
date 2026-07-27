@@ -1,17 +1,186 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::io::ErrorKind;
 use std::net::{TcpListener, ToSocketAddrs};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use q_exits::{
+    BurnFeed, ExitConfig, ExitDecision, ExitDesk, ExitError, ExitId, FeedError, PayoutAttestation,
+    PersistentLedger, QuantovaBurnSource, ReplayStore, RpcBurnSource,
+};
 use q_federated::SourceEndpoint;
 use q_gateway::{Gateway, OperatorSet};
 use q_qbridge::BridgeState;
 
+use crate::exits::{load_exit_config, ExitConfigError, ExitTrustConfig};
 use crate::http::{serve, SharedState};
 use crate::persist::GuardStore;
+
+// poll gap, swept in short slices so a stop returns promptly
+const EXIT_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const EXIT_POLL_SLICE: Duration = Duration::from_millis(100);
+
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+// the running exit service: desk, chain burn source, and feed, no custody key
+pub struct ExitService {
+    desk: ExitDesk,
+    feed: BurnFeed,
+    source: RpcBurnSource,
+    vault_id: u32,
+    dest_chain: u32,
+}
+
+impl ExitService {
+    // build from a complete trust config: anchor, replay ledger, vault registry, rpc endpoint
+    pub fn build(cfg: &ExitTrustConfig) -> Result<ExitService, ExitError> {
+        let anchor = cfg.build_anchor()?;
+        let ledger = PersistentLedger::open(ReplayStore::new(cfg.ledger_path.clone()))?;
+        let mut desk = ExitDesk::with_ledger(cfg.desk_config(), anchor, Box::new(ledger))?;
+        for vault in &cfg.vaults {
+            desk.register_vault(vault.vault_id, vault.collateral);
+        }
+        Ok(ExitService {
+            desk,
+            feed: BurnFeed::new(cfg.start_height, ExitConfig { enabled: true }),
+            source: RpcBurnSource::new(cfg.rpc_host.clone(), cfg.rpc_port),
+            vault_id: cfg.active_vault(),
+            dest_chain: cfg.dest_chain,
+        })
+    }
+
+    pub fn desk(&self) -> &ExitDesk {
+        &self.desk
+    }
+
+    pub fn feed_enabled(&self) -> bool {
+        self.feed.is_enabled()
+    }
+
+    pub fn scanned_through(&self) -> u64 {
+        self.feed.scanned_through()
+    }
+
+    pub fn vault(&self) -> u32 {
+        self.vault_id
+    }
+
+    // poll finalized burns and open an exit for each verified proof of burn
+    pub fn poll_burns(&mut self, now: u64) -> Result<Vec<ExitId>, FeedError> {
+        self.feed.drive(&self.source, &mut self.desk, self.vault_id, now)
+    }
+
+    // drive against a supplied source, the seam a test drives with a mock chain
+    pub fn poll_burns_from(
+        &mut self,
+        source: &dyn QuantovaBurnSource,
+        now: u64,
+    ) -> Result<Vec<ExitId>, FeedError> {
+        self.feed.drive(source, &mut self.desk, self.vault_id, now)
+    }
+
+    // settle on a verified foreign payout, returning the SETTLE decision to attest
+    pub fn settle(
+        &mut self,
+        id: ExitId,
+        attestation: &PayoutAttestation,
+        now: u64,
+    ) -> Result<ExitDecision, ExitError> {
+        self.desk.settle(id, attestation, now)?;
+        let statement = self.desk.exit(id).ok_or(ExitError::UnknownExit)?.statement.clone();
+        Ok(ExitDecision::settle(&statement, self.dest_chain))
+    }
+
+    // sweep exits past their window into SLASH decisions, each paying the user the premium
+    pub fn sweep_slash(&mut self, now: u64) -> Vec<ExitDecision> {
+        let mut decisions = Vec::new();
+        for id in self.desk.slashable(now) {
+            if let Ok(outcome) = self.desk.slash(id, now) {
+                if let Some(exit) = self.desk.exit(id) {
+                    decisions.push(ExitDecision::slash(
+                        &exit.statement,
+                        outcome.user_payout,
+                        self.dest_chain,
+                    ));
+                }
+            }
+        }
+        decisions
+    }
+
+    // move onto its own thread and drive the loop until stopped
+    pub fn spawn(mut self) -> ExitHandle {
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        let thread = thread::spawn(move || {
+            while !flag.load(Ordering::SeqCst) {
+                let now = unix_millis();
+                let _ = self.poll_burns(now);
+                let _ = self.sweep_slash(now);
+                let mut waited = Duration::ZERO;
+                while waited < EXIT_POLL_INTERVAL && !flag.load(Ordering::SeqCst) {
+                    thread::sleep(EXIT_POLL_SLICE);
+                    waited += EXIT_POLL_SLICE;
+                }
+            }
+        });
+        ExitHandle {
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+// handle to the service thread; stop() signals and joins it
+pub struct ExitHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl ExitHandle {
+    pub fn stop(mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+// disabled -> None (no service); enabled but incomplete -> Err (fail closed); configured -> spawn
+pub fn start_exits() -> std::io::Result<Option<ExitHandle>> {
+    start_exits_with(load_exit_config())
+}
+
+pub(crate) fn start_exits_with(
+    loaded: Result<Option<ExitTrustConfig>, ExitConfigError>,
+) -> std::io::Result<Option<ExitHandle>> {
+    match loaded {
+        Ok(None) => Ok(None),
+        Ok(Some(cfg)) => {
+            let service = ExitService::build(&cfg).map_err(|e| {
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("the exit trust configuration is unusable, refusing to start: {e:?}"),
+                )
+            })?;
+            Ok(Some(service.spawn()))
+        }
+        Err(e) => Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("exits are enabled but the trust configuration is incomplete, refusing to start: {e:?}"),
+        )),
+    }
+}
 
 /// The Quantova destination chain the oracle mints against.
 pub const DEST_CHAIN: u32 = 9000;
@@ -62,6 +231,8 @@ pub fn shared(state: BridgeState) -> SharedState {
 /// Bind, boot a fully seeded state, and serve the endpoints, parking the calling thread while the
 /// accept loop runs. The authoritative on-chain mint stays at the trustless deposit seam.
 pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Result<()> {
+    // start exits first so a half configured runtime fails closed before binding a socket
+    let _exits = start_exits()?;
     let store = snapshot.map(|path| GuardStore::new(path));
     let state = restore(&store)?;
     run_with(addr, shared(state), store.map(Arc::new))
@@ -404,5 +575,90 @@ mod tests {
         let path = temp_snapshot("absent");
         let restored = restore(&Some(GuardStore::new(path))).expect("first run starts fresh");
         assert!(!restored.gateway.is_reference_used(&[0x11; 32]));
+    }
+
+    use crate::exits::VaultSeed;
+    use q_exits::{
+        BurnWatchError, FinalizedBlock, MemberConfig, ATTEST_PK_BYTES, BEACON_SEED_BYTES,
+    };
+
+    fn temp_ledger(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!("q-oracle-exitsvc-{tag}-{}-{nanos}.led", std::process::id()));
+        path
+    }
+
+    fn full_exit_config(ledger: PathBuf) -> ExitTrustConfig {
+        ExitTrustConfig {
+            chain_id: 9000,
+            tau: 1,
+            slot: 0,
+            budget: 100,
+            beacon_seed: [0x5a; BEACON_SEED_BYTES],
+            members: vec![MemberConfig {
+                id: 1,
+                weight: 100,
+                root_digest: [0x11; 32],
+                root_slots: 64,
+                attest_pk: vec![0u8; ATTEST_PK_BYTES],
+            }],
+            dest_chain: 9000,
+            corridor: 1,
+            start_height: 4_199_999,
+            vaults: vec![VaultSeed { vault_id: 1, collateral: 2_000_000 }],
+            rpc_host: "127.0.0.1".to_string(),
+            rpc_port: 8080,
+            ledger_path: ledger,
+            bitcoin: None,
+        }
+    }
+
+    struct EmptyChain {
+        head: u64,
+    }
+
+    impl QuantovaBurnSource for EmptyChain {
+        fn finalized_height(&self) -> Result<u64, BurnWatchError> {
+            Ok(self.head)
+        }
+
+        fn finalized_block(&self, _height: u64) -> Result<Option<FinalizedBlock>, BurnWatchError> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn a_configured_service_constructs_the_desk_and_drives_the_feed() {
+        let path = temp_ledger("drive");
+        let cfg = full_exit_config(path.clone());
+        let mut service = ExitService::build(&cfg).expect("a full config builds a service");
+        assert!(service.feed_enabled(), "the feed is enabled when exits are configured");
+        assert_eq!(service.vault(), 1, "the pool vault is the active vault");
+        assert_eq!(service.desk().free_collateral(1), 2_000_000, "the vault collateral is registered");
+        assert_eq!(service.scanned_through(), 4_199_999, "the feed starts at the configured height");
+
+        let opened = service
+            .poll_burns_from(&EmptyChain { head: 4_200_004 }, 10)
+            .expect("the enabled feed drives");
+        assert!(opened.is_empty(), "an empty chain opens no exits");
+        assert_eq!(service.scanned_through(), 4_200_004, "the feed advanced across the empty range");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_disabled_runtime_starts_no_exit_service() {
+        let handle = start_exits_with(Ok(None)).expect("a disabled runtime starts cleanly");
+        assert!(handle.is_none(), "a default disabled runtime starts no exit service");
+    }
+
+    #[test]
+    fn an_enabled_but_unconfigured_runtime_refuses_to_start() {
+        let refused = start_exits_with(Err(ExitConfigError::Missing("chain id")));
+        assert!(refused.is_err(), "an enabled but half configured runtime fails closed");
+        assert_eq!(refused.err().unwrap().kind(), ErrorKind::InvalidInput);
     }
 }

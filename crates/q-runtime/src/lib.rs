@@ -23,10 +23,13 @@ pub mod watch;
 pub mod wire;
 
 pub use boot::{
-    boot, boot_with, declare_operator_source, run, run_with, shared, DEFAULT_EPOCH_CAP, DEST_CHAIN,
+    boot, boot_with, declare_operator_source, run, run_with, shared, start_exits, ExitHandle,
+    ExitService, DEFAULT_EPOCH_CAP, DEST_CHAIN,
 };
 pub use exits::{
-    exit_config_from_env, exits_started, parse_enabled, EXITS_ENABLED_ENV,
+    exit_config_from_env, exits_started, load_exit_config, parse_enabled, parse_exit_config,
+    BitcoinCheckpointConfig, EnvSource, ExitConfigError, ExitTrustConfig, VaultSeed,
+    EXITS_ENABLED_ENV,
 };
 pub use persist::GuardStore;
 pub use http::{serve, SharedState, MAX_BODY, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_HEAD};
