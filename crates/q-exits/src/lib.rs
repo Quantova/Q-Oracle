@@ -22,7 +22,7 @@ pub use burn_proof::{
 pub use errors::ExitError;
 pub use exits::{
     DeskConfig, Exit, ExitDesk, ExitId, ExitState, ExitStatement, Release, SlashOutcome, BPS_DEN,
-    EXIT_STATEMENT_VERSION,
+    REDEEM_WINDOW_MS, SECURE_RATIO_BPS, SLASH_PREMIUM_BPS, EXIT_STATEMENT_VERSION,
 };
 pub use feed::{BurnFeed, ExitConfig, FeedError};
 pub use ledger::{

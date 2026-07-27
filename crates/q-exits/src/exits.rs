@@ -54,6 +54,21 @@ pub struct DeskConfig {
     pub window: u64,
 }
 
+pub const SECURE_RATIO_BPS: u32 = 15_000;
+pub const SLASH_PREMIUM_BPS: u32 = 11_000;
+pub const REDEEM_WINDOW_MS: u64 = 86_400_000;
+
+impl DeskConfig {
+    pub fn aligned(corridor: u32) -> DeskConfig {
+        DeskConfig {
+            corridor,
+            secure_bps: SECURE_RATIO_BPS,
+            premium_bps: SLASH_PREMIUM_BPS,
+            window: REDEEM_WINDOW_MS,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExitId(pub usize);
 
@@ -264,6 +279,15 @@ mod tests {
             premium_bps: 11_000,
             window: 100,
         }
+    }
+
+    #[test]
+    fn the_aligned_config_matches_the_old_bridge() {
+        let c = DeskConfig::aligned(1);
+        assert_eq!(c.secure_bps, 15_000);
+        assert_eq!(c.premium_bps, 11_000);
+        assert_eq!(c.window, 86_400_000);
+        assert!(c.premium_bps > BPS_DEN as u32 && c.premium_bps <= c.secure_bps);
     }
 
     fn statement() -> ExitStatement {
