@@ -8,7 +8,7 @@ use q_exits::{
 
 use qtv_attest::aggregate::aggregate;
 use qtv_attest::{Attester, Block, Certificate, Envelope, Parent};
-use qtv_block::{event_root, header_from_bytes, prove_inclusion, Header};
+use qtv_block::{event_root, prove_inclusion, Header};
 use qtv_codec::{to_bytes, Encoder};
 use qtv_crypto::ml_dsa::{keygen, sign, SEED_BYTES};
 use qtv_sampler::beacon::Beacon;
