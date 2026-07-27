@@ -10,6 +10,7 @@ pub mod errors;
 pub mod ledger;
 pub mod release;
 pub mod store;
+pub mod watch;
 
 pub use anchor::{MemberConfig, QuantovaAnchor, ATTEST_PK_BYTES, BEACON_SEED_BYTES};
 pub use burn_proof::{
@@ -25,3 +26,7 @@ pub use release::{
     RELEASE_VERSION,
 };
 pub use store::ReplayStore;
+pub use watch::{
+    is_bridge_burn_leaf, BurnWatchError, BurnWatcher, FinalizedBlock, QuantovaBurnSource,
+    MAX_BURNS_PER_BLOCK, MAX_HEIGHTS_PER_POLL,
+};
