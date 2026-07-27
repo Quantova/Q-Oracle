@@ -9,6 +9,7 @@ pub mod errors;
 pub mod exits;
 pub mod feed;
 pub mod ledger;
+pub mod outbound;
 pub mod payout;
 pub mod rpc;
 pub mod store;
@@ -27,6 +28,10 @@ pub use exits::{
 pub use feed::{BurnFeed, ExitConfig, FeedError};
 pub use ledger::{
     MemoryLedger, PersistentLedger, ReplayLedger, LEDGER_VERSION, MAX_LEDGER_ENTRIES,
+};
+pub use outbound::{
+    sign_decision, ExitDecision, ExitEnvelope, ExitOutcome, SignerSig as ExitSignerSig,
+    ARTIFACT_EXIT_ACK, EXIT_ACK_DOMAIN, EXIT_FACT_ENCODED_LEN, EXIT_FACT_VERSION,
 };
 pub use payout::{
     BitcoinPayoutWatcher, BitcoinReleaseProof, EvmPayoutWatcher, EvmReleaseProof,

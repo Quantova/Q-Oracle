@@ -108,7 +108,7 @@ pub struct ExitDesk {
     anchor: QuantovaAnchor,
     vaults: VaultBook,
     exits: Vec<Exit>,
-    consumed: Box<dyn ReplayLedger>,
+    consumed: Box<dyn ReplayLedger + Send>,
 }
 
 impl ExitDesk {
@@ -119,7 +119,7 @@ impl ExitDesk {
     pub fn with_ledger(
         cfg: DeskConfig,
         anchor: QuantovaAnchor,
-        consumed: Box<dyn ReplayLedger>,
+        consumed: Box<dyn ReplayLedger + Send>,
     ) -> Result<ExitDesk, ExitError> {
         if cfg.corridor == 0
             || cfg.secure_bps <= BPS_DEN as u32
@@ -173,6 +173,20 @@ impl ExitDesk {
 
     pub fn exit(&self, id: ExitId) -> Option<&Exit> {
         self.exits.get(id.0)
+    }
+
+    pub fn exit_count(&self) -> usize {
+        self.exits.len()
+    }
+
+    // pending exits past their window, swept into slash decisions
+    pub fn slashable(&self, now: u64) -> Vec<ExitId> {
+        self.exits
+            .iter()
+            .enumerate()
+            .filter(|(_, exit)| exit.state == ExitState::Pending && now > exit.deadline)
+            .map(|(index, _)| ExitId(index))
+            .collect()
     }
 
     pub fn open_exit(
