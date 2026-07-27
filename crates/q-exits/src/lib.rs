@@ -4,6 +4,7 @@
 
 
 pub mod anchor;
+pub mod authorizer;
 pub mod burn_proof;
 pub mod desk;
 pub mod errors;
@@ -13,6 +14,9 @@ pub mod store;
 pub mod watch;
 
 pub use anchor::{MemberConfig, QuantovaAnchor, ATTEST_PK_BYTES, BEACON_SEED_BYTES};
+pub use authorizer::{
+    OperatorAuthorizer, ReleaseAggregator, ReleaseSigner, SoftReleaseSigner,
+};
 pub use burn_proof::{
     AuthenticatedBurn, ProofOfBurn, EVENT_BRIDGE_BURN, NATIVE_EVENT_SOURCE,
 };
