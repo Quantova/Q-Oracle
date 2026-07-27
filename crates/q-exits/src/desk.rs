@@ -1,11 +1,10 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::collections::BTreeSet;
-
 use crate::anchor::QuantovaAnchor;
 use crate::burn_proof::ProofOfBurn;
 use crate::errors::ExitError;
+use crate::ledger::{MemoryLedger, ReplayLedger};
 use crate::release::{OperatorQuorum, ReleaseAuthorization, ReleaseTerms};
 
 pub struct CustodyConfig {
@@ -56,20 +55,28 @@ pub struct Release {
 pub struct ReleaseDesk {
     anchor: QuantovaAnchor,
     custody: CustodyConfig,
-    released: BTreeSet<[u8; 32]>,
+    ledger: Box<dyn ReplayLedger>,
 }
 
 impl ReleaseDesk {
     pub fn new(anchor: QuantovaAnchor, custody: CustodyConfig) -> ReleaseDesk {
+        ReleaseDesk::with_ledger(anchor, custody, Box::new(MemoryLedger::new()))
+    }
+
+    pub fn with_ledger(
+        anchor: QuantovaAnchor,
+        custody: CustodyConfig,
+        ledger: Box<dyn ReplayLedger>,
+    ) -> ReleaseDesk {
         ReleaseDesk {
             anchor,
             custody,
-            released: BTreeSet::new(),
+            ledger,
         }
     }
 
     pub fn is_released(&self, burn_ref: &[u8; 32]) -> bool {
-        self.released.contains(burn_ref)
+        self.ledger.is_released(burn_ref)
     }
 
     pub fn authorize_release(
@@ -97,7 +104,7 @@ impl ReleaseDesk {
             return Err(ExitError::BurnMismatch);
         }
 
-        if self.released.contains(&burn.burn_ref) {
+        if self.ledger.is_released(&burn.burn_ref) {
             return Err(ExitError::ReplayedBurn);
         }
 
@@ -106,7 +113,7 @@ impl ReleaseDesk {
             .quorum
             .verify(&preimage, &authorization.signatures)?;
 
-        self.released.insert(burn.burn_ref);
+        self.ledger.record(burn.burn_ref)?;
         Ok(Release {
             vault: *self.custody.vault(),
             asset_id: burn.asset_id,

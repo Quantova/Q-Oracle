@@ -25,6 +25,9 @@ pub enum ExitError {
     UnknownOperator(u32),
     BadSignature(u32),
     ReplayedBurn,
+    PersistFailed,
+    TermsMismatch,
+    PayoutUnconfigured,
 }
 
 #[cfg(test)]
