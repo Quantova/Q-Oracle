@@ -12,6 +12,7 @@ pub mod ledger;
 pub mod orchestrator;
 pub mod payout;
 pub mod release;
+pub mod rpc;
 pub mod store;
 pub mod watch;
 
@@ -32,6 +33,9 @@ pub use payout::{FailClosedPayout, PayoutCustody, PayoutExecutor, PayoutReceipt}
 pub use release::{
     OperatorQuorum, OperatorSig, ReleaseAuthorization, ReleaseTerms, RELEASE_DOMAIN,
     RELEASE_VERSION,
+};
+pub use rpc::{
+    decode_finalized_block, decode_finalized_head, decode_heights_after, RpcBurnSource,
 };
 pub use store::ReplayStore;
 pub use watch::{
