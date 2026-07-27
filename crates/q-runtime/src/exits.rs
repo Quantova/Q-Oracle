@@ -1,7 +1,7 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use q_exits::{ExitConfig, FailClosedPayout, RpcBurnSource};
+use q_exits::{ExitConfig, RpcBurnSource};
 
 pub const EXITS_ENABLED_ENV: &str = "Q_ORACLE_EXITS_ENABLED";
 pub const CHAIN_RPC_HOST_ENV: &str = "Q_ORACLE_CHAIN_RPC_HOST";
@@ -37,14 +37,9 @@ pub fn burn_source_from_env(config: &ExitConfig) -> Option<RpcBurnSource> {
     Some(RpcBurnSource::new(host, port))
 }
 
-pub fn default_payout_executor() -> FailClosedPayout {
-    FailClosedPayout::new()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use q_exits::{ExitError, PayoutExecutor, Release, ReleaseAuthorization, ReleaseTerms};
 
     #[test]
     fn the_flag_is_off_unless_explicitly_enabled() {
@@ -63,31 +58,5 @@ mod tests {
     fn the_burn_source_is_absent_unless_exits_are_enabled() {
         assert!(burn_source_from_env(&ExitConfig::default()).is_none());
         assert!(burn_source_from_env(&ExitConfig { enabled: true }).is_some());
-    }
-
-    #[test]
-    fn the_default_boot_payout_executor_refuses_without_custody() {
-        let executor = default_payout_executor();
-        let release = Release {
-            vault: [0x99; 32],
-            asset_id: [0xa1; 16],
-            amount: 500,
-            beneficiary: [0x55; 32],
-            burn_ref: [0x11; 32],
-            finalized_height: 1,
-        };
-        let authorization = ReleaseAuthorization {
-            terms: ReleaseTerms {
-                asset_id: [0xa1; 16],
-                amount: 500,
-                beneficiary: [0x55; 32],
-                burn_ref: [0x11; 32],
-            },
-            signatures: Vec::new(),
-        };
-        assert_eq!(
-            executor.execute(&release, &authorization),
-            Err(ExitError::PayoutUnconfigured)
-        );
     }
 }

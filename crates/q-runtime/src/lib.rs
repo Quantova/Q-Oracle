@@ -26,7 +26,7 @@ pub use boot::{
     boot, boot_with, declare_operator_source, run, run_with, shared, DEFAULT_EPOCH_CAP, DEST_CHAIN,
 };
 pub use exits::{
-    default_payout_executor, exit_config_from_env, exits_started, parse_enabled, EXITS_ENABLED_ENV,
+    exit_config_from_env, exits_started, parse_enabled, EXITS_ENABLED_ENV,
 };
 pub use persist::GuardStore;
 pub use http::{serve, SharedState, MAX_BODY, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_HEAD};
