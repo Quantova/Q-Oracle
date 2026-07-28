@@ -9,8 +9,6 @@ pub mod params;
 pub mod tx;
 pub mod retarget;
 pub mod sha256;
-pub mod spv;
-pub mod witness;
 pub mod work;
 
 pub use chain::{
@@ -21,8 +19,6 @@ pub use deposit::{verify_trustless_deposit, TrustlessDeposit};
 pub use params::{network_params, Network, NetworkParams, BITCOIN, BITCOIN_CASH};
 pub use retarget::compute_retarget;
 pub use sha256::{double_sha256, sha256};
-pub use spv::{DepositProof, ProvenDeposit};
-pub use witness::{BitcoinCheckedFacts, ProveReadyWitness};
 pub use work::{block_work, U256};
 
 pub const HEADER_LEN: usize = 80;
@@ -198,9 +194,12 @@ pub fn merkle_root(txids: &[[u8; 32]]) -> Option<[u8; 32]> {
     Some(level[0])
 }
 
-pub fn fold_merkle_branch(txid: [u8; 32], branch: &[MerkleStep]) -> [u8; 32] {
+pub fn fold_merkle_branch(txid: [u8; 32], branch: &[MerkleStep]) -> Result<[u8; 32], SpvError> {
     let mut cur = txid;
     for step in branch {
+        if step.hash == cur {
+            return Err(SpvError::MerkleMismatch);
+        }
         let mut buf = [0u8; 64];
         if step.sibling_on_left {
             buf[0..32].copy_from_slice(&step.hash);
@@ -211,7 +210,7 @@ pub fn fold_merkle_branch(txid: [u8; 32], branch: &[MerkleStep]) -> [u8; 32] {
         }
         cur = double_sha256(&buf);
     }
-    cur
+    Ok(cur)
 }
 
 pub fn verify_inclusion(
@@ -222,7 +221,7 @@ pub fn verify_inclusion(
     if !header.meets_pow() {
         return Err(SpvError::PowNotMet);
     }
-    if fold_merkle_branch(txid, branch) != header.merkle_root {
+    if fold_merkle_branch(txid, branch)? != header.merkle_root {
         return Err(SpvError::MerkleMismatch);
     }
     Ok(())
@@ -309,7 +308,45 @@ mod tests {
             hash: b,
             sibling_on_left: false,
         }];
-        assert_eq!(fold_merkle_branch(a, &branch), root);
+        assert_eq!(fold_merkle_branch(a, &branch).unwrap(), root);
+    }
+
+    #[test]
+    fn a_branch_that_reuses_the_current_node_as_its_sibling_is_rejected() {
+        let a = [0x11u8; 32];
+        let b = [0x22u8; 32];
+        let c = [0x33u8; 32];
+        let root = merkle_root(&[a, b, c]).unwrap();
+
+        let mut ab = [0u8; 64];
+        ab[0..32].copy_from_slice(&a);
+        ab[32..64].copy_from_slice(&b);
+        let h_ab = double_sha256(&ab);
+
+        let mut cc = [0u8; 64];
+        cc[0..32].copy_from_slice(&c);
+        cc[32..64].copy_from_slice(&c);
+        let h_cc = double_sha256(&cc);
+
+        let mut top = [0u8; 64];
+        top[0..32].copy_from_slice(&h_ab);
+        top[32..64].copy_from_slice(&h_cc);
+        assert_eq!(double_sha256(&top), root);
+
+        let branch = [
+            MerkleStep {
+                hash: c,
+                sibling_on_left: false,
+            },
+            MerkleStep {
+                hash: h_ab,
+                sibling_on_left: true,
+            },
+        ];
+        assert_eq!(
+            fold_merkle_branch(c, &branch),
+            Err(SpvError::MerkleMismatch)
+        );
     }
 
     #[test]

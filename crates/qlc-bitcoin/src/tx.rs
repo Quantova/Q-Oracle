@@ -137,12 +137,16 @@ impl Transaction {
 
         let locktime = c.u32_le()?;
 
-        Ok(Transaction {
+        let tx = Transaction {
             version,
             inputs,
             outputs,
             locktime,
-        })
+        };
+        if tx.legacy_bytes().len() == 64 {
+            return Err(SpvError::MalformedTransaction);
+        }
+        Ok(tx)
     }
 
     fn legacy_bytes(&self) -> Vec<u8> {
@@ -369,6 +373,28 @@ mod tests {
             check_deposit_tx(&[0u8; 4], &bridge, txid, 250_000, recipient),
             Err(SpvError::MalformedTransaction)
         );
+    }
+
+    #[test]
+    fn a_sixty_four_byte_txid_preimage_is_refused() {
+        let tx = build(vec![TxOutput {
+            value: 0,
+            script: vec![0u8; 4],
+        }]);
+        let raw = serialize_legacy(&tx);
+        assert_eq!(raw.len(), 64);
+        assert!(matches!(
+            Transaction::parse(&raw),
+            Err(SpvError::MalformedTransaction)
+        ));
+
+        let larger = build(vec![TxOutput {
+            value: 0,
+            script: vec![0u8; 5],
+        }]);
+        let raw_larger = serialize_legacy(&larger);
+        assert_eq!(raw_larger.len(), 65);
+        assert!(Transaction::parse(&raw_larger).is_ok());
     }
 
     #[test]

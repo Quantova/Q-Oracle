@@ -173,7 +173,7 @@ impl VerifiedChain {
         let header = self
             .header_at(deposit_height)
             .ok_or(SpvError::HeightOutOfRange)?;
-        if fold_merkle_branch(txid, branch) != header.merkle_root {
+        if fold_merkle_branch(txid, branch)? != header.merkle_root {
             return Err(SpvError::MerkleMismatch);
         }
         let confirmations = self.tip_height - deposit_height + 1;
