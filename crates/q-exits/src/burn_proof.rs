@@ -17,6 +17,7 @@ pub struct AuthenticatedBurn {
     pub beneficiary: [u8; 32],
     pub amount: u128,
     pub burn_ref: [u8; 32],
+    pub dest_chain: u64,
     pub finalized_height: u64,
 }
 
@@ -74,7 +75,7 @@ fn parse_burn_leaf(leaf: &[u8], finalized_height: u64) -> Result<AuthenticatedBu
     let _holder = fields.get_bytes().map_err(|_| ExitError::LeafDecode)?;
     let amount = fields.get_u128().map_err(|_| ExitError::LeafDecode)?;
     let destination = fields.get_bytes().map_err(|_| ExitError::LeafDecode)?;
-    let _chain_id = fields.get_u64().map_err(|_| ExitError::LeafDecode)?;
+    let dest_chain = fields.get_u64().map_err(|_| ExitError::LeafDecode)?;
     let _sender_nonce = fields.get_u64().map_err(|_| ExitError::LeafDecode)?;
     let _event_index = fields.get_u64().map_err(|_| ExitError::LeafDecode)?;
     let burn_ref = fields.get_bytes().map_err(|_| ExitError::LeafDecode)?;
@@ -89,6 +90,7 @@ fn parse_burn_leaf(leaf: &[u8], finalized_height: u64) -> Result<AuthenticatedBu
         beneficiary,
         amount,
         burn_ref,
+        dest_chain,
         finalized_height,
     })
 }

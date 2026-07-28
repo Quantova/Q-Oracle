@@ -38,6 +38,20 @@ pub struct SignedObservation {
     pub sig: SignerSig,
 }
 
+fn divergence_digest(lock: &ObservedLock, ctx: &CorridorContext) -> [u8; 32] {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&lock.source_chain.to_le_bytes());
+    buf.extend_from_slice(&lock.source_ref);
+    buf.extend_from_slice(&lock.asset_id);
+    buf.extend_from_slice(&lock.amount.to_le_bytes());
+    buf.extend_from_slice(&lock.recipient);
+    buf.extend_from_slice(&lock.observed_height.to_le_bytes());
+    buf.extend_from_slice(&lock.confirmations.to_le_bytes());
+    buf.extend_from_slice(&ctx.dest_chain.to_le_bytes());
+    buf.extend_from_slice(&ctx.route_id.to_le_bytes());
+    sha3_256(&buf)
+}
+
 pub struct Operator<S: AttestationSigner> {
     signer: S,
     corridors: BTreeMap<u32, CorridorContext>,
@@ -99,8 +113,12 @@ impl<S: AttestationSigner> Operator<S> {
             });
         }
 
+        if self.signed_refs.contains(&lock.source_ref) {
+            return Err(OperatorError::AlreadySigned);
+        }
+
         let fact = translate(lock, &ctx, dest_height);
-        let digest = sha3_256(&fact.encode());
+        let digest = divergence_digest(lock, &ctx);
 
         match self.seen_facts.get(&lock.source_ref) {
             Some(prev) if *prev != digest => {
@@ -111,10 +129,6 @@ impl<S: AttestationSigner> Operator<S> {
             None => {
                 self.seen_facts.insert(lock.source_ref, digest);
             }
-        }
-
-        if self.signed_refs.contains(&lock.source_ref) {
-            return Err(OperatorError::AlreadySigned);
         }
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
@@ -190,5 +204,42 @@ mod tests {
         sig.copy_from_slice(&signed.sig.signature);
         let preimage = signed.fact.attest_preimage(DEST_ID);
         assert!(!ml_dsa::verify(&pk, &preimage, &sig, b"QUANTOVA/Q-ORACLE/REORG/v1"));
+    }
+
+    #[test]
+    fn re_observing_the_same_finalized_lock_does_not_halt() {
+        let mut operator = op();
+        operator.observe_and_sign(&lock(), 900_000).expect("first observation signs");
+        assert_eq!(
+            operator.observe_and_sign(&lock(), 900_000),
+            Err(OperatorError::AlreadySigned)
+        );
+        assert_eq!(operator.state(), OperatorState::Running);
+        assert!(!operator.is_halted());
+    }
+
+    #[test]
+    fn re_observing_with_a_moved_dest_clock_does_not_halt() {
+        let mut operator = op();
+        operator.observe_and_sign(&lock(), 900_000).expect("first observation signs");
+        assert_eq!(
+            operator.observe_and_sign(&lock(), 900_500),
+            Err(OperatorError::AlreadySigned)
+        );
+        assert_eq!(operator.state(), OperatorState::Running);
+    }
+
+    #[test]
+    fn a_conflicting_re_observation_of_a_signed_reference_does_not_halt() {
+        let mut operator = op();
+        operator.observe_and_sign(&lock(), 900_000).expect("the first final lock signs");
+        let mut conflicting = lock();
+        conflicting.amount = 999;
+        assert_eq!(
+            operator.observe_and_sign(&conflicting, 900_000),
+            Err(OperatorError::AlreadySigned)
+        );
+        assert_eq!(operator.state(), OperatorState::Running);
+        assert!(!operator.is_halted());
     }
 }

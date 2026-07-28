@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use q_exits::{
-    BurnFeed, ExitConfig, ExitDecision, ExitDesk, ExitError, ExitId, FeedError, PayoutAttestation,
+    BurnFeed, ExitConfig, ExitDecision, ExitDesk, ExitError, ExitId, FeedError, PayoutWatcher,
     PersistentLedger, QuantovaBurnSource, ReplayStore, RpcBurnSource,
 };
 use q_federated::SourceEndpoint;
@@ -93,10 +93,10 @@ impl ExitService {
     pub fn settle(
         &mut self,
         id: ExitId,
-        attestation: &PayoutAttestation,
+        watcher: &dyn PayoutWatcher,
         now: u64,
     ) -> Result<ExitDecision, ExitError> {
-        self.desk.settle(id, attestation, now)?;
+        self.desk.settle(id, watcher, now)?;
         let statement = self.desk.exit(id).ok_or(ExitError::UnknownExit)?.statement.clone();
         Ok(ExitDecision::settle(&statement, self.dest_chain))
     }

@@ -10,10 +10,8 @@ use qtv_crypto::sha3::shake256;
 use qlc_bitcoin::{
     double_sha256, verify_chain, BlockHeader, Checkpoint, MerkleStep, NetworkParams, SpvError,
 };
-use qlc_ethereum::keccak::keccak256;
-use qlc_ethereum::mpt::{self, MptError};
-use qlc_ethereum::receipt::{self, ReceiptError};
-use qlc_ethereum::rlp;
+use qlc_ethereum::mpt::MptError;
+use qlc_ethereum::receipt::ReceiptError;
 
 use crate::errors::ExitError;
 use crate::exits::ExitStatement;
@@ -132,6 +130,7 @@ pub enum PayoutProofError {
     TxidMismatch,
     MissingReceipt,
     ReusedPayout,
+    EvmCorridorDisabled,
     Spv(SpvError),
     Mpt(MptError),
     Receipt(ReceiptError),
@@ -385,30 +384,9 @@ pub struct EvmReleaseProof {
     pub release_contract: [u8; 20],
 }
 
-fn evm_source_ref(receipts_root: &[u8; 32], key: &[u8], log_index: u32) -> [u8; 32] {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(receipts_root);
-    buf.extend_from_slice(key);
-    buf.extend_from_slice(&log_index.to_le_bytes());
-    keccak256(&buf)
-}
-
 impl EvmReleaseProof {
     pub fn verify(&self) -> Result<VerifiedPayout, PayoutProofError> {
-        let key = rlp::encode_uint(self.receipt_index);
-        let value = mpt::verify_proof(&self.receipts_root, &key, &self.receipt_proof)
-            .map_err(PayoutProofError::Mpt)?
-            .ok_or(PayoutProofError::MissingReceipt)?;
-        let raw = receipt::extract_deposit(&value, &self.release_contract)
-            .map_err(PayoutProofError::Receipt)?;
-        Ok(VerifiedPayout {
-            asset_id: Some(raw.asset_id),
-            amount: raw.amount,
-            beneficiary: raw.recipient,
-            burn_ref: None,
-            foreign_ref: evm_source_ref(&self.receipts_root, &key, raw.log_index),
-            proof_height: self.block_number,
-        })
+        Err(PayoutProofError::EvmCorridorDisabled)
     }
 }
 
@@ -640,75 +618,13 @@ mod tests {
         BitcoinPayoutWatcher::new(1, [0xa1; 16], EASY, checkpoint, EASY.confirmation_depth, vec![release])
     }
 
-    fn to_nibbles(key: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(key.len() * 2);
-        for b in key {
-            out.push(b >> 4);
-            out.push(b & 0x0f);
-        }
-        out
-    }
-
-    fn hp_leaf(nibbles: &[u8]) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut i = 0;
-        if nibbles.len() % 2 == 1 {
-            out.push((3u8 << 4) | nibbles[0]);
-            i = 1;
-        } else {
-            out.push(2u8 << 4);
-        }
-        while i < nibbles.len() {
-            out.push((nibbles[i] << 4) | nibbles[i + 1]);
-            i += 2;
-        }
-        out
-    }
-
-    fn release_receipt(
-        contract: &[u8; 20],
-        beneficiary: &[u8; 32],
-        amount: u128,
-        asset_id: &[u8; 16],
-    ) -> Vec<u8> {
-        let topic0 = receipt::deposit_topic();
-        let topics = rlp::encode_list(&[rlp::encode_bytes(&topic0), rlp::encode_bytes(beneficiary)]);
-        let mut data = vec![0u8; 64];
-        data[16..32].copy_from_slice(&amount.to_be_bytes());
-        data[32..48].copy_from_slice(asset_id);
-        let log = rlp::encode_list(&[
-            rlp::encode_bytes(contract),
-            topics,
-            rlp::encode_bytes(&data),
-        ]);
-        rlp::encode_list(&[
-            rlp::encode_bytes(&[1u8]),
-            rlp::encode_uint(21000),
-            rlp::encode_bytes(&[0u8; 256]),
-            rlp::encode_list(&[log]),
-        ])
-    }
-
-    fn evm_release(
-        contract: [u8; 20],
-        beneficiary: &[u8; 32],
-        amount: u128,
-        asset_id: &[u8; 16],
-    ) -> EvmReleaseProof {
-        let index = 3u64;
-        let key = rlp::encode_uint(index);
-        let receipt_bytes = release_receipt(&contract, beneficiary, amount, asset_id);
-        let leaf = rlp::encode_list(&[
-            rlp::encode_bytes(&hp_leaf(&to_nibbles(&key))),
-            rlp::encode_bytes(&receipt_bytes),
-        ]);
-        let receipts_root = keccak256(&leaf);
+    fn evm_release_stub() -> EvmReleaseProof {
         EvmReleaseProof {
-            receipts_root,
-            receipt_index: index,
-            receipt_proof: vec![leaf],
+            receipts_root: [0x11; 32],
+            receipt_index: 3,
+            receipt_proof: vec![vec![0x22; 8]],
             block_number: 20_000_000,
-            release_contract: contract,
+            release_contract: [0xab; 20],
         }
     }
 
@@ -771,14 +687,15 @@ mod tests {
     }
 
     #[test]
-    fn a_real_ethereum_receipt_proof_that_covers_the_exit_is_confirmed() {
-        let s = statement();
-        let watcher = EvmPayoutWatcher::new(
-            1,
-            vec![evm_release([0xab; 20], &s.beneficiary, 500, &s.asset_id)],
+    fn the_evm_exit_corridor_is_disabled_until_it_is_anchored() {
+        assert_eq!(
+            evm_release_stub().verify(),
+            Err(PayoutProofError::EvmCorridorDisabled)
         );
-        let attestation = watcher.confirm(&s).expect("the verified receipt covers the exit");
-        assert!(attestation.covers(&s));
+        let s = statement();
+        let watcher = EvmPayoutWatcher::new(1, vec![evm_release_stub()]);
+        assert_eq!(watcher.attest(&s), Err(PayoutProofError::EvmCorridorDisabled));
+        assert!(watcher.confirm(&s).is_none());
     }
 
     #[test]
@@ -794,15 +711,6 @@ mod tests {
         let s = statement();
         let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 500, &[0x99; 32])]);
         assert_eq!(watcher.attest(&s), Err(PayoutProofError::ReferenceMismatch));
-        assert!(watcher.confirm(&s).is_none());
-    }
-
-    #[test]
-    fn an_ethereum_receipt_to_another_beneficiary_does_not_cover_the_exit() {
-        let s = statement();
-        let watcher =
-            EvmPayoutWatcher::new(1, vec![evm_release([0xab; 20], &[0x66; 32], 500, &s.asset_id)]);
-        assert_eq!(watcher.attest(&s), Err(PayoutProofError::BeneficiaryMismatch));
         assert!(watcher.confirm(&s).is_none());
     }
 
@@ -914,18 +822,6 @@ mod tests {
     }
 
     #[test]
-    fn a_forged_ethereum_receipt_node_fails_the_hash_check() {
-        let s = statement();
-        let mut release = evm_release([0xab; 20], &s.beneficiary, 500, &s.asset_id);
-        release.receipt_proof[0][4] ^= 0xff;
-        assert_eq!(
-            release.verify(),
-            Err(PayoutProofError::Mpt(MptError::HashMismatch))
-        );
-        assert!(EvmPayoutWatcher::new(1, vec![release]).confirm(&s).is_none());
-    }
-
-    #[test]
     fn a_confirmed_attestation_round_trips_on_the_wire() {
         let s = statement();
         let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 500, &s.burn_ref)]);
@@ -937,17 +833,12 @@ mod tests {
     }
 
     #[test]
-    fn one_verified_payout_cannot_confirm_two_different_exits() {
+    fn one_verified_payout_cannot_be_replayed() {
         let s = statement();
-        let watcher = EvmPayoutWatcher::new(
-            1,
-            vec![evm_release([0xab; 20], &s.beneficiary, 500, &s.asset_id)],
-        );
+        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 500, &s.burn_ref)]);
         assert!(watcher.confirm(&s).is_some());
 
-        let mut second = statement();
-        second.burn_ref = [0x22; 32];
-        assert_eq!(watcher.attest(&second), Err(PayoutProofError::ReusedPayout));
-        assert!(watcher.confirm(&second).is_none());
+        assert_eq!(watcher.attest(&s), Err(PayoutProofError::ReusedPayout));
+        assert!(watcher.confirm(&s).is_none());
     }
 }

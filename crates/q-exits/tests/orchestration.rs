@@ -108,6 +108,7 @@ fn anchor(members: &[Attester], beacon: &Beacon) -> QuantovaAnchor {
 fn config() -> DeskConfig {
     DeskConfig {
         corridor: CORRIDOR,
+        dest_chain: CHAIN_ID,
         secure_bps: 15_000,
         premium_bps: 11_000,
         window: 100,

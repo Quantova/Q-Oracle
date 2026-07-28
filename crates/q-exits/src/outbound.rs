@@ -1,7 +1,9 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use qtv_crypto::ml_dsa::{self, SECRET_KEY_BYTES};
+use std::collections::BTreeSet;
+
+use qtv_crypto::ml_dsa::{self, PublicKey, SECRET_KEY_BYTES, SIGNATURE_BYTES};
 
 use crate::exits::ExitStatement;
 
@@ -143,6 +145,60 @@ impl ExitEnvelope {
     }
 }
 
+pub const EXIT_ACK_QUORUM_MIN: usize = 2;
+
+#[derive(Debug, Clone)]
+pub struct AckOperator {
+    pub operator_id: u32,
+    pub public_key: PublicKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExitAckError {
+    ThinThreshold { threshold: usize, floor: usize },
+    Malformed,
+    BelowThreshold { got: usize, need: usize },
+}
+
+pub fn verify_ack_quorum(
+    envelope: &ExitEnvelope,
+    operators: &[AckOperator],
+    chain_id: u64,
+    threshold: usize,
+) -> Result<usize, ExitAckError> {
+    if threshold < EXIT_ACK_QUORUM_MIN {
+        return Err(ExitAckError::ThinThreshold {
+            threshold,
+            floor: EXIT_ACK_QUORUM_MIN,
+        });
+    }
+    if !envelope.decision.well_formed() {
+        return Err(ExitAckError::Malformed);
+    }
+    let preimage = envelope.decision.ack_preimage(chain_id);
+    let mut distinct = BTreeSet::new();
+    for signer in &envelope.signatures {
+        let operator = match operators.iter().find(|o| o.operator_id == signer.operator_id) {
+            Some(operator) => operator,
+            None => continue,
+        };
+        let signature: &[u8; SIGNATURE_BYTES] = match signer.signature.as_slice().try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        if ml_dsa::verify(&operator.public_key, &preimage, signature, EXIT_ACK_DOMAIN) {
+            distinct.insert(signer.operator_id);
+        }
+    }
+    if distinct.len() < threshold {
+        return Err(ExitAckError::BelowThreshold {
+            got: distinct.len(),
+            need: threshold,
+        });
+    }
+    Ok(distinct.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +309,91 @@ mod tests {
         let bytes = envelope.encode();
         assert_eq!(bytes[0], ARTIFACT_EXIT_ACK);
         assert_eq!(bytes[1], ENVELOPE_VERSION);
+    }
+
+    fn operator(seed_byte: u8) -> (AckOperator, [u8; SECRET_KEY_BYTES]) {
+        let mut seed = [0u8; 32];
+        seed[0] = seed_byte;
+        let (public_key, sk) = ml_dsa::keygen(&seed);
+        (
+            AckOperator {
+                operator_id: seed_byte as u32,
+                public_key,
+            },
+            sk,
+        )
+    }
+
+    fn envelope_signed_by(
+        decision: &ExitDecision,
+        chain_id: u64,
+        signers: &[(AckOperator, [u8; SECRET_KEY_BYTES])],
+    ) -> ExitEnvelope {
+        ExitEnvelope {
+            decision: decision.clone(),
+            signatures: signers
+                .iter()
+                .map(|(op, sk)| SignerSig {
+                    operator_id: op.operator_id,
+                    signature: sign_decision(sk, decision, chain_id).unwrap(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_distinct_signer_quorum_over_the_ack_verifies() {
+        let chain_id = 0x0123_4567_89AB_CDEFu64;
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
+        let envelope = envelope_signed_by(&decision, chain_id, &signers);
+        assert_eq!(verify_ack_quorum(&envelope, &operators, chain_id, 2), Ok(3));
+    }
+
+    #[test]
+    fn a_signature_relabeled_under_another_operator_is_not_counted() {
+        let chain_id = 9000;
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let (op_a, sk_a) = operator(1);
+        let (op_b, _sk_b) = operator(2);
+        let envelope = ExitEnvelope {
+            decision: decision.clone(),
+            signatures: vec![SignerSig {
+                operator_id: op_b.operator_id,
+                signature: sign_decision(&sk_a, &decision, chain_id).unwrap(),
+            }],
+        };
+        let operators = vec![op_a, op_b];
+        assert_eq!(
+            verify_ack_quorum(&envelope, &operators, chain_id, 2),
+            Err(ExitAckError::BelowThreshold { got: 0, need: 2 })
+        );
+    }
+
+    #[test]
+    fn a_threshold_below_the_floor_fails_closed() {
+        let chain_id = 9000;
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
+        let envelope = envelope_signed_by(&decision, chain_id, &signers);
+        assert_eq!(
+            verify_ack_quorum(&envelope, &operators, chain_id, 1),
+            Err(ExitAckError::ThinThreshold { threshold: 1, floor: 2 })
+        );
+    }
+
+    #[test]
+    fn a_quorum_short_of_the_threshold_is_rejected() {
+        let chain_id = 9000;
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
+        let envelope = envelope_signed_by(&decision, chain_id, &signers[0..1]);
+        assert_eq!(
+            verify_ack_quorum(&envelope, &operators, chain_id, 2),
+            Err(ExitAckError::BelowThreshold { got: 1, need: 2 })
+        );
     }
 }

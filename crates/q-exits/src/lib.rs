@@ -30,8 +30,9 @@ pub use ledger::{
     MemoryLedger, PersistentLedger, ReplayLedger, LEDGER_VERSION, MAX_LEDGER_ENTRIES,
 };
 pub use outbound::{
-    sign_decision, ExitDecision, ExitEnvelope, ExitOutcome, SignerSig as ExitSignerSig,
-    ARTIFACT_EXIT_ACK, EXIT_ACK_DOMAIN, EXIT_FACT_ENCODED_LEN, EXIT_FACT_VERSION,
+    sign_decision, verify_ack_quorum, AckOperator, ExitAckError, ExitDecision, ExitEnvelope,
+    ExitOutcome, SignerSig as ExitSignerSig, ARTIFACT_EXIT_ACK, EXIT_ACK_DOMAIN,
+    EXIT_ACK_QUORUM_MIN, EXIT_FACT_ENCODED_LEN, EXIT_FACT_VERSION,
 };
 pub use payout::{
     BitcoinPayoutWatcher, BitcoinReleaseProof, EvmPayoutWatcher, EvmReleaseProof,

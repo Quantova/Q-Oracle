@@ -51,7 +51,14 @@ pub fn bits_expectation(
     params: &NetworkParams,
     index: usize,
 ) -> Result<(), SpvError> {
-    if height % params.retarget_interval() == 0 || this_bits == prev_bits {
+    if height % params.retarget_interval() == 0 {
+        let prev = U256::from_compact(prev_bits);
+        let next = U256::from_compact(this_bits);
+        if next > prev.mul_u64(4) || next < prev.div_u64(4) {
+            return Err(SpvError::RetargetMismatch { index });
+        }
+        Ok(())
+    } else if this_bits == prev_bits {
         Ok(())
     } else {
         Err(SpvError::RetargetOnANonBoundary { index })
@@ -427,6 +434,19 @@ mod tests {
     #[test]
     fn bits_hold_constant_within_a_retarget_period() {
         assert!(bits_expectation(5, 0x1d00ffff, 0x1d00ffff, &BITCOIN, 1).is_ok());
+    }
+
+    #[test]
+    fn a_boundary_that_eases_difficulty_beyond_the_four_times_band_is_rejected() {
+        assert_eq!(
+            bits_expectation(2016, 0x1b0404cb, 0x1d00ffff, &BITCOIN, 3),
+            Err(SpvError::RetargetMismatch { index: 3 })
+        );
+    }
+
+    #[test]
+    fn a_boundary_within_the_four_times_band_is_accepted() {
+        assert!(bits_expectation(2016, 0x1d00d86a, 0x1d00ffff, &BITCOIN, 0).is_ok());
     }
 
     #[test]

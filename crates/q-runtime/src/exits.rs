@@ -105,7 +105,7 @@ impl ExitTrustConfig {
 
     // aligned corridor params: 150% collateral, 110% premium, one day window
     pub fn desk_config(&self) -> DeskConfig {
-        DeskConfig::aligned(self.corridor)
+        DeskConfig::aligned(self.corridor, self.dest_chain as u64)
     }
 
     // the pool vault the feed opens exits against
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(config.members.len(), 1);
         assert_eq!(config.vaults.len(), 2);
         assert_eq!(config.active_vault(), 1);
-        assert_eq!(config.desk_config(), DeskConfig::aligned(1));
+        assert_eq!(config.desk_config(), DeskConfig::aligned(1, 9000));
         config.build_anchor().expect("the loaded anchor is well formed");
     }
 

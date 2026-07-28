@@ -3,7 +3,7 @@
 
 use q_exits::{
     BitcoinPayoutWatcher, BitcoinReleaseProof, DeskConfig, ExitDesk, ExitError, ExitState,
-    MemberConfig, PayoutWatcher, ProofOfBurn, QuantovaAnchor,
+    MemberConfig, ProofOfBurn, QuantovaAnchor,
 };
 
 use qlc_bitcoin::{double_sha256, BlockHeader, Checkpoint, MerkleStep, NetworkParams, BITCOIN, U256};
@@ -109,6 +109,7 @@ fn anchor(members: &[Attester], beacon: &Beacon) -> QuantovaAnchor {
 fn config() -> DeskConfig {
     DeskConfig {
         corridor: CORRIDOR,
+        dest_chain: CHAIN_ID,
         secure_bps: SECURE_BPS,
         premium_bps: PREMIUM_BPS,
         window: 100,
@@ -299,13 +300,8 @@ fn settling_within_the_window_against_a_bitcoin_payout_releases_the_collateral()
     desk.register_vault(1, 2_000);
     let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
 
-    let statement = desk.exit(id).unwrap().statement.clone();
     let watcher = bitcoin_watcher(release_around(release_tx(&BENEFICIARY, AMOUNT as u64, &BURN_REF)));
-    let attestation = watcher
-        .confirm(&statement)
-        .expect("the vault proves its foreign payout");
-
-    let release = desk.settle(id, &attestation, 60).unwrap();
+    let release = desk.settle(id, &watcher, 60).unwrap();
     assert_eq!(release.released, REQUIRED);
     assert_eq!(desk.locked_collateral(1), 0);
     assert_eq!(desk.free_collateral(1), 2_000);
@@ -319,16 +315,51 @@ fn settling_after_the_window_is_refused() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
-    let statement = desk.exit(id).unwrap().statement.clone();
     let watcher = bitcoin_watcher(release_around(release_tx(&BENEFICIARY, AMOUNT as u64, &BURN_REF)));
-    let attestation = watcher.confirm(&statement).unwrap();
     assert_eq!(
-        desk.settle(id, &attestation, 200),
+        desk.settle(id, &watcher, 200),
         Err(ExitError::WindowExpired {
             now: 200,
             deadline: 110
         })
     );
+}
+
+#[test]
+fn settle_refuses_when_the_watcher_cannot_prove_a_covering_payout() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let mut desk = desk();
+    desk.register_vault(1, 2_000);
+    let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
+
+    let watcher = bitcoin_watcher(release_around(release_tx(&[0x66; 32], AMOUNT as u64, &BURN_REF)));
+    assert_eq!(desk.settle(id, &watcher, 60), Err(ExitError::PayoutUnproven));
+    assert_eq!(
+        desk.locked_collateral(1),
+        REQUIRED,
+        "custody stays locked when no anchored payout covers the exit"
+    );
+    assert_eq!(desk.exit(id).unwrap().state, ExitState::Pending);
+}
+
+#[test]
+fn a_burn_for_another_destination_chain_cannot_open_an_exit() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let mut cfg = config();
+    cfg.dest_chain = CHAIN_ID + 1;
+    let mut desk = ExitDesk::new(cfg, anchor(&members, &beacon)).unwrap();
+    desk.register_vault(1, 2_000);
+    assert_eq!(
+        desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10),
+        Err(ExitError::WrongDestination {
+            got: CHAIN_ID,
+            expected: CHAIN_ID + 1
+        })
+    );
+    assert!(!desk.is_consumed(&BURN_REF));
+    assert_eq!(desk.locked_collateral(1), 0);
 }
 
 #[test]

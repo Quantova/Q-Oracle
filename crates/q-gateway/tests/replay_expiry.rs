@@ -92,27 +92,29 @@ fn a_deposit_past_its_signed_deadline_is_rejected_and_the_deadline_block_still_a
 }
 
 #[test]
-fn a_non_advancing_nonce_on_the_same_route_and_direction_is_rejected() {
+fn a_non_advancing_nonce_with_a_fresh_reference_still_admits() {
     let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
 
     let first = fact([0x11; 32], 1, 5, 900_000, 500);
     gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &first))
-        .expect("first mint sets the high-water nonce");
+        .expect("the first deposit mints");
 
-    let equal = fact([0x12; 32], 1, 5, 900_000, 500);
+    let equal_nonce = fact([0x12; 32], 1, 5, 900_000, 500);
+    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &equal_nonce))
+        .expect("an equal-nonce deposit with a fresh reference is not wedged");
+
+    let lower_nonce = fact([0x13; 32], 1, 3, 900_000, 500);
+    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &lower_nonce))
+        .expect("a lower-nonce deposit with a fresh reference is not wedged");
+
+    let replay = fact([0x11; 32], 1, 42, 900_000, 500);
     assert_eq!(
-        gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &equal)),
-        Err(GatewayError::StaleOrReplayedNonce { got: 5, high_water: 5 })
+        gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &replay)),
+        Err(GatewayError::ReplayedReference)
     );
 
-    let lower = fact([0x13; 32], 1, 3, 900_000, 500);
-    assert_eq!(
-        gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &lower)),
-        Err(GatewayError::StaleOrReplayedNonce { got: 3, high_water: 5 })
-    );
-
-    assert_eq!(gw.minted_of_asset(&ASSET), 500);
+    assert_eq!(gw.minted_of_asset(&ASSET), 1_500);
 }
 
 #[test]
@@ -130,17 +132,17 @@ fn a_strictly_increasing_nonce_sequence_admits() {
 }
 
 #[test]
-fn the_same_nonce_on_a_different_route_keeps_its_own_sequence() {
+fn deposits_on_different_routes_each_mint() {
     let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops, 3);
 
     let route_one = fact([0x31; 32], 1, 9, 900_000, 500);
     gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &route_one))
-        .expect("route 1 admits at nonce 9");
+        .expect("route 1 admits");
 
     let route_two = fact([0x32; 32], 2, 9, 900_000, 500);
     gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &route_two))
-        .expect("route 2 carries an independent nonce high-water");
+        .expect("route 2 admits independently");
 
     assert_eq!(gw.minted_of_asset(&ASSET), 1_000);
 }

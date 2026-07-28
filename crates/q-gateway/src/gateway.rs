@@ -54,7 +54,6 @@ pub struct Gateway {
     operators: OperatorSet,
     governance: OperatorSet,
     used_refs: BTreeSet<[u8; 32]>,
-    highest_nonce: BTreeMap<(u32, u32, u8), u64>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     per_asset_cap: BTreeMap<[u8; 16], u128>,
     epoch_cap: u128,
@@ -80,7 +79,6 @@ impl Gateway {
             operators,
             governance: OperatorSet::new(0),
             used_refs: BTreeSet::new(),
-            highest_nonce: BTreeMap::new(),
             per_asset_minted: BTreeMap::new(),
             per_asset_cap: BTreeMap::new(),
             epoch_cap,
@@ -629,18 +627,7 @@ impl Gateway {
             return Err(GatewayError::ReplayedReference);
         }
 
-        let direction_key = (fact.source_chain, fact.route_id, fact.direction.tag());
-        if let Some(&high_water) = self.highest_nonce.get(&direction_key) {
-            if fact.nonce <= high_water {
-                return Err(GatewayError::StaleOrReplayedNonce {
-                    got: fact.nonce,
-                    high_water,
-                });
-            }
-        }
-
         self.used_refs.insert(fact.source_ref.0);
-        self.highest_nonce.insert(direction_key, fact.nonce);
         self.per_asset_minted.insert(fact.asset_id.0, asset_after);
         self.epoch_minted = epoch_after;
         self.touch_guard();
@@ -662,13 +649,6 @@ impl Gateway {
         w.u32(self.used_refs.len() as u32);
         for reference in &self.used_refs {
             w.fixed(reference);
-        }
-        w.u32(self.highest_nonce.len() as u32);
-        for ((source_chain, route_id, direction), nonce) in &self.highest_nonce {
-            w.u32(*source_chain);
-            w.u32(*route_id);
-            w.u8(*direction);
-            w.u64(*nonce);
         }
         w.u32(self.per_asset_minted.len() as u32);
         for (asset_id, minted) in &self.per_asset_minted {
@@ -693,7 +673,6 @@ impl Gateway {
         self.frozen_until = state.frozen_until;
         self.epoch_minted = state.epoch_minted;
         self.used_refs = state.used_refs;
-        self.highest_nonce = state.highest_nonce;
         self.per_asset_minted = state.per_asset_minted;
         self.paused_sources = state.paused_sources;
         self.corridor_cursor = state.corridor_cursor;
@@ -706,7 +685,6 @@ struct GuardState {
     frozen_until: u64,
     epoch_minted: u128,
     used_refs: BTreeSet<[u8; 32]>,
-    highest_nonce: BTreeMap<(u32, u32, u8), u64>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     paused_sources: BTreeSet<u32>,
     corridor_cursor: BTreeMap<u32, u64>,
@@ -740,16 +718,6 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         used_refs.insert(r.array32()?);
     }
 
-    let count = bounded_count(&mut r, 17)?;
-    let mut highest_nonce = BTreeMap::new();
-    for _ in 0..count {
-        let source_chain = r.u32()?;
-        let route_id = r.u32()?;
-        let direction = r.u8()?;
-        let nonce = r.u64()?;
-        highest_nonce.insert((source_chain, route_id, direction), nonce);
-    }
-
     let count = bounded_count(&mut r, 32)?;
     let mut per_asset_minted = BTreeMap::new();
     for _ in 0..count {
@@ -778,7 +746,6 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         frozen_until,
         epoch_minted,
         used_refs,
-        highest_nonce,
         per_asset_minted,
         paused_sources,
         corridor_cursor,
@@ -941,29 +908,25 @@ mod tests {
     }
 
     #[test]
-    fn two_corridors_sharing_a_route_id_keep_independent_nonce_high_water() {
+    fn a_lower_nonce_with_a_fresh_reference_still_mints_after_a_higher_one() {
         let (s, mut gw) = nine_op_gateway(3);
-        gw.register_corridor(2, 6);
-        gw.register_asset_cap([0xb2; 16], 1_000);
 
-        let mut a = fact();
-        a.source_chain = 1;
-        a.route_id = 7;
-        a.nonce = 5;
+        let mut high = fact();
+        high.route_id = 7;
+        high.nonce = 9_000;
+        high.source_ref = SourceRef([0x21; 32]);
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &a)).expect("first corridor admits").amount,
+            gw.process_deposit(&envelope(&s[0..6], &high)).expect("the high-nonce deposit mints").amount,
             500
         );
 
-        let mut b = fact();
-        b.source_chain = 2;
-        b.route_id = 7;
-        b.nonce = 2;
-        b.source_ref = SourceRef([0x22; 32]);
-        b.asset_id = AssetId([0xb2; 16]);
+        let mut low = fact();
+        low.route_id = 7;
+        low.nonce = 1;
+        low.source_ref = SourceRef([0x22; 32]);
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &b))
-                .expect("a second corridor sharing the route is not blocked by the first's higher nonce")
+            gw.process_deposit(&envelope(&s[0..6], &low))
+                .expect("a later lower-nonce deposit with a fresh reference is not wedged")
                 .amount,
             500
         );
@@ -1128,16 +1091,6 @@ mod tests {
             restored.process_deposit(&envelope(&s[0..6], &f)),
             Err(GatewayError::ReplayedReference),
             "the same deposit is a replay once the guard is rehydrated"
-        );
-
-        let mut fresh_ref = f.clone();
-        fresh_ref.source_ref = SourceRef([0x99; 32]);
-        assert!(
-            matches!(
-                restored.process_deposit(&envelope(&s[0..6], &fresh_ref)),
-                Err(GatewayError::StaleOrReplayedNonce { .. })
-            ),
-            "the nonce high water survives the restart"
         );
     }
 

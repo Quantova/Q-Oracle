@@ -5,7 +5,7 @@ use crate::anchor::QuantovaAnchor;
 use crate::burn_proof::ProofOfBurn;
 use crate::errors::ExitError;
 use crate::ledger::{MemoryLedger, ReplayLedger};
-use crate::payout::PayoutAttestation;
+use crate::payout::PayoutWatcher;
 use crate::vault::VaultBook;
 
 pub const BPS_DEN: u128 = 10_000;
@@ -49,6 +49,7 @@ impl ExitStatement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeskConfig {
     pub corridor: u32,
+    pub dest_chain: u64,
     pub secure_bps: u32,
     pub premium_bps: u32,
     pub window: u64,
@@ -59,9 +60,10 @@ pub const SLASH_PREMIUM_BPS: u32 = 11_000;
 pub const REDEEM_WINDOW_MS: u64 = 86_400_000;
 
 impl DeskConfig {
-    pub fn aligned(corridor: u32) -> DeskConfig {
+    pub fn aligned(corridor: u32, dest_chain: u64) -> DeskConfig {
         DeskConfig {
             corridor,
+            dest_chain,
             secure_bps: SECURE_RATIO_BPS,
             premium_bps: SLASH_PREMIUM_BPS,
             window: REDEEM_WINDOW_MS,
@@ -196,6 +198,12 @@ impl ExitDesk {
         now: u64,
     ) -> Result<ExitId, ExitError> {
         let burn = proof.verify(&self.anchor)?;
+        if burn.dest_chain != self.cfg.dest_chain {
+            return Err(ExitError::WrongDestination {
+                got: burn.dest_chain,
+                expected: self.cfg.dest_chain,
+            });
+        }
         let statement = ExitStatement {
             version: EXIT_STATEMENT_VERSION,
             corridor: self.cfg.corridor,
@@ -230,10 +238,10 @@ impl ExitDesk {
     pub fn settle(
         &mut self,
         id: ExitId,
-        attestation: &PayoutAttestation,
+        watcher: &dyn PayoutWatcher,
         now: u64,
     ) -> Result<Release, ExitError> {
-        let exit = self.exits.get_mut(id.0).ok_or(ExitError::UnknownExit)?;
+        let exit = self.exits.get(id.0).ok_or(ExitError::UnknownExit)?;
         if exit.state != ExitState::Pending {
             return Err(ExitError::NotPending);
         }
@@ -243,10 +251,20 @@ impl ExitDesk {
                 deadline: exit.deadline,
             });
         }
-        attestation.validate()?;
-        if !attestation.covers(&exit.statement) {
+        if watcher.corridor() != self.cfg.corridor {
             return Err(ExitError::PayoutMismatch);
         }
+        let statement = exit.statement.clone();
+        let attestation = watcher.confirm(&statement).ok_or(ExitError::PayoutUnproven)?;
+        attestation.validate()?;
+        if !attestation.covers(&statement) {
+            return Err(ExitError::PayoutMismatch);
+        }
+        if self.consumed.is_released(&attestation.foreign_ref) {
+            return Err(ExitError::ReplayedPayout);
+        }
+        self.consumed.record(attestation.foreign_ref)?;
+        let exit = self.exits.get_mut(id.0).ok_or(ExitError::UnknownExit)?;
         let vault_id = exit.vault_id;
         let released = exit.locked;
         exit.state = ExitState::Settled;
@@ -289,6 +307,7 @@ mod tests {
     fn cfg() -> DeskConfig {
         DeskConfig {
             corridor: 1,
+            dest_chain: 9000,
             secure_bps: 15_000,
             premium_bps: 11_000,
             window: 100,
@@ -297,7 +316,8 @@ mod tests {
 
     #[test]
     fn the_aligned_config_matches_the_old_bridge() {
-        let c = DeskConfig::aligned(1);
+        let c = DeskConfig::aligned(1, 9000);
+        assert_eq!(c.dest_chain, 9000);
         assert_eq!(c.secure_bps, 15_000);
         assert_eq!(c.premium_bps, 11_000);
         assert_eq!(c.window, 86_400_000);
