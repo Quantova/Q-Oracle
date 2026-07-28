@@ -232,9 +232,12 @@ fn handle_connection(
         return write_error(&mut stream, 413, "too_large", "the request body is too large");
     }
 
-    let mut body = vec![0u8; content_length];
-    let mut filled = 0usize;
-    while filled < content_length {
+    // Grow the buffer only as bytes actually arrive rather than pre-sizing to the declared
+    // Content-Length, so a tiny request cannot force a full MAX_BODY zeroed allocation it never
+    // fills. The initial capacity is capped, and the loop still stops at content_length.
+    let mut body = Vec::with_capacity(content_length.min(64 * 1024));
+    let mut chunk = [0u8; 8192];
+    while body.len() < content_length {
         let now = Instant::now();
         if now >= deadline {
             return write_error(&mut stream, 408, "timeout", "the request exceeded its time budget");
@@ -244,9 +247,10 @@ fn handle_connection(
             .min(IO_TIMEOUT)
             .max(Duration::from_millis(1));
         stream.set_read_timeout(Some(remaining)).ok();
-        match reader.read(&mut body[filled..]) {
+        let want = (content_length - body.len()).min(chunk.len());
+        match reader.read(&mut chunk[..want]) {
             Ok(0) => return Ok(()),
-            Ok(n) => filled += n,
+            Ok(n) => body.extend_from_slice(&chunk[..n]),
             Err(ref e) if is_timeout(e) => {
                 return write_error(&mut stream, 408, "timeout", "the request exceeded its time budget")
             }

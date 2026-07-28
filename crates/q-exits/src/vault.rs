@@ -56,7 +56,7 @@ impl VaultBook {
             });
         }
         vault.free -= amount;
-        vault.locked += amount;
+        vault.locked = vault.locked.checked_add(amount).ok_or(ExitError::Overflow)?;
         Ok(())
     }
 
