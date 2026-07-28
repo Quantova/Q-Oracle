@@ -1,15 +1,6 @@
 # Copyright 2026 Quantova Inc
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 
-# Q-Oracle is the ONLY deny-list-EXEMPT repository (the Airlock boundary, POLICY-crypto.md section 7).
-# Classical cryptography is permitted here and NOWHERE else; nothing in the organization may import
-# this repo. License and advisory checks still apply.
-#
-# blst is an off-chain oracle exemption. It is the audited BLS12-381 pairing that verifies the
-# Ethereum sync committee aggregate off chain, because verifying Ethereum needs Ethereum's own
-# crypto. blst stays inside q-bls and the oracle and is never linked into the chain, the VM, or
-# consensus. Only the ML-DSA attestation and the hash STARK cross the Airlock.
-
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
