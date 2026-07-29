@@ -294,6 +294,39 @@ mod tests {
     }
 
     #[test]
+    fn the_exit_fact_commits_to_the_burn_it_names() {
+        // a fact for burn A cannot be reused to settle a different burn B
+        let mut seed = [0u8; 32];
+        seed[0] = 9;
+        let (pk, sk) = ml_dsa::keygen(&seed);
+        let chain_id = 0x0123_4567_89AB_CDEFu64;
+
+        let mut burn_a = statement();
+        burn_a.burn_ref = [0xa1; 32];
+        let mut burn_b = statement();
+        burn_b.burn_ref = [0xb2; 32];
+
+        let fact_a = ExitDecision::settle(&burn_a, 9000);
+        let fact_b = ExitDecision::settle(&burn_b, 9000);
+        assert_ne!(
+            fact_a.ack_preimage(chain_id),
+            fact_b.ack_preimage(chain_id),
+            "the burn reference moves the signed preimage"
+        );
+
+        let signature = sign_decision(&sk, &fact_a, chain_id).unwrap();
+        let sig: &[u8; SIGNATURE_BYTES] = signature.as_slice().try_into().unwrap();
+        assert!(
+            ml_dsa::verify(&pk, &fact_a.ack_preimage(chain_id), sig, EXIT_ACK_DOMAIN),
+            "the fact verifies against the burn it names"
+        );
+        assert!(
+            !ml_dsa::verify(&pk, &fact_b.ack_preimage(chain_id), sig, EXIT_ACK_DOMAIN),
+            "the same signature cannot settle a burn the fact does not name"
+        );
+    }
+
+    #[test]
     fn an_envelope_carries_the_operator_signatures() {
         let mut seed = [0u8; 32];
         seed[0] = 8;

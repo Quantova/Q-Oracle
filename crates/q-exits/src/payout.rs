@@ -430,6 +430,11 @@ impl EvmPayoutWatcher {
                 last = PayoutProofError::BeneficiaryMismatch;
                 continue;
             }
+            // bind the payout to the burn it names, as the bitcoin path does
+            if payout.burn_ref != Some(statement.burn_ref) {
+                last = PayoutProofError::ReferenceMismatch;
+                continue;
+            }
             if self.consumed.borrow().contains(&payout.foreign_ref) {
                 last = PayoutProofError::ReusedPayout;
                 continue;
