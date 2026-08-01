@@ -16,7 +16,7 @@ pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
-const GUARD_SNAPSHOT_VERSION: u8 = 1;
+const GUARD_SNAPSHOT_VERSION: u8 = 2;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
@@ -46,6 +46,7 @@ pub struct MintReceipt {
     pub recipient: [u8; 32],
     pub amount: u128,
     pub source_ref: [u8; 32],
+    pub source_chain: u32,
 }
 
 pub struct Gateway {
@@ -53,7 +54,7 @@ pub struct Gateway {
     dest_chain_id: u64,
     operators: OperatorSet,
     governance: OperatorSet,
-    used_refs: BTreeSet<[u8; 32]>,
+    used_refs: BTreeSet<(u32, [u8; 32])>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     per_asset_cap: BTreeMap<[u8; 16], u128>,
     epoch_cap: u128,
@@ -241,7 +242,11 @@ impl Gateway {
     }
 
     pub fn is_reference_used(&self, source_ref: &[u8; 32]) -> bool {
-        self.used_refs.contains(source_ref)
+        self.used_refs.iter().any(|(_, reference)| reference == source_ref)
+    }
+
+    pub fn is_reference_used_on(&self, source_chain: u32, source_ref: &[u8; 32]) -> bool {
+        self.used_refs.contains(&(source_chain, *source_ref))
     }
 
     pub fn report_reorg(
@@ -482,7 +487,7 @@ impl Gateway {
                 return Err(GatewayError::CorridorInactive(source_chain));
             }
         }
-        if self.used_refs.contains(&source_ref) {
+        if self.used_refs.contains(&(source_chain, source_ref)) {
             return Err(GatewayError::ReplayedReference);
         }
         let cap = *self
@@ -511,7 +516,7 @@ impl Gateway {
                 add: amount,
             });
         }
-        self.used_refs.insert(source_ref);
+        self.used_refs.insert((source_chain, source_ref));
         self.per_asset_minted.insert(asset_id, asset_after);
         self.epoch_minted = epoch_after;
         self.touch_guard();
@@ -623,11 +628,11 @@ impl Gateway {
             });
         }
 
-        if self.used_refs.contains(&fact.source_ref.0) {
+        if self.used_refs.contains(&(fact.source_chain, fact.source_ref.0)) {
             return Err(GatewayError::ReplayedReference);
         }
 
-        self.used_refs.insert(fact.source_ref.0);
+        self.used_refs.insert((fact.source_chain, fact.source_ref.0));
         self.per_asset_minted.insert(fact.asset_id.0, asset_after);
         self.epoch_minted = epoch_after;
         self.touch_guard();
@@ -637,6 +642,7 @@ impl Gateway {
             recipient: fact.recipient.0,
             amount: fact.amount,
             source_ref: fact.source_ref.0,
+            source_chain: fact.source_chain,
         })
     }
 
@@ -647,7 +653,8 @@ impl Gateway {
         w.u64(self.frozen_until);
         w.u128(self.epoch_minted);
         w.u32(self.used_refs.len() as u32);
-        for reference in &self.used_refs {
+        for (source_chain, reference) in &self.used_refs {
+            w.u32(*source_chain);
             w.fixed(reference);
         }
         w.u32(self.per_asset_minted.len() as u32);
@@ -684,7 +691,7 @@ struct GuardState {
     global_pause: bool,
     frozen_until: u64,
     epoch_minted: u128,
-    used_refs: BTreeSet<[u8; 32]>,
+    used_refs: BTreeSet<(u32, [u8; 32])>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     paused_sources: BTreeSet<u32>,
     corridor_cursor: BTreeMap<u32, u64>,
@@ -712,10 +719,12 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
     let frozen_until = r.u64()?;
     let epoch_minted = r.u128()?;
 
-    let count = bounded_count(&mut r, 32)?;
+    let count = bounded_count(&mut r, 36)?;
     let mut used_refs = BTreeSet::new();
     for _ in 0..count {
-        used_refs.insert(r.array32()?);
+        let source_chain = r.u32()?;
+        let reference = r.array32()?;
+        used_refs.insert((source_chain, reference));
     }
 
     let count = bounded_count(&mut r, 32)?;
@@ -1091,6 +1100,67 @@ mod tests {
             restored.process_deposit(&envelope(&s[0..6], &f)),
             Err(GatewayError::ReplayedReference),
             "the same deposit is a replay once the guard is rehydrated"
+        );
+    }
+
+    #[test]
+    fn a_shared_source_ref_on_two_corridors_both_mint_and_a_same_corridor_replay_is_refused() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_corridor(2, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+
+        let shared_ref = [0x77; 32];
+        gw.admit_trustless([0xa1; 16], shared_ref, 100, 1)
+            .expect("the first corridor admits the reference");
+        gw.admit_trustless([0xa1; 16], shared_ref, 100, 2)
+            .expect("a distinct deposit sharing the reference on another corridor still mints");
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 200);
+
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], shared_ref, 100, 1),
+            Err(GatewayError::ReplayedReference)
+        );
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], shared_ref, 100, 2),
+            Err(GatewayError::ReplayedReference)
+        );
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 200);
+    }
+
+    #[test]
+    fn process_deposit_scopes_the_reference_by_source_chain_and_the_receipt_carries_it() {
+        let (s, mut gw) = nine_op_gateway(3);
+        gw.register_corridor(2, 6);
+        gw.register_asset_cap([0xa1; 16], 2_000);
+
+        let first = fact();
+        let r1 = gw
+            .process_deposit(&envelope(&s[0..6], &first))
+            .expect("the first corridor mints");
+        assert_eq!(r1.source_chain, 1);
+        assert_eq!(r1.source_ref, first.source_ref.0);
+
+        let mut second = fact();
+        second.source_chain = 2;
+        let r2 = gw
+            .process_deposit(&envelope(&s[0..6], &second))
+            .expect("the same reference on another corridor still mints");
+        assert_eq!(r2.source_chain, 2);
+        assert_eq!(r2.source_ref, first.source_ref.0);
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 1_000);
+
+        assert!(gw.is_reference_used_on(1, &first.source_ref.0));
+        assert!(gw.is_reference_used_on(2, &first.source_ref.0));
+        assert!(!gw.is_reference_used_on(3, &first.source_ref.0));
+        assert_eq!(
+            gw.process_deposit(&envelope(&s[0..6], &first)),
+            Err(GatewayError::ReplayedReference)
         );
     }
 

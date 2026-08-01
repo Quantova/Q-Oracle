@@ -382,6 +382,28 @@ mod tests {
     }
 
     #[test]
+    fn a_birthday_collision_on_the_truncated_id_leaves_the_second_asset_unregisterable() {
+        let mut registry = PoolRegistry::new();
+
+        let gho = PoolSpec::derive(Network::Polygon, "GHO", 18, 1_000_000, 500_000);
+
+        let other = PoolSpec::derive(Network::Ethereum, "WBTC", 8, 1_000_000, 500_000);
+        registry.by_asset.insert(gho.asset_id.0, other.clone());
+        registry
+            .by_key
+            .insert((other.network.id(), other.identifier.clone()), gho.asset_id.0);
+
+        assert!(!registry
+            .by_key
+            .contains_key(&(Network::Polygon.id(), "GHO".to_string())));
+        assert_eq!(
+            registry.register(gho),
+            Err(PoolError::DuplicatePool),
+            "the id is already taken, so the colliding asset is refused, not aliased"
+        );
+    }
+
+    #[test]
     fn a_duplicate_pool_is_rejected() {
         let mut registry = PoolRegistry::new();
         registry

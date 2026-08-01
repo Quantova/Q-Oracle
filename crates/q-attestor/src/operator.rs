@@ -55,8 +55,8 @@ fn divergence_digest(lock: &ObservedLock, ctx: &CorridorContext) -> [u8; 32] {
 pub struct Operator<S: AttestationSigner> {
     signer: S,
     corridors: BTreeMap<u32, CorridorContext>,
-    signed_refs: BTreeSet<[u8; 32]>,
-    seen_facts: BTreeMap<[u8; 32], [u8; 32]>,
+    signed_refs: BTreeSet<(u32, [u8; 32])>,
+    seen_facts: BTreeMap<(u32, [u8; 32]), [u8; 32]>,
     state: OperatorState,
 }
 
@@ -113,27 +113,28 @@ impl<S: AttestationSigner> Operator<S> {
             });
         }
 
-        if self.signed_refs.contains(&lock.source_ref) {
+        let key = (lock.source_chain, lock.source_ref);
+        if self.signed_refs.contains(&key) {
             return Err(OperatorError::AlreadySigned);
         }
 
         let fact = translate(lock, &ctx, dest_height);
         let digest = divergence_digest(lock, &ctx);
 
-        match self.seen_facts.get(&lock.source_ref) {
+        match self.seen_facts.get(&key) {
             Some(prev) if *prev != digest => {
                 self.state = OperatorState::Halted(HaltReason::Divergence);
                 return Err(OperatorError::Halted(HaltReason::Divergence));
             }
             Some(_) => {}
             None => {
-                self.seen_facts.insert(lock.source_ref, digest);
+                self.seen_facts.insert(key, digest);
             }
         }
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
         let signature = self.signer.sign(&message, ATTEST_DOMAIN);
-        self.signed_refs.insert(lock.source_ref);
+        self.signed_refs.insert(key);
 
         Ok(SignedObservation {
             fact,
@@ -227,6 +228,28 @@ mod tests {
             Err(OperatorError::AlreadySigned)
         );
         assert_eq!(operator.state(), OperatorState::Running);
+    }
+
+    #[test]
+    fn the_same_source_ref_on_two_corridors_is_signed_not_read_as_divergence() {
+        let seed = [0x09u8; 32];
+        let mut operator = Operator::new(SoftSigner::from_seed(0, &seed));
+        operator.configure_corridor(ctx());
+        let mut ctx2 = ctx();
+        ctx2.source_chain = 2;
+        operator.configure_corridor(ctx2);
+
+        operator
+            .observe_and_sign(&lock(), 900_000)
+            .expect("the corridor 1 lock signs");
+
+        let mut cross = lock();
+        cross.source_chain = 2;
+        operator
+            .observe_and_sign(&cross, 900_000)
+            .expect("the same reference on another corridor is a fresh fact and signs");
+        assert_eq!(operator.state(), OperatorState::Running);
+        assert!(!operator.is_halted());
     }
 
     #[test]

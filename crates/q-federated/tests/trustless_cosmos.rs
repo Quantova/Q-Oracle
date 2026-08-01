@@ -237,7 +237,7 @@ fn a_fact_that_overstates_a_proven_cosmos_deposit_is_refused() {
 }
 
 #[test]
-fn a_source_reference_already_spent_at_the_gateway_cannot_be_replayed() {
+fn a_source_reference_is_bound_per_corridor_and_a_same_corridor_replay_is_still_refused() {
     let c = cosmos_corridor();
     let mut gw = gateway_with_cosmos_asset();
     let recipient = [0x51u8; 32];
@@ -264,10 +264,14 @@ fn a_source_reference_already_spent_at_the_gateway_cannot_be_replayed() {
         fact: spent.clone(),
         signatures: vec![attest(&ops[0], &spent), attest(&ops[1], &spent), attest(&ops[2], &spent)],
     };
-    gw.process_deposit(&env).expect("the federated mint consumes the reference");
-    assert!(gw.is_reference_used(&proven.source_ref()));
+    gw.process_deposit(&env).expect("the solana mint consumes the reference on its own corridor");
+    assert!(gw.is_reference_used_on(SOLANA, &proven.source_ref()));
 
     let f = cosmos_fact(&c, &proven, COSMOS_ASSET);
+    admit_cosmos_trustless(&mut gw, &c, &proven, &f)
+        .expect("a cross-corridor reference collision is not a replay");
+    assert!(gw.is_reference_used_on(c.chain_id, &proven.source_ref()));
+
     assert_eq!(
         admit_cosmos_trustless(&mut gw, &c, &proven, &f),
         Err(TrustlessError::ReplayedReference)

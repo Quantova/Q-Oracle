@@ -712,6 +712,7 @@ fn outcome_json(outcome: &DepositOutcome) -> Json {
             ("recipient", hexs(&r.recipient)),
             ("amount", u128s(r.amount)),
             ("source_ref", hexs(&r.source_ref)),
+            ("source_chain", u32j(r.source_chain)),
         ]),
         DepositOutcome::AdmittedPendingChainMint(m) => object(vec![
             ("status", Json::str("admitted_pending_chain_mint")),
@@ -732,6 +733,7 @@ fn outcome_from(j: &Json) -> Result<DepositOutcome, WireError> {
             recipient: hex_array::<32>(field(j, "recipient")?, "recipient")?,
             amount: as_u128(field(j, "amount")?, "amount")?,
             source_ref: hex_array::<32>(field(j, "source_ref")?, "source_ref")?,
+            source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
         })),
         "admitted_pending_chain_mint" => {
             Ok(DepositOutcome::AdmittedPendingChainMint(TrustlessMint {
@@ -1896,6 +1898,7 @@ mod tests {
             recipient: [0x42; 32],
             amount: 500,
             source_ref: [0x11; 32],
+            source_chain: 1,
         })));
         round_response(Response::DepositAdmitted(
             DepositOutcome::AdmittedPendingChainMint(TrustlessMint {
