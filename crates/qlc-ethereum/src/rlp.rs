@@ -14,7 +14,10 @@ pub enum RlpError {
     LeadingZeroLength,
     Trailing,
     OversizeLength,
+    NestingTooDeep,
 }
+
+pub const MAX_DEPTH: usize = 32;
 
 impl Rlp {
     pub fn as_bytes(&self) -> Option<&[u8]> {
@@ -89,7 +92,7 @@ fn read_length(bytes: &[u8], of_len: usize) -> Result<usize, RlpError> {
     Ok(value)
 }
 
-fn decode_item(bytes: &[u8]) -> Result<(Rlp, usize), RlpError> {
+fn decode_item(bytes: &[u8], depth: usize) -> Result<(Rlp, usize), RlpError> {
     if bytes.is_empty() {
         return Err(RlpError::Empty);
     }
@@ -119,7 +122,7 @@ fn decode_item(bytes: &[u8]) -> Result<(Rlp, usize), RlpError> {
         if end > bytes.len() {
             return Err(RlpError::Truncated);
         }
-        let items = decode_list_body(&bytes[start..end])?;
+        let items = decode_list_body(&bytes[start..end], depth)?;
         Ok((Rlp::List(items), end))
     } else {
         let of_len = (prefix - 0xf7) as usize;
@@ -129,15 +132,18 @@ fn decode_item(bytes: &[u8]) -> Result<(Rlp, usize), RlpError> {
         if end > bytes.len() {
             return Err(RlpError::Truncated);
         }
-        let items = decode_list_body(&bytes[start..end])?;
+        let items = decode_list_body(&bytes[start..end], depth)?;
         Ok((Rlp::List(items), end))
     }
 }
 
-fn decode_list_body(mut bytes: &[u8]) -> Result<Vec<Rlp>, RlpError> {
+fn decode_list_body(mut bytes: &[u8], depth: usize) -> Result<Vec<Rlp>, RlpError> {
+    if depth >= MAX_DEPTH {
+        return Err(RlpError::NestingTooDeep);
+    }
     let mut items = Vec::new();
     while !bytes.is_empty() {
-        let (item, used) = decode_item(bytes)?;
+        let (item, used) = decode_item(bytes, depth + 1)?;
         items.push(item);
         bytes = &bytes[used..];
     }
@@ -145,7 +151,7 @@ fn decode_list_body(mut bytes: &[u8]) -> Result<Vec<Rlp>, RlpError> {
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Rlp, RlpError> {
-    let (item, used) = decode_item(bytes)?;
+    let (item, used) = decode_item(bytes, 0)?;
     if used != bytes.len() {
         return Err(RlpError::Trailing);
     }
@@ -225,5 +231,30 @@ mod tests {
     #[test]
     fn a_truncated_string_is_rejected() {
         assert_eq!(decode(&[0x83, 0x64, 0x6f]), Err(RlpError::Truncated));
+    }
+
+    #[test]
+    fn deeply_nested_lists_are_refused_rather_than_overflowing_the_stack() {
+        let mut deep = encode_bytes(b"");
+        for _ in 0..MAX_DEPTH + 64 {
+            deep = encode_list(&[deep]);
+        }
+        assert_eq!(
+            decode(&deep),
+            Err(RlpError::NestingTooDeep),
+            "a nesting past the depth bound must be refused, not recursed"
+        );
+    }
+
+    #[test]
+    fn nesting_up_to_the_bound_still_decodes() {
+        let mut encoded = encode_bytes(b"leaf");
+        for _ in 0..MAX_DEPTH - 1 {
+            encoded = encode_list(&[encoded]);
+        }
+        assert!(
+            decode(&encoded).is_ok(),
+            "real receipt and trie nesting sits far under the bound"
+        );
     }
 }
