@@ -1331,6 +1331,11 @@ fn federated_err_json(e: &FederatedError) -> Json {
     match e {
         FederatedError::Foreign => tagged("federated", "foreign", vec![]),
         FederatedError::NotFederated => tagged("federated", "not_federated", vec![]),
+        FederatedError::CorridorSourceMismatch { corridor, fact } => tagged(
+            "federated",
+            "corridor_source_mismatch",
+            vec![("corridor", u32j(*corridor)), ("fact", u32j(*fact))],
+        ),
         FederatedError::UndeclaredSource(id) => tagged(
             "federated",
             "undeclared_source",
@@ -1359,6 +1364,10 @@ fn federated_err_from(j: &Json) -> Result<FederatedError, WireError> {
     match code_of(j)? {
         "foreign" => Ok(FederatedError::Foreign),
         "not_federated" => Ok(FederatedError::NotFederated),
+        "corridor_source_mismatch" => Ok(FederatedError::CorridorSourceMismatch {
+            corridor: as_u32(field(j, "corridor")?, "corridor")?,
+            fact: as_u32(field(j, "fact")?, "fact")?,
+        }),
         "undeclared_source" => Ok(FederatedError::UndeclaredSource(as_u32(
             field(j, "operator_id")?,
             "operator_id",
