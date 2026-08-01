@@ -66,6 +66,7 @@ fn attest(ops: &[&Op], fact: &BridgeFact) -> AttestationEnvelope {
 fn until_message(until: u64) -> Vec<u8> {
     let mut w = Writer::new();
     w.u64(until);
+    w.u64(DEST_ID);
     w.finish()
 }
 

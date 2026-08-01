@@ -30,6 +30,7 @@ fn batch_message(source: u32, index: u64) -> Vec<u8> {
     let mut w = Writer::new();
     w.u32(source);
     w.u64(index);
+    w.u64(DEST_ID);
     w.finish()
 }
 

@@ -30,6 +30,7 @@ fn tier_message(source: u32, proposed: u8) -> Vec<u8> {
     let mut w = Writer::new();
     w.u32(source);
     w.u8(proposed);
+    w.u64(DEST_ID);
     w.finish()
 }
 

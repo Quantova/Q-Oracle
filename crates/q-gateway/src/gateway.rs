@@ -255,10 +255,7 @@ impl Gateway {
         fork_depth: u32,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
-        let mut w = Writer::new();
-        w.u32(source_chain);
-        w.u32(fork_depth);
-        let message = w.finish();
+        let message = reorg_message(source_chain, fork_depth, self.dest_chain_id);
         let distinct = verify_quorum(&message, REORG_DOMAIN, sigs, &self.operators)?;
         if distinct.len() < self.operators.threshold() {
             return Err(GatewayError::BelowThreshold {
@@ -280,10 +277,7 @@ impl Gateway {
         if self.governance.size() == 0 {
             return Err(GatewayError::NoGovernanceSet);
         }
-        let mut w = Writer::new();
-        w.u32(source_chain);
-        w.u8(proposed);
-        let message = w.finish();
+        let message = tier_message(source_chain, proposed, self.dest_chain_id);
         let distinct = verify_quorum(&message, TIER_DOMAIN, sigs, &self.governance)?;
         if distinct.len() < self.governance.threshold() {
             return Err(GatewayError::BelowThreshold {
@@ -310,9 +304,7 @@ impl Gateway {
         until_height: u64,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
-        let mut w = Writer::new();
-        w.u64(until_height);
-        let message = w.finish();
+        let message = freeze_message(until_height, self.dest_chain_id);
         let distinct = verify_quorum(&message, FREEZE_DOMAIN, sigs, &self.operators)?;
         if distinct.len() < self.operators.threshold() {
             return Err(GatewayError::BelowThreshold {
@@ -339,9 +331,7 @@ impl Gateway {
                 max: ceiling,
             });
         }
-        let mut w = Writer::new();
-        w.u64(until_height);
-        let message = w.finish();
+        let message = freeze_message(until_height, self.dest_chain_id);
         verify_quorum(
             &message,
             WATCHDOG_DOMAIN,
@@ -376,10 +366,7 @@ impl Gateway {
                 .threshold()
                 .max(supermajority_floor(self.operators.size()))
         };
-        let mut w = Writer::new();
-        w.u32(source_chain);
-        w.u64(batch_index);
-        let message = w.finish();
+        let message = batch_message(source_chain, batch_index, self.dest_chain_id);
         let distinct = verify_quorum(&message, BATCH_DOMAIN, sigs, &self.operators)?;
         if distinct.len() < required {
             return Err(GatewayError::BelowThreshold {
@@ -765,6 +752,37 @@ pub fn attestation_message(fact: &BridgeFact, dest_chain_id: u64) -> Vec<u8> {
     fact.attest_preimage(dest_chain_id)
 }
 
+pub fn reorg_message(source_chain: u32, fork_depth: u32, dest_chain_id: u64) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u32(source_chain);
+    w.u32(fork_depth);
+    w.u64(dest_chain_id);
+    w.finish()
+}
+
+pub fn tier_message(source_chain: u32, proposed: u8, dest_chain_id: u64) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u32(source_chain);
+    w.u8(proposed);
+    w.u64(dest_chain_id);
+    w.finish()
+}
+
+pub fn freeze_message(until_height: u64, dest_chain_id: u64) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u64(until_height);
+    w.u64(dest_chain_id);
+    w.finish()
+}
+
+pub fn batch_message(source_chain: u32, batch_index: u64, dest_chain_id: u64) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u32(source_chain);
+    w.u64(batch_index);
+    w.u64(dest_chain_id);
+    w.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -974,9 +992,7 @@ mod tests {
         gw.set_corridor_active(1, true);
 
         let until = 5_000u64;
-        let mut w = Writer::new();
-        w.u64(until);
-        let message = w.finish();
+        let message = freeze_message(until, DEST_ID);
         let sigs: Vec<SignerSig> = s
             .iter()
             .map(|(id, _, sk)| SignerSig {
@@ -993,6 +1009,40 @@ mod tests {
         gw.advance_to(until);
         assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1), Ok(()));
         assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
+    }
+
+    #[test]
+    fn an_admin_freeze_signed_for_one_destination_does_not_replay_on_another() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set_here = OperatorSet::new(3);
+        let mut set_there = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set_here.register(*id, *pk);
+            set_there.register(*id, *pk);
+        }
+        const OTHER_DEST_ID: u64 = DEST_ID ^ 0xffff_ffff;
+        let mut here = Gateway::new(9000, DEST_ID, set_here, 1_000_000);
+        here.register_corridor(1, 6);
+        let mut there = Gateway::new(9000, OTHER_DEST_ID, set_there, 1_000_000);
+        there.register_corridor(1, 6);
+
+        let until = 5_000u64;
+        let message = freeze_message(until, DEST_ID);
+        let sigs: Vec<SignerSig> = s
+            .iter()
+            .map(|(id, _, sk)| SignerSig {
+                operator_id: *id,
+                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32]).unwrap().to_vec(),
+            })
+            .collect();
+
+        here.emergency_freeze(until, &sigs)
+            .expect("the freeze verifies on the destination it was signed for");
+        assert_eq!(
+            there.emergency_freeze(until, &sigs),
+            Err(GatewayError::BadSignature(0)),
+            "a freeze bound to one destination chain id must not verify on a second gateway"
+        );
     }
 
     #[test]
@@ -1015,9 +1065,7 @@ mod tests {
         assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
 
         let until = 5_000u64;
-        let mut w = Writer::new();
-        w.u64(until);
-        let message = w.finish();
+        let message = freeze_message(until, DEST_ID);
         let sigs: Vec<SignerSig> = s
             .iter()
             .map(|(id, _, sk)| SignerSig {

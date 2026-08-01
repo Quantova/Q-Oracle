@@ -257,6 +257,7 @@ fn source_reorg_auto_pauses_the_route() {
     let mut w = Writer::new();
     w.u32(SOURCE_BTC);
     w.u32(3);
+    w.u64(DEST_ID);
     let reorg_msg = w.finish();
     let sigs: Vec<SignerSig> = ops[0..3]
         .iter()
