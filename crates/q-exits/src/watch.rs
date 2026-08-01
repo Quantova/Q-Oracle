@@ -65,8 +65,9 @@ impl BurnWatcher {
         while self.scanned_through < ceiling {
             let height = self.scanned_through + 1;
             if let Some(block) = source.finalized_block(height)? {
+                let mut in_block = 0usize;
                 for (index, leaf) in block.events.iter().enumerate() {
-                    if assembled.len() >= MAX_BURNS_PER_BLOCK {
+                    if in_block >= MAX_BURNS_PER_BLOCK {
                         break;
                     }
                     if !is_bridge_burn_leaf(leaf) {
@@ -82,6 +83,7 @@ impl BurnWatcher {
                         leaf: leaf.clone(),
                         inclusion,
                     });
+                    in_block += 1;
                 }
             }
             self.scanned_through = height;
