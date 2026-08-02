@@ -130,11 +130,12 @@ fn prove_cosmos_deposit(recipient: [u8; 32], asset: [u8; 16], amount: u128) -> T
     let (header, commit, set, proof) = signed_scene(recipient, asset, amount);
     let trusted = qlc_cosmos::light::TrustedState {
         height: 0,
+        time: Timestamp { seconds: 1_700_000_000 - 3600, nanos: 0 },
         header_hash: [0u8; 32],
         validators: set.clone(),
         next_validators_hash: set.hash().to_vec(),
     };
-    verify_trustless_deposit(&COSMOS_HUB, &trusted, &header, &commit, &set, &proof).unwrap()
+    verify_trustless_deposit(&COSMOS_HUB, &trusted, &header, &commit, &set, &proof, header.time).unwrap()
 }
 
 fn cosmos_corridor() -> Corridor {

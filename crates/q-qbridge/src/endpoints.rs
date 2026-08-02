@@ -289,6 +289,16 @@ fn resolve_corridor(
     Ok((tier, network, corridor_for(network, cap)))
 }
 
+fn cosmos_wall_now() -> qlc_cosmos::proto::Timestamp {
+    let elapsed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    qlc_cosmos::proto::Timestamp {
+        seconds: elapsed.as_secs() as i64,
+        nanos: elapsed.subsec_nanos() as i32,
+    }
+}
+
 pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<DepositPlan, ApiError> {
     let (tier, network, corridor) = resolve_corridor(state, &request.proof)?;
     let kind = match (tier, network, &request.proof) {
@@ -350,6 +360,7 @@ pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<D
                 commit,
                 validators,
                 proof,
+                cosmos_wall_now(),
             )
             .map_err(ApiError::CosmosVerify)?;
             PlanKind::Cosmos { proven, fact: fact.clone() }
@@ -1366,10 +1377,7 @@ mod tests {
             version_app: 0,
             chain_id: COSMOS_HUB.chain_id.to_string(),
             height: 18_500_000,
-            time: Timestamp {
-                seconds: 1_700_000_000,
-                nanos: 9,
-            },
+            time: cosmos_wall_now(),
             last_block_id: BlockId {
                 hash: vec![0xaa; 32],
                 part_total: 1,
@@ -1421,10 +1429,14 @@ mod tests {
     }
 
     fn cosmos_anchor_for(set: &ValidatorSet) -> CosmosAnchor {
+        let mut trusted_time = cosmos_wall_now();
+        trusted_time.seconds -= 3600;
+        trusted_time.nanos = 0;
         CosmosAnchor {
             config: COSMOS_HUB,
             trusted: TrustedState {
                 height: 0,
+                time: trusted_time,
                 header_hash: [0u8; 32],
                 validators: set.clone(),
                 next_validators_hash: set.hash().to_vec(),
@@ -1479,6 +1491,7 @@ mod tests {
             &commit,
             &set,
             &proof,
+            header.time,
         )
         .expect("the anchored material verifies");
         state.set_cosmos_anchor(anchor);

@@ -8,10 +8,16 @@ pub struct ChainConfig {
     pub confirmation_depth: u32,
     pub overlap_numerator: u64,
     pub overlap_denominator: u64,
+    pub trusting_period_secs: u64,
+    pub max_clock_drift_secs: u64,
     pub bridge_store_prefix: &'static [u8],
 }
 
 pub const BRIDGE_STORE_PREFIX: &[u8] = b"bridge/deposits/";
+
+pub const DEFAULT_TRUSTING_PERIOD_SECS: u64 = 1_209_600;
+
+pub const DEFAULT_MAX_CLOCK_DRIFT_SECS: u64 = 10;
 
 impl ChainConfig {
     pub const fn new(chain_id: &'static str, corridor_id: u32, confirmation_depth: u32) -> ChainConfig {
@@ -21,6 +27,8 @@ impl ChainConfig {
             confirmation_depth,
             overlap_numerator: 2,
             overlap_denominator: 3,
+            trusting_period_secs: DEFAULT_TRUSTING_PERIOD_SECS,
+            max_clock_drift_secs: DEFAULT_MAX_CLOCK_DRIFT_SECS,
             bridge_store_prefix: BRIDGE_STORE_PREFIX,
         }
     }

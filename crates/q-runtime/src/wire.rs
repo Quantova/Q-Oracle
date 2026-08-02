@@ -1092,6 +1092,19 @@ fn light_err_json(e: &LightError) -> Json {
                 ("trusted_total", u128s(*trusted_total)),
             ],
         ),
+        LightError::TrustedStateExpired {
+            elapsed_secs,
+            trusting_period_secs,
+        } => tagged(
+            "light",
+            "trusted_state_expired",
+            vec![
+                ("elapsed_secs", Json::Int(*elapsed_secs as u64)),
+                ("trusting_period_secs", Json::Int(*trusting_period_secs)),
+            ],
+        ),
+        LightError::NonMonotonicHeaderTime => tagged("light", "non_monotonic_header_time", vec![]),
+        LightError::HeaderTimeInFuture => tagged("light", "header_time_in_future", vec![]),
         LightError::NotAdjacent => tagged("light", "not_adjacent", vec![]),
         LightError::NextValidatorMismatch => tagged("light", "next_validator_mismatch", vec![]),
         LightError::Commit(c) => {
@@ -1113,6 +1126,12 @@ fn light_err_from(j: &Json) -> Result<LightError, WireError> {
             signed: as_u128(field(j, "signed")?, "signed")?,
             trusted_total: as_u128(field(j, "trusted_total")?, "trusted_total")?,
         }),
+        "trusted_state_expired" => Ok(LightError::TrustedStateExpired {
+            elapsed_secs: as_i64(field(j, "elapsed_secs")?, "elapsed_secs")?,
+            trusting_period_secs: as_u64(field(j, "trusting_period_secs")?, "trusting_period_secs")?,
+        }),
+        "non_monotonic_header_time" => Ok(LightError::NonMonotonicHeaderTime),
+        "header_time_in_future" => Ok(LightError::HeaderTimeInFuture),
         "not_adjacent" => Ok(LightError::NotAdjacent),
         "next_validator_mismatch" => Ok(LightError::NextValidatorMismatch),
         "commit" => Ok(LightError::Commit(commit_err_from(field(j, "commit")?)?)),

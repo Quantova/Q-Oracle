@@ -32,7 +32,7 @@ fn field_len_delim(out: &mut Vec<u8>, tag: u8, data: &[u8]) {
     out.extend_from_slice(data);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Timestamp {
     pub seconds: i64,
     pub nanos: i32,
