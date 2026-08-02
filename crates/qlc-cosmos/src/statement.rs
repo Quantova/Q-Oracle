@@ -154,6 +154,8 @@ pub fn verify_deposit(
 
     let statement = cosmos_tendermint(
         cfg.corridor_id,
+        qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+        header.height as u64,
         header.hash(),
         event_claim(&deposit),
         cfg.confirmation_depth,
@@ -312,15 +314,39 @@ mod tests {
     }
 
     #[test]
-    fn the_lowered_stark_statement_is_hash_only_and_thirty_seven_bytes() {
+    fn the_lowered_stark_statement_is_hash_only_and_fixed_width() {
         let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
         let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof, wnow()).unwrap();
         let lowered = lower(&out.statement);
 
         assert_eq!(lowered.kind, StatementKind::CosmosTendermint);
         assert_eq!(lowered.corridor_id, 8);
+        assert_eq!(lowered.dest_chain_id, qlc_stark::QUANTOVA_DEST_CHAIN_ID);
+        assert_eq!(lowered.nonce, header.height as u64);
         assert_eq!(lowered.public_input_digest, shake256_256(&out.statement.encode()));
-        assert_eq!(lowered.encode().len(), 37);
+        assert_eq!(lowered.encode().len(), StarkStatement::ENCODED_LEN);
+    }
+
+    #[test]
+    fn the_slot_nonce_and_destination_are_bound_into_the_public_input() {
+        let (header, commit, set, proof) = scene(&[0, 1, 2, 3]);
+        let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof, wnow()).unwrap();
+        assert_eq!(out.statement.nonce, header.height as u64);
+        assert_eq!(out.statement.dest_chain_id, qlc_stark::QUANTOVA_DEST_CHAIN_ID);
+
+        let mut replayed_slot = out.statement;
+        replayed_slot.nonce += 1;
+        assert_ne!(
+            public_input_digest(&replayed_slot),
+            public_input_digest(&out.statement)
+        );
+
+        let mut other_chain = out.statement;
+        other_chain.dest_chain_id += 1;
+        assert_ne!(
+            public_input_digest(&other_chain),
+            public_input_digest(&out.statement)
+        );
     }
 
     #[test]

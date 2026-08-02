@@ -5,6 +5,7 @@ use q_codec::{BridgeFact, Writer};
 use qtv_stark::sponge::{absorb_output, SHAKE256_RATE};
 
 pub const BRIDGE_STATEMENT_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BRIDGE-PROVER/v1";
+pub const BRIDGE_TRANSCRIPT_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BRIDGE-PROVER/TRANSCRIPT/v1";
 pub const STATEMENT_DIGEST_LEN: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +32,16 @@ impl CorridorStatement {
         let mut digest = [0u8; STATEMENT_DIGEST_LEN];
         digest.copy_from_slice(&squeeze[..STATEMENT_DIGEST_LEN]);
         digest
+    }
+
+    pub fn domain_context(&self) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.fixed(BRIDGE_TRANSCRIPT_DOMAIN);
+        w.u32(self.fact.source_chain);
+        w.u32(self.fact.dest_chain);
+        w.u32(self.fact.route_id);
+        w.u64(self.fact.nonce);
+        w.finish()
     }
 }
 

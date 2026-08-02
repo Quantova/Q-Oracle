@@ -4,7 +4,7 @@
 use q_airlock::StarkEnvelope;
 use qtv_stark::codec::{decode_proof, encode_proof};
 use qtv_stark::sponge::{absorb_air, absorb_output, absorb_trace, SHAKE256_RATE};
-use qtv_stark::stark::{prove, verify, StarkParams};
+use qtv_stark::stark::{prove_with_domain, verify_with_domain, StarkParams};
 
 use crate::statement::{CorridorStatement, STATEMENT_DIGEST_LEN};
 
@@ -26,8 +26,9 @@ pub struct CommitmentProof {
 
 pub fn prove_statement(statement: &CorridorStatement) -> CommitmentProof {
     let preimage = statement.preimage();
+    let context = statement.domain_context();
     let instance = absorb_trace(SHAKE256_RATE, &preimage);
-    let proof = prove(&instance.air, &instance.trace, &params());
+    let proof = prove_with_domain(&instance.air, &instance.trace, &params(), &context);
     let mut digest = [0u8; STATEMENT_DIGEST_LEN];
     digest.copy_from_slice(&instance.output[..STATEMENT_DIGEST_LEN]);
     CommitmentProof {
@@ -46,8 +47,9 @@ pub fn verify_statement(statement: &CorridorStatement, commitment: &CommitmentPr
         Some(proof) => proof,
         None => return false,
     };
+    let context = statement.domain_context();
     let air = absorb_air(SHAKE256_RATE, &preimage, &squeeze);
-    verify(&air, &params(), &proof)
+    verify_with_domain(&air, &params(), &proof, &context)
 }
 
 impl CommitmentProof {
@@ -115,6 +117,25 @@ mod tests {
         other.fact.amount = 1_000_001;
         let commitment = prove_statement(&other);
         assert!(!verify_statement(&s, &commitment));
+    }
+
+    #[test]
+    fn a_proof_for_one_destination_chain_does_not_verify_for_another() {
+        let s = statement();
+        let commitment = prove_statement(&s);
+        assert!(verify_statement(&s, &commitment));
+        let mut other = statement();
+        other.fact.dest_chain = 9001;
+        assert!(!verify_statement(&other, &commitment));
+    }
+
+    #[test]
+    fn a_proof_at_one_nonce_does_not_verify_at_a_replayed_nonce() {
+        let s = statement();
+        let commitment = prove_statement(&s);
+        let mut replay = statement();
+        replay.fact.nonce += 1;
+        assert!(!verify_statement(&replay, &commitment));
     }
 
     #[test]
