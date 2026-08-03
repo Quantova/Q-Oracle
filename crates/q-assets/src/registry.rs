@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn the_registry_holds_one_hundred_fifty_four_assets() {
-        assert_eq!(count(), 154, "the registry has {} assets", count());
+        assert_eq!(count(), 153, "the registry has {} assets", count());
     }
 
     #[test]

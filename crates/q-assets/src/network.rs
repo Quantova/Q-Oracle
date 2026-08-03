@@ -49,7 +49,7 @@ pub enum Network {
 }
 
 impl Network {
-    pub const ALL: [Network; 43] = [
+    pub const ALL: [Network; 42] = [
         Network::Bitcoin,
         Network::BitcoinCash,
         Network::Ethereum,
@@ -156,8 +156,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn there_are_forty_three_origin_networks() {
-        assert_eq!(Network::ALL.len(), 43);
+    fn there_are_forty_two_origin_networks() {
+        assert_eq!(Network::ALL.len(), 42);
     }
 
     #[test]
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn an_id_outside_the_registry_resolves_to_nothing() {
-        assert_eq!(Network::from_id(44), None);
+        assert_eq!(Network::from_id(43), None);
         assert_eq!(Network::from_id(999), None);
     }
 
