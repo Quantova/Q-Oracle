@@ -10,18 +10,16 @@ use qlc_stark::shake256_256;
 pub struct EthereumCheckedFacts {
     pub attested_header_root: [u8; 32],
     pub receipts_root: [u8; 32],
-    pub block_number: u64,
     pub participants: u32,
 }
 
 impl EthereumCheckedFacts {
-    pub const ENCODED_LEN: usize = 32 + 32 + 8 + 4;
+    pub const ENCODED_LEN: usize = 32 + 32 + 4;
 
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(Self::ENCODED_LEN);
         out.extend_from_slice(&self.attested_header_root);
         out.extend_from_slice(&self.receipts_root);
-        out.extend_from_slice(&self.block_number.to_le_bytes());
         out.extend_from_slice(&self.participants.to_le_bytes());
         out
     }
@@ -58,7 +56,6 @@ pub fn prove_ready_witness(
     let facts = EthereumCheckedFacts {
         attested_header_root: update.attested_header.hash_tree_root(),
         receipts_root: update.execution.receipts_root,
-        block_number: update.execution.block_number,
         participants: update.sync_aggregate.participants() as u32,
     };
     let public_input_digest = digest_of(&statement, &facts);
@@ -265,7 +262,6 @@ mod tests {
             prove_ready_witness(&f.store, &f.update, &f.deposit, &HashCommitmentBls).unwrap();
         assert_eq!(witness.facts.attested_header_root, f.update.attested_header.hash_tree_root());
         assert_eq!(witness.facts.receipts_root, f.update.execution.receipts_root);
-        assert_eq!(witness.facts.block_number, 20_000_000);
         assert_eq!(witness.facts.participants, 400);
         assert_eq!(witness.statement.corridor_id, 1);
     }
