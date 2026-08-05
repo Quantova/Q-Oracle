@@ -253,6 +253,9 @@ impl BridgeFact {
     pub fn decode(input: &[u8]) -> Result<BridgeFact, CodecError> {
         let mut r = Reader::new(input);
         let version = r.u8()?;
+        if version != FACT_VERSION {
+            return Err(CodecError::BadVersion(version));
+        }
         let source_chain = r.u32()?;
         let dest_chain = r.u32()?;
         let route_id = r.u32()?;
@@ -413,6 +416,16 @@ mod tests {
         assert!(matches!(
             BridgeFact::decode(&bytes),
             Err(CodecError::UnknownTag(9))
+        ));
+    }
+
+    #[test]
+    fn decode_rejects_an_unknown_fact_version() {
+        let mut bytes = sample().encode();
+        bytes[0] = FACT_VERSION + 1;
+        assert!(matches!(
+            BridgeFact::decode(&bytes),
+            Err(CodecError::BadVersion(_))
         ));
     }
 
