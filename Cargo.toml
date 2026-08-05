@@ -43,3 +43,6 @@ q-federated = { path = "crates/q-federated" }
 
 [profile.dev.package.qtv-crypto]
 opt-level = 3
+
+[profile.release]
+overflow-checks = true
