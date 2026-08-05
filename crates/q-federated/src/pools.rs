@@ -298,6 +298,7 @@ impl Default for PoolRegistry {
 pub fn install_pool(gateway: &mut Gateway, spec: &PoolSpec) {
     gateway.register_corridor(spec.network.id(), depth_for(spec.network));
     gateway.register_asset_cap(spec.asset_id.0, spec.per_asset_cap);
+    gateway.register_asset_epoch_cap(spec.asset_id.0, spec.per_epoch_cap);
 }
 
 pub fn install_all(gateway: &mut Gateway, registry: &PoolRegistry) {

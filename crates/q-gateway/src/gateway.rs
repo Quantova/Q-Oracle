@@ -57,6 +57,8 @@ pub struct Gateway {
     used_refs: BTreeSet<(u32, [u8; 32])>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     per_asset_cap: BTreeMap<[u8; 16], u128>,
+    per_asset_epoch_cap: BTreeMap<[u8; 16], u128>,
+    per_asset_epoch_minted: BTreeMap<[u8; 16], u128>,
     epoch_cap: u128,
     epoch_minted: u128,
     current_epoch: u64,
@@ -82,6 +84,8 @@ impl Gateway {
             used_refs: BTreeSet::new(),
             per_asset_minted: BTreeMap::new(),
             per_asset_cap: BTreeMap::new(),
+            per_asset_epoch_cap: BTreeMap::new(),
+            per_asset_epoch_minted: BTreeMap::new(),
             epoch_cap,
             epoch_minted: 0,
             current_epoch: 0,
@@ -191,6 +195,28 @@ impl Gateway {
         self.per_asset_cap.insert(asset_id, cap);
     }
 
+    pub fn register_asset_epoch_cap(&mut self, asset_id: [u8; 16], cap: u128) {
+        self.per_asset_epoch_cap.insert(asset_id, cap);
+    }
+
+    fn charge_asset_epoch(&self, asset_id: &[u8; 16], amount: u128) -> Result<(), GatewayError> {
+        if let Some(&cap) = self.per_asset_epoch_cap.get(asset_id) {
+            let minted = *self.per_asset_epoch_minted.get(asset_id).unwrap_or(&0);
+            let after = minted
+                .checked_add(amount)
+                .ok_or(GatewayError::EpochCapExceeded { minted, cap, add: amount })?;
+            if after > cap {
+                return Err(GatewayError::EpochCapExceeded { minted, cap, add: amount });
+            }
+        }
+        Ok(())
+    }
+
+    fn record_asset_epoch(&mut self, asset_id: [u8; 16], amount: u128) {
+        let entry = self.per_asset_epoch_minted.entry(asset_id).or_insert(0);
+        *entry = entry.saturating_add(amount);
+    }
+
     pub fn pause_all(&mut self) {
         self.global_pause = true;
         self.touch_guard();
@@ -214,6 +240,7 @@ impl Gateway {
     pub fn advance_epoch(&mut self) {
         self.current_epoch += 1;
         self.epoch_minted = 0;
+        self.per_asset_epoch_minted.clear();
         self.touch_guard();
     }
 
@@ -503,9 +530,11 @@ impl Gateway {
                 add: amount,
             });
         }
+        self.charge_asset_epoch(&asset_id, amount)?;
         self.used_refs.insert((source_chain, source_ref));
         self.per_asset_minted.insert(asset_id, asset_after);
         self.epoch_minted = epoch_after;
+        self.record_asset_epoch(asset_id, amount);
         self.touch_guard();
         Ok(())
     }
@@ -619,9 +648,11 @@ impl Gateway {
             return Err(GatewayError::ReplayedReference);
         }
 
+        self.charge_asset_epoch(&fact.asset_id.0, fact.amount)?;
         self.used_refs.insert((fact.source_chain, fact.source_ref.0));
         self.per_asset_minted.insert(fact.asset_id.0, asset_after);
         self.epoch_minted = epoch_after;
+        self.record_asset_epoch(fact.asset_id.0, fact.amount);
         self.touch_guard();
 
         Ok(MintReceipt {
@@ -1009,6 +1040,33 @@ mod tests {
         gw.advance_to(until);
         assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1), Ok(()));
         assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
+    }
+
+    #[test]
+    fn the_per_asset_epoch_cap_bounds_minting_within_an_epoch_and_resets_on_advance() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 10_000);
+        gw.register_asset_epoch_cap([0xa1; 16], 300);
+
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 200, 1), Ok(()));
+        assert!(matches!(
+            gw.admit_trustless([0xa1; 16], [0x02; 32], 200, 1),
+            Err(GatewayError::EpochCapExceeded { .. })
+        ));
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x03; 32], 100, 1), Ok(()));
+        assert!(matches!(
+            gw.admit_trustless([0xa1; 16], [0x04; 32], 1, 1),
+            Err(GatewayError::EpochCapExceeded { .. })
+        ));
+
+        gw.advance_epoch();
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x05; 32], 300, 1), Ok(()));
     }
 
     #[test]
