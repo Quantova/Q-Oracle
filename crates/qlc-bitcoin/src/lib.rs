@@ -231,6 +231,26 @@ pub fn verify_inclusion(
 mod tests {
     use super::*;
 
+    #[test]
+    fn header_parse_never_panics_on_hostile_bytes() {
+        let mut state = 0x243f_6a88_85a3_08d3u64;
+        let mut rng = || {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        for _ in 0..200_000 {
+            let len = (rng() % 160) as usize;
+            let mut buf = Vec::with_capacity(len);
+            for _ in 0..len {
+                buf.push((rng() & 0xff) as u8);
+            }
+            let _ = BlockHeader::parse(&buf);
+        }
+    }
+
     fn from_hex(s: &str) -> Vec<u8> {
         let b = s.as_bytes();
         let mut out = Vec::with_capacity(b.len() / 2);

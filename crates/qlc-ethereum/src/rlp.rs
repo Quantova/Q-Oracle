@@ -162,6 +162,38 @@ pub fn decode(bytes: &[u8]) -> Result<Rlp, RlpError> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn nesting_past_the_limit_is_refused_rather_than_overflowing_the_stack() {
+        let mut deep = encode_bytes(&[0u8]);
+        for _ in 0..MAX_DEPTH + 8 {
+            deep = encode_list(&[deep]);
+        }
+        assert!(
+            matches!(decode(&deep), Err(RlpError::NestingTooDeep)),
+            "a validly encoded but over deep list must be refused, not recurse into a stack overflow"
+        );
+    }
+
+    #[test]
+    fn decode_never_panics_on_hostile_bytes() {
+        let mut state = 0x1234_5678_9abc_def0u64;
+        let mut rng = || {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        for _ in 0..200_000 {
+            let len = (rng() % 500) as usize;
+            let mut buf = Vec::with_capacity(len);
+            for _ in 0..len {
+                buf.push((rng() & 0xff) as u8);
+            }
+            let _ = decode(&buf);
+        }
+    }
+
     fn to_hex(bytes: &[u8]) -> String {
         let mut s = String::new();
         for b in bytes {

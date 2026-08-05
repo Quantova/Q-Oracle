@@ -246,6 +246,26 @@ pub fn check_deposit_tx(
 mod tests {
     use super::*;
 
+    #[test]
+    fn tx_parse_never_panics_on_hostile_bytes() {
+        let mut state = 0xb7e1_5162_8aed_2a6bu64;
+        let mut rng = || {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        for _ in 0..100_000 {
+            let len = (rng() % 300) as usize;
+            let mut buf = Vec::with_capacity(len);
+            for _ in 0..len {
+                buf.push((rng() & 0xff) as u8);
+            }
+            let _ = Transaction::parse(&buf);
+        }
+    }
+
     fn p2pkh(hash160: [u8; 20]) -> Vec<u8> {
         let mut s = vec![0x76, 0xa9, 0x14];
         s.extend_from_slice(&hash160);
