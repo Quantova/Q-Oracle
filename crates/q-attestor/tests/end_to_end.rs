@@ -89,18 +89,18 @@ fn full_pipeline_from_watcher_to_mint() {
 }
 
 #[test]
-fn node_divergence_does_not_override_the_signed_fact_and_does_not_halt() {
+fn node_divergence_halts_the_operator_and_stops_further_signing() {
     let mut op = make_operator(0);
     let source_ref = [0x22; 32];
     op.observe_and_sign(&lock(source_ref, 500, 6), 900_000).expect("first view signs");
 
     let conflicting = op.observe_and_sign(&lock(source_ref, 999, 6), 900_000);
-    assert_eq!(conflicting, Err(OperatorError::AlreadySigned));
-    assert!(!op.is_halted());
-    assert_eq!(op.state(), OperatorState::Running);
+    assert_eq!(conflicting, Err(OperatorError::Halted(HaltReason::Divergence)));
+    assert!(op.is_halted());
+    assert_eq!(op.state(), OperatorState::Halted(HaltReason::Divergence));
 
     let later = op.observe_and_sign(&lock([0x23; 32], 100, 6), 900_000);
-    assert!(later.is_ok());
+    assert_eq!(later, Err(OperatorError::Halted(HaltReason::Divergence)));
 }
 
 #[test]

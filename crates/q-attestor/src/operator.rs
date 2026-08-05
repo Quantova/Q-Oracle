@@ -114,10 +114,6 @@ impl<S: AttestationSigner> Operator<S> {
         }
 
         let key = (lock.source_chain, lock.source_ref);
-        if self.signed_refs.contains(&key) {
-            return Err(OperatorError::AlreadySigned);
-        }
-
         let fact = translate(lock, &ctx, dest_height);
         let digest = divergence_digest(lock, &ctx);
 
@@ -126,11 +122,14 @@ impl<S: AttestationSigner> Operator<S> {
                 self.state = OperatorState::Halted(HaltReason::Divergence);
                 return Err(OperatorError::Halted(HaltReason::Divergence));
             }
-            Some(_) => {}
-            None => {
-                self.seen_facts.insert(key, digest);
-            }
+            _ => {}
         }
+
+        if self.signed_refs.contains(&key) {
+            return Err(OperatorError::AlreadySigned);
+        }
+
+        self.seen_facts.entry(key).or_insert(digest);
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
         let signature = self.signer.sign(&message, ATTEST_DOMAIN);
@@ -253,16 +252,16 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_re_observation_of_a_signed_reference_does_not_halt() {
+    fn a_conflicting_re_observation_of_a_signed_reference_halts_the_operator() {
         let mut operator = op();
         operator.observe_and_sign(&lock(), 900_000).expect("the first final lock signs");
         let mut conflicting = lock();
         conflicting.amount = 999;
         assert_eq!(
             operator.observe_and_sign(&conflicting, 900_000),
-            Err(OperatorError::AlreadySigned)
+            Err(OperatorError::Halted(HaltReason::Divergence))
         );
-        assert_eq!(operator.state(), OperatorState::Running);
-        assert!(!operator.is_halted());
+        assert_eq!(operator.state(), OperatorState::Halted(HaltReason::Divergence));
+        assert!(operator.is_halted());
     }
 }
