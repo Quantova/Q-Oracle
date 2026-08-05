@@ -776,6 +776,53 @@ mod tests {
     }
 
     #[test]
+    fn every_seeded_asset_routes_through_deposit_admission_without_a_routing_error() {
+        let mut state = BridgeState::seeded(Gateway::new(DEST, DEST_ID, OperatorSet::new(1), 1_000_000_000_000));
+        let mut checked = 0usize;
+        for record in q_assets::ASSETS {
+            let Some(network) = record.id.origin() else { continue };
+            let identifier = record.id.identifier().expect("a foreign asset carries an identifier");
+            let asset_id = derive_asset_id(network, identifier).0;
+            let fact = BridgeFact {
+                version: FACT_VERSION,
+                source_chain: network.id(),
+                dest_chain: DEST,
+                route_id: 1,
+                direction: Direction::Deposit,
+                nonce: 1,
+                source_ref: SourceRef([0x22; 32]),
+                asset_id: AssetId(asset_id),
+                amount: 500,
+                recipient: Recipient([0x55; 32]),
+                finality_depth: 40,
+                observed_height: 900_000,
+                expiry_height: 1_800_000,
+            };
+            let env = AttestationEnvelope { fact, signatures: vec![] };
+            let response = handle(
+                &mut state,
+                Request::SubmitDeposit(DepositRequest {
+                    proof: DepositProof::Federated(env),
+                }),
+            );
+            assert!(
+                !matches!(
+                    response,
+                    Response::Error(ApiError::PoolNotRegistered(_))
+                        | Response::Error(ApiError::AssetNetworkMismatch { .. })
+                        | Response::Error(ApiError::UnknownNetwork(_))
+                ),
+                "{:?} {} did not route through deposit admission: {:?}",
+                network,
+                identifier,
+                response
+            );
+            checked += 1;
+        }
+        assert!(checked >= 150, "expected every seeded foreign asset to route, checked {}", checked);
+    }
+
+    #[test]
     fn a_bitcoin_deposit_with_valid_anchored_material_is_verified_server_side_and_admitted() {
         let mut state = empty_state(0);
         let view = bitcoin_pool(&mut state);
