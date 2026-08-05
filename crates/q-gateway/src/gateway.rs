@@ -557,6 +557,9 @@ impl Gateway {
                 until: self.mint_freeze_horizon(),
             });
         }
+        if self.dest_chain_id == 0 {
+            return Err(GatewayError::WrongDestination);
+        }
         let fact = &env.fact;
         if fact.is_zero() {
             return Err(GatewayError::ProveNothing);
@@ -944,6 +947,38 @@ mod tests {
         };
         let receipt = gw.process_deposit(&env).expect("quorum over the preimage mints");
         assert_eq!(receipt.amount, 500);
+    }
+
+    #[test]
+    fn a_gateway_left_at_the_zero_dest_chain_id_sentinel_fails_closed_instead_of_minting() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, 0, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+        let f = fact();
+        let signatures = s
+            .iter()
+            .map(|(id, _, sk)| {
+                let sig = ml_dsa::sign(sk, &f.attest_preimage(0), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+                SignerSig {
+                    operator_id: *id,
+                    signature: sig.to_vec(),
+                }
+            })
+            .collect();
+        let env = AttestationEnvelope {
+            fact: f.clone(),
+            signatures,
+        };
+        assert_eq!(
+            gw.process_deposit(&env),
+            Err(GatewayError::WrongDestination),
+            "a quorum bound to the zero dest chain id sentinel must not mint"
+        );
     }
 
     fn nine_op_gateway(global: usize) -> (Vec<(u32, ml_dsa::PublicKey, ml_dsa::SecretKey)>, Gateway) {
