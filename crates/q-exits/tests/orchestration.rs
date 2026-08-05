@@ -192,6 +192,28 @@ fn the_feed_opens_a_vault_exit_from_a_watched_burn() {
 }
 
 #[test]
+fn a_burn_that_hits_a_thin_vault_is_retried_not_dropped() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let node = node(&members, &beacon);
+
+    let mut desk = ExitDesk::new(config(), anchor(&members, &beacon)).unwrap();
+    desk.register_vault(VAULT, REQUIRED - 50);
+
+    let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
+    let opened = feed.drive(&node, &mut desk, VAULT, 10).expect("the enabled feed drives");
+    assert_eq!(opened.len(), 0, "a thin vault opens nothing yet");
+    assert_eq!(feed.pending_len(), 1, "the proven burn is queued, not dropped past the cursor");
+    assert!(!desk.is_consumed(&BURN_REF), "a thin-vault failure does not consume the burn ref");
+
+    desk.register_vault(VAULT, 100);
+    let opened = feed.drive(&node, &mut desk, VAULT, 11).expect("the feed drives again");
+    assert_eq!(opened.len(), 1, "the queued burn opens once the vault has collateral");
+    assert_eq!(feed.pending_len(), 0, "the retry queue drains on success");
+    assert!(desk.is_consumed(&BURN_REF));
+}
+
+#[test]
 fn a_gated_off_feed_opens_nothing() {
     let members = attesters();
     let beacon = Beacon::genesis();
