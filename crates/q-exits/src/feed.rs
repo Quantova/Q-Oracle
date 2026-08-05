@@ -80,9 +80,9 @@ impl BurnFeed {
         {
             match desk.open_exit(&proof, vault_id, now) {
                 Ok(id) => opened.push(id),
-                Err(ExitError::ThinVault { .. }) | Err(ExitError::PersistFailed) => {
-                    still_pending.push(proof)
-                }
+                Err(ExitError::ThinVault { .. })
+                | Err(ExitError::PersistFailed)
+                | Err(ExitError::LedgerFull) => still_pending.push(proof),
                 Err(_) => {}
             }
         }
