@@ -39,6 +39,12 @@ impl ReplayLedger for MemoryLedger {
     }
 
     fn record(&mut self, burn_ref: [u8; 32]) -> Result<(), ExitError> {
+        if self.released.contains(&burn_ref) {
+            return Ok(());
+        }
+        if self.released.len() >= MAX_LEDGER_ENTRIES as usize {
+            return Err(ExitError::LedgerFull);
+        }
         self.released.insert(burn_ref);
         Ok(())
     }
@@ -102,9 +108,13 @@ impl ReplayLedger for PersistentLedger {
     }
 
     fn record(&mut self, burn_ref: [u8; 32]) -> Result<(), ExitError> {
-        if !self.released.insert(burn_ref) {
+        if self.released.contains(&burn_ref) {
             return Ok(());
         }
+        if self.released.len() >= MAX_LEDGER_ENTRIES as usize {
+            return Err(ExitError::LedgerFull);
+        }
+        self.released.insert(burn_ref);
         match self.store.save(&self.encode()) {
             Ok(()) => Ok(()),
             Err(_) => {

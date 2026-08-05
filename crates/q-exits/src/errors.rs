@@ -36,6 +36,7 @@ pub enum ExitError {
     NotABurnLeaf,
     LeafDecode,
     PersistFailed,
+    LedgerFull,
     ExitsDisabled,
 }
 
