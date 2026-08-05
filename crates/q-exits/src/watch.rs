@@ -8,7 +8,7 @@ use qtv_codec::Decoder;
 use crate::burn_proof::{ProofOfBurn, EVENT_BRIDGE_BURN, NATIVE_EVENT_SOURCE};
 
 pub const MAX_HEIGHTS_PER_POLL: u64 = 1024;
-pub const MAX_BURNS_PER_BLOCK: usize = 4096;
+pub const MAX_BURNS_PER_POLL: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BurnWatchError {
@@ -65,11 +65,7 @@ impl BurnWatcher {
         while self.scanned_through < ceiling {
             let height = self.scanned_through + 1;
             if let Some(block) = source.finalized_block(height)? {
-                let mut in_block = 0usize;
                 for (index, leaf) in block.events.iter().enumerate() {
-                    if in_block >= MAX_BURNS_PER_BLOCK {
-                        break;
-                    }
                     if !is_bridge_burn_leaf(leaf) {
                         continue;
                     }
@@ -83,10 +79,12 @@ impl BurnWatcher {
                         leaf: leaf.clone(),
                         inclusion,
                     });
-                    in_block += 1;
                 }
             }
             self.scanned_through = height;
+            if assembled.len() >= MAX_BURNS_PER_POLL {
+                break;
+            }
         }
         Ok(assembled)
     }

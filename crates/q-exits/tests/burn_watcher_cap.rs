@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_exits::{
-    BurnWatchError, BurnWatcher, FinalizedBlock, QuantovaBurnSource, MAX_BURNS_PER_BLOCK,
+    BurnWatchError, BurnWatcher, FinalizedBlock, QuantovaBurnSource, MAX_BURNS_PER_POLL,
 };
 
 use qtv_attest::{Block, Certificate, Envelope, Parent};
@@ -13,11 +13,6 @@ const HOLDER: [u8; 32] = [0x33; 32];
 const BENEFICIARY: [u8; 32] = [0x55; 32];
 const AMOUNT: u128 = 500;
 const CHAIN_ID: u64 = 9000;
-
-const CHUNK: usize = MAX_BURNS_PER_BLOCK / 8;
-const FULL_BLOCKS: u64 = 8;
-const TAIL_HEIGHT: u64 = FULL_BLOCKS + 1;
-const TAIL_BURN_REF: [u8; 32] = [0x22; 32];
 
 fn burn_leaf(burn_ref: [u8; 32]) -> Vec<u8> {
     let mut data = Encoder::new();
@@ -48,21 +43,31 @@ fn certificate(height: u64) -> Certificate {
     Certificate::new(envelope, Vec::new())
 }
 
-struct FloodSource;
+fn ref_of(n: usize) -> [u8; 32] {
+    let mut r = [0u8; 32];
+    r[0..8].copy_from_slice(&(n as u64).to_le_bytes());
+    r
+}
 
-impl QuantovaBurnSource for FloodSource {
+struct Blocks {
+    head: u64,
+    counts: Vec<usize>,
+}
+
+impl QuantovaBurnSource for Blocks {
     fn finalized_height(&self) -> Result<u64, BurnWatchError> {
-        Ok(TAIL_HEIGHT)
+        Ok(self.head)
     }
 
     fn finalized_block(&self, height: u64) -> Result<Option<FinalizedBlock>, BurnWatchError> {
-        let events = if (1..=FULL_BLOCKS).contains(&height) {
-            (0..CHUNK).map(|_| burn_leaf([0x11; 32])).collect()
-        } else if height == TAIL_HEIGHT {
-            vec![burn_leaf(TAIL_BURN_REF)]
-        } else {
+        let idx = height as usize;
+        if idx == 0 || idx > self.counts.len() {
             return Ok(None);
-        };
+        }
+        let base = idx * 1_000_000;
+        let events = (0..self.counts[idx - 1])
+            .map(|n| burn_leaf(ref_of(base + n)))
+            .collect();
         Ok(Some(FinalizedBlock {
             header_bytes: Vec::new(),
             certificate: certificate(height),
@@ -72,25 +77,30 @@ impl QuantovaBurnSource for FloodSource {
 }
 
 #[test]
-fn a_full_earlier_block_does_not_swallow_a_later_blocks_burn() {
-    assert_eq!(
-        CHUNK * FULL_BLOCKS as usize,
-        MAX_BURNS_PER_BLOCK,
-        "the earlier blocks fill the per-block burn budget exactly"
-    );
-
+fn a_block_heavier_than_the_poll_budget_is_assembled_in_full() {
+    let heavy = MAX_BURNS_PER_POLL + 100;
+    let source = Blocks {
+        head: 1,
+        counts: vec![heavy],
+    };
     let mut watcher = BurnWatcher::new(0);
-    let proofs = watcher.poll(&FloodSource).expect("the poll assembles the burns");
+    let proofs = watcher.poll(&source).expect("the poll assembles the heavy block");
+    assert_eq!(proofs.len(), heavy, "the whole heavy block is assembled, nothing dropped");
+    assert_eq!(watcher.scanned_through(), 1);
+}
 
-    let tail = burn_leaf(TAIL_BURN_REF);
-    assert!(
-        proofs.iter().any(|proof| proof.leaf == tail),
-        "the burn in a later block must not be dropped once earlier blocks filled the buffer"
-    );
-    assert_eq!(
-        proofs.len(),
-        MAX_BURNS_PER_BLOCK + 1,
-        "every proven burn across the scanned blocks is assembled"
-    );
-    assert_eq!(watcher.scanned_through(), TAIL_HEIGHT);
+#[test]
+fn burns_beyond_the_poll_budget_are_deferred_not_dropped() {
+    let per_block = MAX_BURNS_PER_POLL;
+    let source = Blocks {
+        head: 3,
+        counts: vec![per_block, per_block, per_block],
+    };
+    let mut watcher = BurnWatcher::new(0);
+    let mut total = 0usize;
+    for _ in 0..3 {
+        total += watcher.poll(&source).expect("poll").len();
+    }
+    assert_eq!(watcher.scanned_through(), 3, "every block is scanned across the polls");
+    assert_eq!(total, per_block * 3, "every burn is assembled exactly once, none dropped");
 }

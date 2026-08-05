@@ -46,5 +46,5 @@ pub use store::ReplayStore;
 pub use vault::{Vault, VaultBook};
 pub use watch::{
     is_bridge_burn_leaf, BurnWatchError, BurnWatcher, FinalizedBlock, QuantovaBurnSource,
-    MAX_BURNS_PER_BLOCK, MAX_HEIGHTS_PER_POLL,
+    MAX_BURNS_PER_POLL, MAX_HEIGHTS_PER_POLL,
 };
