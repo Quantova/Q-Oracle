@@ -46,7 +46,6 @@ fn divergence_digest(lock: &ObservedLock, ctx: &CorridorContext) -> [u8; 32] {
     buf.extend_from_slice(&lock.amount.to_le_bytes());
     buf.extend_from_slice(&lock.recipient);
     buf.extend_from_slice(&lock.observed_height.to_le_bytes());
-    buf.extend_from_slice(&lock.confirmations.to_le_bytes());
     buf.extend_from_slice(&ctx.dest_chain.to_le_bytes());
     buf.extend_from_slice(&ctx.route_id.to_le_bytes());
     sha3_256(&buf)
@@ -227,6 +226,19 @@ mod tests {
             Err(OperatorError::AlreadySigned)
         );
         assert_eq!(operator.state(), OperatorState::Running);
+    }
+
+    #[test]
+    fn re_observing_with_grown_confirmations_does_not_halt() {
+        let mut operator = op();
+        operator.observe_and_sign(&lock(), 900_000).expect("first observation signs");
+        let mut deeper = lock();
+        deeper.confirmations = 40;
+        assert_eq!(
+            operator.observe_and_sign(&deeper, 900_000),
+            Err(OperatorError::AlreadySigned)
+        );
+        assert!(!operator.is_halted());
     }
 
     #[test]

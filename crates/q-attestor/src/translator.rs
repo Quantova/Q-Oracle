@@ -11,13 +11,18 @@ use q_prover_bridge::{prove_statement, verify_statement, CommitmentProof, Corrid
 use crate::signer::AttestationSigner;
 use crate::watcher::{CorridorContext, ObservedLock};
 
-/// Lifetime, in Quantova (destination) blocks, granted to a translated deposit.
-/// The mint must be admitted before `dest_height + MESSAGE_TTL_BLOCKS`.
+/// Destination block window that bounds a translated deposit's lifetime.
 pub const MESSAGE_TTL_BLOCKS: u64 = 7_200;
 
-/// Translate a foreign lock into a Quantova bridge fact. `dest_height` is the
-/// best-known Quantova (destination) height at attestation time and seeds the
-/// signed deadline; it must come from the destination clock, never the source.
+fn expiry_deadline(dest_height: u64) -> u64 {
+    (dest_height / MESSAGE_TTL_BLOCKS)
+        .saturating_add(2)
+        .saturating_mul(MESSAGE_TTL_BLOCKS)
+}
+
+/// Translate a foreign lock into a Quantova bridge fact. Every field is a property
+/// of the observed deposit or a corridor constant, so operators observing the same
+/// lock produce byte identical facts that aggregate into one quorum.
 pub fn translate(lock: &ObservedLock, ctx: &CorridorContext, dest_height: u64) -> BridgeFact {
     let mut nonce_bytes = [0u8; 8];
     nonce_bytes.copy_from_slice(&lock.source_ref[0..8]);
@@ -32,9 +37,9 @@ pub fn translate(lock: &ObservedLock, ctx: &CorridorContext, dest_height: u64) -
         asset_id: AssetId(lock.asset_id),
         amount: lock.amount,
         recipient: Recipient(lock.recipient),
-        finality_depth: lock.confirmations,
+        finality_depth: ctx.required_confirmations,
         observed_height: lock.observed_height,
-        expiry_height: dest_height.saturating_add(MESSAGE_TTL_BLOCKS),
+        expiry_height: expiry_deadline(dest_height),
     }
 }
 
@@ -211,6 +216,17 @@ mod tests {
     fn translation_is_byte_deterministic_across_operators() {
         let a = translate(&lock(), &ctx(), 900_000);
         let b = translate(&lock(), &ctx(), 900_000);
+        assert_eq!(a.encode(), b.encode());
+    }
+
+    #[test]
+    fn operators_at_different_confirmations_and_heights_produce_one_fact() {
+        let mut early = lock();
+        early.confirmations = 6;
+        let mut late = lock();
+        late.confirmations = 40;
+        let a = translate(&early, &ctx(), 900_000);
+        let b = translate(&late, &ctx(), 900_050);
         assert_eq!(a.encode(), b.encode());
     }
 
