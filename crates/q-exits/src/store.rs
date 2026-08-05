@@ -45,6 +45,13 @@ impl ReplayStore {
         }
         Ok(())
     }
+
+    pub fn append(&self, bytes: &[u8]) -> io::Result<()> {
+        let mut file = fs::OpenOptions::new().create(true).append(true).open(&self.path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

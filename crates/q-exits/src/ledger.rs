@@ -3,13 +3,57 @@
 
 use std::collections::BTreeSet;
 
-use q_codec::{Reader, Writer};
-
 use crate::errors::ExitError;
 use crate::store::ReplayStore;
 
 pub const LEDGER_VERSION: u8 = 1;
 pub const MAX_LEDGER_ENTRIES: u32 = 4_000_000;
+
+const MAGIC: [u8; 4] = *b"QXLG";
+const HEADER_LEN: usize = 5;
+const FRAME_LEN: usize = 36;
+
+fn header() -> [u8; HEADER_LEN] {
+    let mut out = [0u8; HEADER_LEN];
+    out[..4].copy_from_slice(&MAGIC);
+    out[4] = LEDGER_VERSION;
+    out
+}
+
+fn tag_of(burn_ref: &[u8; 32]) -> [u8; 4] {
+    let digest = qtv_crypto::sha3::sha3_256(burn_ref);
+    [digest[0], digest[1], digest[2], digest[3]]
+}
+
+fn frame_of(burn_ref: &[u8; 32]) -> [u8; FRAME_LEN] {
+    let mut out = [0u8; FRAME_LEN];
+    out[..32].copy_from_slice(burn_ref);
+    out[32..].copy_from_slice(&tag_of(burn_ref));
+    out
+}
+
+fn load_frames(bytes: &[u8]) -> Result<(BTreeSet<[u8; 32]>, bool), ExitError> {
+    if bytes.len() < HEADER_LEN || bytes[..4] != MAGIC || bytes[4] != LEDGER_VERSION {
+        return Err(ExitError::PersistFailed);
+    }
+    let body = &bytes[HEADER_LEN..];
+    let whole = body.len() / FRAME_LEN;
+    let torn = body.len() % FRAME_LEN != 0;
+    if whole as u64 > MAX_LEDGER_ENTRIES as u64 {
+        return Err(ExitError::PersistFailed);
+    }
+    let mut set = BTreeSet::new();
+    for i in 0..whole {
+        let chunk = &body[i * FRAME_LEN..(i + 1) * FRAME_LEN];
+        let mut burn_ref = [0u8; 32];
+        burn_ref.copy_from_slice(&chunk[..32]);
+        if chunk[32..] != tag_of(&burn_ref)[..] {
+            return Err(ExitError::PersistFailed);
+        }
+        set.insert(burn_ref);
+    }
+    Ok((set, torn))
+}
 
 pub trait ReplayLedger {
     fn is_released(&self, burn_ref: &[u8; 32]) -> bool;
@@ -61,45 +105,32 @@ pub struct PersistentLedger {
 
 impl PersistentLedger {
     pub fn open(store: ReplayStore) -> Result<PersistentLedger, ExitError> {
-        let released = match store.load().map_err(|_| ExitError::PersistFailed)? {
-            Some(bytes) => decode_set(&bytes)?,
-            None => BTreeSet::new(),
+        let (released, torn) = match store.load().map_err(|_| ExitError::PersistFailed)? {
+            Some(bytes) => load_frames(&bytes)?,
+            None => {
+                store.save(&header()).map_err(|_| ExitError::PersistFailed)?;
+                (BTreeSet::new(), false)
+            }
         };
-        Ok(PersistentLedger { released, store })
+        let ledger = PersistentLedger { released, store };
+        if torn {
+            ledger.compact()?;
+        }
+        Ok(ledger)
     }
 
     pub fn store(&self) -> &ReplayStore {
         &self.store
     }
 
-    fn encode(&self) -> Vec<u8> {
-        let mut w = Writer::new();
-        w.u8(LEDGER_VERSION);
-        w.u32(self.released.len() as u32);
+    fn compact(&self) -> Result<(), ExitError> {
+        let mut out = Vec::with_capacity(HEADER_LEN + self.released.len() * FRAME_LEN);
+        out.extend_from_slice(&header());
         for burn_ref in &self.released {
-            w.fixed(burn_ref);
+            out.extend_from_slice(&frame_of(burn_ref));
         }
-        w.finish()
+        self.store.save(&out).map_err(|_| ExitError::PersistFailed)
     }
-}
-
-fn decode_set(input: &[u8]) -> Result<BTreeSet<[u8; 32]>, ExitError> {
-    let mut r = Reader::new(input);
-    let version = r.u8().map_err(|_| ExitError::PersistFailed)?;
-    if version != LEDGER_VERSION {
-        return Err(ExitError::PersistFailed);
-    }
-    let count = r.u32().map_err(|_| ExitError::PersistFailed)?;
-    if count > MAX_LEDGER_ENTRIES {
-        return Err(ExitError::PersistFailed);
-    }
-    let mut set = BTreeSet::new();
-    for _ in 0..count {
-        let burn_ref = r.array32().map_err(|_| ExitError::PersistFailed)?;
-        set.insert(burn_ref);
-    }
-    r.finish_ref().map_err(|_| ExitError::PersistFailed)?;
-    Ok(set)
 }
 
 impl ReplayLedger for PersistentLedger {
@@ -114,13 +145,12 @@ impl ReplayLedger for PersistentLedger {
         if self.released.len() >= MAX_LEDGER_ENTRIES as usize {
             return Err(ExitError::LedgerFull);
         }
-        self.released.insert(burn_ref);
-        match self.store.save(&self.encode()) {
-            Ok(()) => Ok(()),
-            Err(_) => {
-                self.released.remove(&burn_ref);
-                Err(ExitError::PersistFailed)
+        match self.store.append(&frame_of(&burn_ref)) {
+            Ok(()) => {
+                self.released.insert(burn_ref);
+                Ok(())
             }
+            Err(_) => Err(ExitError::PersistFailed),
         }
     }
 
@@ -189,6 +219,70 @@ mod tests {
             PersistentLedger::open(ReplayStore::new(path.clone())).err(),
             Some(ExitError::PersistFailed)
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_torn_tail_frame_is_dropped_and_the_committed_prefix_survives() {
+        let path = temp_path("torn");
+        {
+            let mut ledger = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+            ledger.record([0x01; 32]).unwrap();
+            ledger.record([0x02; 32]).unwrap();
+        }
+        let mut raw = std::fs::read(&path).unwrap();
+        raw.extend_from_slice(&[0xab; 20]);
+        std::fs::write(&path, &raw).unwrap();
+
+        let reopened = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+        assert!(reopened.is_released(&[0x01; 32]), "a committed frame before the torn tail survives");
+        assert!(reopened.is_released(&[0x02; 32]), "a committed frame before the torn tail survives");
+        assert_eq!(reopened.len(), 2, "the torn partial frame is dropped, not counted");
+
+        let compacted = std::fs::read(&path).unwrap();
+        assert_eq!(compacted.len(), HEADER_LEN + 2 * FRAME_LEN, "open compacts the torn tail away");
+        let again = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+        assert_eq!(again.len(), 2, "the compacted file reopens with exactly the committed set");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_complete_frame_with_a_bad_tag_fails_closed() {
+        let path = temp_path("badtag");
+        {
+            let mut ledger = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+            ledger.record([0x07; 32]).unwrap();
+        }
+        let mut raw = std::fs::read(&path).unwrap();
+        let last = raw.len() - 1;
+        raw[last] ^= 0xff;
+        std::fs::write(&path, &raw).unwrap();
+        assert_eq!(
+            PersistentLedger::open(ReplayStore::new(path.clone())).err(),
+            Some(ExitError::PersistFailed),
+            "a corrupt complete frame refuses to open rather than silently dropping a released burn"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_reopened_append_lands_after_a_compacted_torn_tail() {
+        let path = temp_path("append-after-torn");
+        {
+            let mut ledger = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+            ledger.record([0x01; 32]).unwrap();
+        }
+        let mut raw = std::fs::read(&path).unwrap();
+        raw.extend_from_slice(&[0xcd; 10]);
+        std::fs::write(&path, &raw).unwrap();
+        {
+            let mut ledger = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+            ledger.record([0x02; 32]).unwrap();
+        }
+        let reopened = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+        assert!(reopened.is_released(&[0x01; 32]), "the pre-crash record survives");
+        assert!(reopened.is_released(&[0x02; 32]), "the post-crash record is readable, not stranded behind orphan bytes");
+        assert_eq!(reopened.len(), 2);
         std::fs::remove_file(&path).ok();
     }
 }
