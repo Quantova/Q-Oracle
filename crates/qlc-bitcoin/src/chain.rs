@@ -119,7 +119,7 @@ pub fn check_retarget_boundary(
     if boundary.prev_block != period_last.block_hash() {
         return Err(SpvError::BrokenLink { index: 0 });
     }
-    let actual = period_last.timestamp.wrapping_sub(period_first.timestamp);
+    let actual = period_last.timestamp.saturating_sub(period_first.timestamp);
     let expected = compute_retarget(period_last.bits, actual, params);
     if boundary.bits != expected {
         return Err(SpvError::RetargetMismatch { index: 0 });
