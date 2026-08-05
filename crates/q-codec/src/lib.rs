@@ -336,6 +336,29 @@ impl BridgeFact {
 mod tests {
     use super::*;
 
+    #[test]
+    fn decode_never_panics_on_hostile_bytes() {
+        let mut state = 0x853c_49e6_748f_ea9bu64;
+        let mut rng = || {
+            state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        for i in 0..200_000u32 {
+            let len = (rng() % 400) as usize;
+            let mut buf = Vec::with_capacity(len + 1);
+            if i % 2 == 0 {
+                buf.push(FACT_VERSION);
+            }
+            for _ in 0..len {
+                buf.push((rng() & 0xff) as u8);
+            }
+            let _ = BridgeFact::decode(&buf);
+        }
+    }
+
     const DEST_ID: u64 = 0x0123_4567_89AB_CDEF;
 
     fn sample() -> BridgeFact {
