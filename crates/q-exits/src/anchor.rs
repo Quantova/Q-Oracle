@@ -61,6 +61,10 @@ impl QuantovaAnchor {
         if tau as usize > keys.len() {
             return Err(ExitError::TauAboveCommittee);
         }
+        let need = qtv_sampler::params::finality_threshold(keys.len() as u64);
+        if tau < need {
+            return Err(ExitError::TauBelowQuorum { tau, need });
+        }
         let commitment = CommitteeCommitment::from_member_keys(slot, keys, budget);
         Ok(QuantovaAnchor {
             chain_id,
@@ -140,6 +144,19 @@ mod tests {
         assert_eq!(
             QuantovaAnchor::from_config(1, 1, 0, 100, [0u8; 32], vec![m]).err(),
             Some(ExitError::BadPublicKeyLen)
+        );
+    }
+
+    #[test]
+    fn a_tau_below_the_committee_supermajority_is_refused() {
+        let committee: Vec<MemberConfig> = (1..=4)
+            .map(|id| MemberConfig { id, ..member() })
+            .collect();
+        // Four members need a finality threshold of three; a tau of two would let a
+        // sub-final certificate forge a burn.
+        assert_eq!(
+            QuantovaAnchor::from_config(1, 2, 0, 100, [0u8; 32], committee).err(),
+            Some(ExitError::TauBelowQuorum { tau: 2, need: 3 })
         );
     }
 

@@ -28,6 +28,7 @@ pub enum ExitError {
     UnsetAnchor,
     BadPublicKeyLen,
     TauAboveCommittee,
+    TauBelowQuorum { tau: u64, need: u64 },
     HeaderDecode,
     HeaderMismatch,
     HeightMismatch,
