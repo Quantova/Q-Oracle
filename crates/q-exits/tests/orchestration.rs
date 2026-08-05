@@ -214,6 +214,30 @@ fn a_burn_that_hits_a_thin_vault_is_retried_not_dropped() {
 }
 
 #[test]
+fn a_burn_for_another_destination_is_dropped_not_re_queued_forever() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let node = node(&members, &beacon);
+
+    // The desk serves a different destination chain than the burn names, so the
+    // burn fails permanently with WrongDestination and must not accumulate.
+    let mut cfg = config();
+    cfg.dest_chain = CHAIN_ID + 1;
+    let mut desk = ExitDesk::new(cfg, anchor(&members, &beacon)).unwrap();
+    desk.register_vault(VAULT, 2_000);
+
+    let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
+    let opened = feed.drive(&node, &mut desk, VAULT, 10).expect("the feed drives");
+    assert_eq!(opened.len(), 0);
+    assert_eq!(
+        feed.pending_len(),
+        0,
+        "a permanent failure is dropped, not re-queued every poll"
+    );
+    assert!(!desk.is_consumed(&BURN_REF));
+}
+
+#[test]
 fn a_gated_off_feed_opens_nothing() {
     let members = attesters();
     let beacon = Beacon::genesis();
