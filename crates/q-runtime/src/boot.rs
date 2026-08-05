@@ -365,9 +365,12 @@ mod tests {
             deposit_height: 0,
             branch: vec![],
             raw_tx: raw,
-            deposit_script: bridge.to_vec(),
         };
-        (material, BitcoinAnchor { checkpoint, params: EASY }, txid)
+        (
+            material,
+            BitcoinAnchor { checkpoint, params: EASY, bridge_script: bridge.to_vec() },
+            txid,
+        )
     }
 
     fn foreign_asset_count() -> usize {

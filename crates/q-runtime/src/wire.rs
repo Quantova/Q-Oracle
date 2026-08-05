@@ -253,7 +253,6 @@ fn encode_proof(proof: &DepositProof) -> Json {
                 ),
             ),
             ("raw_tx", hexs(&material.raw_tx)),
-            ("deposit_script", hexs(&material.deposit_script)),
             ("fact", hexs(&fact.encode())),
         ]),
         DepositProof::Ethereum {
@@ -387,7 +386,6 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                     deposit_height: as_u32(field(j, "deposit_height")?, "deposit_height")?,
                     branch,
                     raw_tx: as_hex(field(j, "raw_tx")?, "raw_tx")?,
-                    deposit_script: as_hex(field(j, "deposit_script")?, "deposit_script")?,
                 },
                 fact: decode_fact(j)?,
             })
@@ -1757,7 +1755,6 @@ mod tests {
                 sibling_on_left: true,
             }],
             raw_tx: vec![0x01, 0x02, 0x03, 0x04],
-            deposit_script: vec![0x76, 0xa9, 0x14],
         };
         round_request(Request::SubmitDeposit(DepositRequest {
             proof: DepositProof::Bitcoin {

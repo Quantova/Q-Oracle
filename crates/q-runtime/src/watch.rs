@@ -42,8 +42,6 @@ pub const MAX_PROOFS_PER_POLL: usize = 256;
 
 pub const MAX_RAW_TX: usize = 100_000;
 
-pub const MAX_DEPOSIT_SCRIPT: usize = 512;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchError {
     SourceUnavailable,
@@ -59,7 +57,6 @@ fn within_bounds(proof: &DepositProof) -> bool {
             material.headers.len() <= MAX_HEADERS
                 && material.branch.len() <= MAX_BRANCH
                 && material.raw_tx.len() <= MAX_RAW_TX
-                && material.deposit_script.len() <= MAX_DEPOSIT_SCRIPT
         }
         DepositProof::Ethereum { update, deposit, .. } => {
             update.sync_aggregate.participation.len() <= MAX_PARTICIPATION
@@ -319,7 +316,6 @@ mod tests {
 
     struct BitcoinNode {
         raw_tx: Vec<u8>,
-        bridge_script: Vec<u8>,
         asset_id: [u8; 16],
         recipient: [u8; 32],
         amount: u128,
@@ -340,7 +336,6 @@ mod tests {
                 deposit_height: 0,
                 branch: vec![],
                 raw_tx: self.raw_tx.clone(),
-                deposit_script: self.bridge_script.clone(),
             };
             let fact = BridgeFact {
                 version: FACT_VERSION,
@@ -390,11 +385,10 @@ mod tests {
         state
             .write()
             .unwrap()
-            .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6 });
+            .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6, bridge_script: bridge.clone() });
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(BitcoinNode {
             raw_tx: raw,
-            bridge_script: bridge,
             asset_id,
             recipient,
             amount: 250_000,
@@ -480,7 +474,6 @@ mod tests {
             deposit_height: 0,
             branch: vec![],
             raw_tx: vec![0u8; 4],
-            deposit_script: vec![],
         };
         let state = shared(boot());
         let mut pool = WatcherPool::new();
@@ -532,11 +525,10 @@ mod tests {
         state
             .write()
             .unwrap()
-            .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6 });
+            .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6, bridge_script: bridge.clone() });
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(BitcoinNode {
             raw_tx: raw,
-            bridge_script: bridge,
             asset_id,
             recipient,
             amount: 250_000,
@@ -601,7 +593,6 @@ mod tests {
                 deposit_height: 0,
                 branch: vec![],
                 raw_tx: vec![0u8; 4],
-                deposit_script: vec![],
             };
             proofs.push(bitcoin_proof(material, btc_fact(txid)));
         }

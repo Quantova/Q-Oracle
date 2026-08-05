@@ -28,13 +28,13 @@ pub struct BitcoinProofMaterial {
     pub deposit_height: u32,
     pub branch: Vec<MerkleStep>,
     pub raw_tx: Vec<u8>,
-    pub deposit_script: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitcoinAnchor {
     pub checkpoint: Checkpoint,
     pub params: NetworkParams,
+    pub bridge_script: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,15 +304,15 @@ pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<D
     let kind = match (tier, network, &request.proof) {
         (Tier::Federated, _, DepositProof::Federated(env)) => PlanKind::Federated(env.clone()),
         (Tier::ProofBacked, Network::Bitcoin, DepositProof::Bitcoin { material, fact }) => {
-            let (params, checkpoint) = {
+            let (params, checkpoint, bridge_script) = {
                 let anchor = state
                     .bitcoin_anchor
                     .as_ref()
                     .ok_or(ApiError::NoAnchor(Network::Bitcoin.id()))?;
-                if anchor.checkpoint.min_work.is_zero() {
+                if anchor.checkpoint.min_work.is_zero() || anchor.bridge_script.is_empty() {
                     return Err(ApiError::NoAnchor(Network::Bitcoin.id()));
                 }
-                (anchor.params, anchor.checkpoint.clone())
+                (anchor.params, anchor.checkpoint.clone(), anchor.bridge_script.clone())
             };
             let chain = verify_chain(&material.headers, material.start_height, &params)
                 .map_err(ApiError::BitcoinSpv)?;
@@ -323,7 +323,7 @@ pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<D
                 material.deposit_height,
                 &material.branch,
                 &material.raw_tx,
-                &material.deposit_script,
+                &bridge_script,
             )
             .map_err(ApiError::BitcoinSpv)?;
             PlanKind::Bitcoin { proven, fact: fact.clone() }
@@ -595,9 +595,12 @@ mod tests {
             deposit_height: 0,
             branch: vec![],
             raw_tx: raw,
-            deposit_script: bridge.to_vec(),
         };
-        (material, BitcoinAnchor { checkpoint, params: EASY }, txid)
+        (
+            material,
+            BitcoinAnchor { checkpoint, params: EASY, bridge_script: bridge.to_vec() },
+            txid,
+        )
     }
 
     fn bitcoin_fact(asset: [u8; 16], txid: [u8; 32], recipient: [u8; 32], amount: u128) -> BridgeFact {
@@ -812,6 +815,30 @@ mod tests {
     }
 
     #[test]
+    fn a_bitcoin_deposit_paying_a_script_other_than_the_pinned_bridge_script_is_refused() {
+        let mut state = empty_state(0);
+        let view = bitcoin_pool(&mut state);
+        let attacker = p2pkh([0xaau8; 20]);
+        let recipient = [0x42u8; 32];
+        let (material, mut anchor, txid) = bitcoin_deposit(&attacker, recipient, 250_000);
+        anchor.bridge_script = p2pkh([0x11u8; 20]);
+        state.set_bitcoin_anchor(anchor);
+        let fact = bitcoin_fact(view.asset_id, txid, recipient, 250_000);
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Bitcoin { material, fact },
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Error(ApiError::BitcoinSpv(SpvError::TransactionMismatch)),
+            "a real payment to an attacker chosen script, not the pinned bridge script, mints nothing"
+        );
+        assert_eq!(state.gateway.minted_of_asset(&view.asset_id), 0);
+    }
+
+    #[test]
     fn a_bitcoin_deposit_that_does_not_verify_against_the_pinned_checkpoint_is_rejected() {
         let mut state = empty_state(0);
         let view = bitcoin_pool(&mut state);
@@ -825,6 +852,7 @@ mod tests {
                 min_work: U256::ONE,
             },
             params: EASY,
+            bridge_script: bridge.to_vec(),
         };
         state.set_bitcoin_anchor(foreign);
         let fact = bitcoin_fact(view.asset_id, txid, recipient, 250_000);
@@ -854,6 +882,7 @@ mod tests {
                 ..anchor.checkpoint.clone()
             },
             params: anchor.params,
+            bridge_script: anchor.bridge_script.clone(),
         };
         state.set_bitcoin_anchor(unset);
         let fact = bitcoin_fact(view.asset_id, txid, recipient, 250_000);
