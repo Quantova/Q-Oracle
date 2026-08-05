@@ -263,6 +263,19 @@ fn handle_connection(
         return write_error(&mut stream, 404, "unknown_method", "methods live under /v1/");
     };
 
+    if method == "health" {
+        let revision = {
+            let guard = state.read().unwrap_or_else(|e| e.into_inner());
+            guard.gateway.guard_revision()
+        };
+        let body = object(vec![
+            ("status", Json::str("ok")),
+            ("revision", Json::Int(revision)),
+        ])
+        .render();
+        return write_response(&mut stream, 200, &body);
+    }
+
     let parsed = if body_text.trim().is_empty() {
         Json::Object(Vec::new())
     } else {
@@ -617,6 +630,18 @@ mod tests {
         );
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.contains("\"result\":\"pools\""), "{response}");
+    }
+
+    #[test]
+    fn a_health_probe_returns_ok_over_the_socket() {
+        let port = serve_seeded();
+        let response = round_trip(
+            port,
+            "POST /v1/health HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n",
+        );
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.contains("\"status\":\"ok\""), "{response}");
+        assert!(response.contains("\"revision\""), "{response}");
     }
 
     #[test]
