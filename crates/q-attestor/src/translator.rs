@@ -20,9 +20,7 @@ fn expiry_deadline(dest_height: u64) -> u64 {
         .saturating_mul(MESSAGE_TTL_BLOCKS)
 }
 
-/// Translate a foreign lock into a Quantova bridge fact. Every field is a property
-/// of the observed deposit or a corridor constant, so operators observing the same
-/// lock produce byte identical facts that aggregate into one quorum.
+/// Translate a foreign lock into a Quantova bridge fact.
 pub fn translate(lock: &ObservedLock, ctx: &CorridorContext, dest_height: u64) -> BridgeFact {
     let mut nonce_bytes = [0u8; 8];
     nonce_bytes.copy_from_slice(&lock.source_ref[0..8]);

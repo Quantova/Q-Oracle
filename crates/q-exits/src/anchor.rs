@@ -152,8 +152,6 @@ mod tests {
         let committee: Vec<MemberConfig> = (1..=4)
             .map(|id| MemberConfig { id, ..member() })
             .collect();
-        // Four members need a finality threshold of three; a tau of two would let a
-        // sub-final certificate forge a burn.
         assert_eq!(
             QuantovaAnchor::from_config(1, 2, 0, 100, [0u8; 32], committee).err(),
             Some(ExitError::TauBelowQuorum { tau: 2, need: 3 })
