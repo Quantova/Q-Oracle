@@ -57,6 +57,7 @@ impl From<AirlockError> for Refused {
         match e {
             AirlockError::Unparseable => Refused::Foreign,
             AirlockError::BadVersion => Refused::Malformed,
+            AirlockError::NonCanonical => Refused::Malformed,
             AirlockError::Codec(_) => Refused::Malformed,
         }
     }

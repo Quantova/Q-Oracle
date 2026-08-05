@@ -37,6 +37,7 @@ pub enum Artifact {
 pub enum AirlockError {
     Unparseable,
     BadVersion,
+    NonCanonical,
     Codec(CodecError),
 }
 
@@ -52,8 +53,10 @@ impl AttestationEnvelope {
         w.u8(ARTIFACT_ATTESTATION);
         w.u8(ENVELOPE_VERSION);
         w.fixed(&self.fact.encode());
-        w.u32(self.signatures.len() as u32);
-        for s in &self.signatures {
+        let mut sigs: Vec<&SignerSig> = self.signatures.iter().collect();
+        sigs.sort_by_key(|s| s.operator_id);
+        w.u32(sigs.len() as u32);
+        for s in sigs {
             w.u32(s.operator_id);
             w.bytes_u16(&s.signature);
         }
@@ -89,9 +92,19 @@ fn parse_attestation(r: &mut Reader) -> Result<AttestationEnvelope, AirlockError
     let fact_bytes = r.fixed(FACT_ENCODED_LEN)?;
     let fact = BridgeFact::decode(fact_bytes)?;
     let count = r.u32()?;
+    if count == 0 {
+        return Err(AirlockError::NonCanonical);
+    }
     let mut signatures = Vec::new();
+    let mut last_id: Option<u32> = None;
     for _ in 0..count {
         let operator_id = r.u32()?;
+        if let Some(prev) = last_id {
+            if operator_id <= prev {
+                return Err(AirlockError::NonCanonical);
+            }
+        }
+        last_id = Some(operator_id);
         let signature = r.bytes_u16()?.to_vec();
         signatures.push(SignerSig {
             operator_id,
@@ -215,7 +228,10 @@ mod tests {
     fn trailing_bytes_after_attestation_are_rejected() {
         let env = AttestationEnvelope {
             fact: fact(),
-            signatures: vec![],
+            signatures: vec![SignerSig {
+                operator_id: 0,
+                signature: vec![1u8; 8],
+            }],
         };
         let mut bytes = env.encode();
         bytes.push(0);
@@ -223,5 +239,40 @@ mod tests {
             parse(&bytes),
             Err(AirlockError::Codec(CodecError::TrailingBytes))
         ));
+    }
+
+    #[test]
+    fn an_attestation_encoding_is_canonical_by_operator_id() {
+        let sig = |id: u32| SignerSig {
+            operator_id: id,
+            signature: vec![1u8; 8],
+        };
+
+        let canonical = AttestationEnvelope {
+            fact: fact(),
+            signatures: vec![sig(0), sig(4)],
+        };
+        assert!(parse(&canonical.encode()).is_ok());
+
+        let unsorted = AttestationEnvelope {
+            fact: fact(),
+            signatures: vec![sig(4), sig(0)],
+        };
+        assert_eq!(unsorted.encode(), canonical.encode());
+
+        let duplicate = AttestationEnvelope {
+            fact: fact(),
+            signatures: vec![sig(2), sig(2)],
+        };
+        assert!(matches!(
+            parse(&duplicate.encode()),
+            Err(AirlockError::NonCanonical)
+        ));
+
+        let empty = AttestationEnvelope {
+            fact: fact(),
+            signatures: vec![],
+        };
+        assert!(matches!(parse(&empty.encode()), Err(AirlockError::NonCanonical)));
     }
 }
