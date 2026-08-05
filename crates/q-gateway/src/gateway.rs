@@ -16,7 +16,7 @@ pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
-const GUARD_SNAPSHOT_VERSION: u8 = 2;
+const GUARD_SNAPSHOT_VERSION: u8 = 3;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
@@ -689,6 +689,21 @@ impl Gateway {
             w.u32(*source_chain);
             w.u64(*cursor);
         }
+        w.u64(self.current_epoch);
+        w.u32(self.per_asset_epoch_minted.len() as u32);
+        for (asset_id, minted) in &self.per_asset_epoch_minted {
+            w.fixed(asset_id);
+            w.u128(*minted);
+        }
+        w.u64(self.next_exit_id);
+        w.u32(self.pending_exits.len() as u32);
+        for ticket in self.pending_exits.values() {
+            w.u64(ticket.exit_id);
+            w.fixed(&ticket.asset_id);
+            w.u128(ticket.amount);
+            w.fixed(&ticket.destination);
+            w.u64(ticket.unlock_height);
+        }
         w.finish()
     }
 
@@ -701,6 +716,10 @@ impl Gateway {
         self.per_asset_minted = state.per_asset_minted;
         self.paused_sources = state.paused_sources;
         self.corridor_cursor = state.corridor_cursor;
+        self.current_epoch = state.current_epoch;
+        self.per_asset_epoch_minted = state.per_asset_epoch_minted;
+        self.next_exit_id = state.next_exit_id;
+        self.pending_exits = state.pending_exits;
         Ok(())
     }
 }
@@ -713,6 +732,10 @@ struct GuardState {
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     paused_sources: BTreeSet<u32>,
     corridor_cursor: BTreeMap<u32, u64>,
+    current_epoch: u64,
+    per_asset_epoch_minted: BTreeMap<[u8; 16], u128>,
+    next_exit_id: u64,
+    pending_exits: BTreeMap<u64, ExitTicket>,
 }
 
 fn bounded_count(r: &mut Reader, item_size: usize) -> Result<usize, CodecError> {
@@ -767,6 +790,38 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         corridor_cursor.insert(source_chain, cursor);
     }
 
+    let current_epoch = r.u64()?;
+
+    let count = bounded_count(&mut r, 32)?;
+    let mut per_asset_epoch_minted = BTreeMap::new();
+    for _ in 0..count {
+        let asset_id = r.array16()?;
+        let minted = r.u128()?;
+        per_asset_epoch_minted.insert(asset_id, minted);
+    }
+
+    let next_exit_id = r.u64()?;
+
+    let count = bounded_count(&mut r, 80)?;
+    let mut pending_exits = BTreeMap::new();
+    for _ in 0..count {
+        let exit_id = r.u64()?;
+        let asset_id = r.array16()?;
+        let amount = r.u128()?;
+        let destination = r.array32()?;
+        let unlock_height = r.u64()?;
+        pending_exits.insert(
+            exit_id,
+            ExitTicket {
+                exit_id,
+                asset_id,
+                amount,
+                destination,
+                unlock_height,
+            },
+        );
+    }
+
     r.finish()?;
     Ok(GuardState {
         global_pause,
@@ -776,6 +831,10 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         per_asset_minted,
         paused_sources,
         corridor_cursor,
+        current_epoch,
+        per_asset_epoch_minted,
+        next_exit_id,
+        pending_exits,
     })
 }
 
@@ -1206,6 +1265,51 @@ mod tests {
             restored.process_deposit(&envelope(&s[0..6], &f)),
             Err(GatewayError::ReplayedReference),
             "the same deposit is a replay once the guard is rehydrated"
+        );
+    }
+
+    #[test]
+    fn the_guard_snapshot_persists_the_epoch_counter_and_pending_exits() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 10_000);
+        gw.register_asset_epoch_cap([0xa1; 16], 300);
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 300, 1), Ok(()));
+        let ticket = gw
+            .request_exit([0xa1; 16], 100, [0xdd; 32])
+            .expect("an exit is requested");
+        let exit_id = ticket.exit_id;
+
+        let snapshot = gw.encode_guard();
+        drop(gw);
+
+        let s2: Vec<_> = (0..3).map(signer).collect();
+        let mut set2 = OperatorSet::new(3);
+        for (id, pk, _) in &s2 {
+            set2.register(*id, *pk);
+        }
+        let mut restored = Gateway::new(9000, DEST_ID, set2, 1_000_000);
+        restored.register_corridor(1, 6);
+        restored.register_asset_cap([0xa1; 16], 10_000);
+        restored.register_asset_epoch_cap([0xa1; 16], 300);
+        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+
+        assert!(
+            matches!(
+                restored.admit_trustless([0xa1; 16], [0x02; 32], 1, 1),
+                Err(GatewayError::EpochCapExceeded { .. })
+            ),
+            "the per asset epoch counter survives the restart so the cap still holds"
+        );
+        assert_eq!(
+            restored.finalize_exit(exit_id).map(|t| t.amount),
+            Ok(100),
+            "the pending exit survives the restart and can be finalized"
         );
     }
 
