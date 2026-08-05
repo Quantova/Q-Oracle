@@ -1349,6 +1349,7 @@ fn trustless_err_from(j: &Json) -> Result<TrustlessError, WireError> {
 fn federated_err_json(e: &FederatedError) -> Json {
     match e {
         FederatedError::Foreign => tagged("federated", "foreign", vec![]),
+        FederatedError::Malformed => tagged("federated", "malformed", vec![]),
         FederatedError::NotFederated => tagged("federated", "not_federated", vec![]),
         FederatedError::CorridorSourceMismatch { corridor, fact } => tagged(
             "federated",
@@ -1382,6 +1383,7 @@ fn federated_err_json(e: &FederatedError) -> Json {
 fn federated_err_from(j: &Json) -> Result<FederatedError, WireError> {
     match code_of(j)? {
         "foreign" => Ok(FederatedError::Foreign),
+        "malformed" => Ok(FederatedError::Malformed),
         "not_federated" => Ok(FederatedError::NotFederated),
         "corridor_source_mismatch" => Ok(FederatedError::CorridorSourceMismatch {
             corridor: as_u32(field(j, "corridor")?, "corridor")?,

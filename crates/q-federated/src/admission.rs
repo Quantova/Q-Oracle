@@ -12,6 +12,7 @@ use crate::sources::SourceRegistry;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FederatedError {
     Foreign,
+    Malformed,
     NotFederated,
     CorridorSourceMismatch { corridor: u32, fact: u32 },
     UndeclaredSource(u32),
@@ -32,8 +33,10 @@ pub fn admit(
     sources: &SourceRegistry,
     env: &AttestationEnvelope,
 ) -> Result<MintReceipt, FederatedError> {
-    q_isolation::admit_artifact(&Artifact::Attestation(env.clone()))
-        .map_err(|_| FederatedError::Foreign)?;
+    q_isolation::admit_artifact(&Artifact::Attestation(env.clone())).map_err(|e| match e {
+        q_isolation::Refused::Foreign => FederatedError::Foreign,
+        q_isolation::Refused::Malformed => FederatedError::Malformed,
+    })?;
 
     if !corridor.is_federated() {
         return Err(FederatedError::NotFederated);
@@ -259,9 +262,10 @@ mod tests {
         let c = find(SOLANA).unwrap();
         assert_eq!(
             admit(&mut gw, &c, &sources, &env),
-            Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 1, need: 3 })),
-            "three copies of one signer collapse to a single distinct operator"
+            Err(FederatedError::Malformed),
+            "three copies of one signer are not a canonical envelope and never reach the mint"
         );
+        assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use q_airlock::{Artifact, AttestationEnvelope, StarkEnvelope};
+use q_airlock::{Artifact, AttestationEnvelope, SignerSig, StarkEnvelope};
 use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
 use q_isolation::{admit, PqArtifact, ATTESTATION_TAG, STARK_TAG};
 
@@ -50,7 +50,10 @@ fn valid_fact() -> BridgeFact {
 fn valid_attestation_bytes() -> Vec<u8> {
     AttestationEnvelope {
         fact: valid_fact(),
-        signatures: Vec::new(),
+        signatures: vec![SignerSig {
+            operator_id: 0,
+            signature: vec![7u8; 8],
+        }],
     }
     .encode()
 }

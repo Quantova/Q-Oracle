@@ -161,7 +161,8 @@ fn a_duplicate_signer_does_not_double_count() {
 
     assert_eq!(
         admit(&mut gw, &c, &sources, &env),
-        Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 2, need: 3 }))
+        Err(FederatedError::Malformed),
+        "a duplicated signer is not a canonical envelope so it never reaches the quorum count"
     );
     assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
 }
