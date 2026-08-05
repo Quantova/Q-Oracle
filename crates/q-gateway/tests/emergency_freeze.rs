@@ -130,25 +130,62 @@ fn a_short_freeze_quorum_does_not_freeze() {
 }
 
 #[test]
-fn one_honest_watchdog_can_pause_within_a_bounded_window() {
+fn a_watchdog_pauses_deposits_but_never_strands_a_pending_exit() {
     let ops: Vec<Op> = (0..4).map(mk).collect();
     let mut gw = gateway(&ops);
     gw.advance_to(1_000);
 
+    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &deposit([0x20; 32], 500)))
+        .expect("a deposit mints before any pause");
+    let ticket = gw
+        .request_exit(ASSET, 500, [0x99; 32])
+        .expect("a withdrawal is queued before the pause");
+
     let until = 1_000 + WATCHDOG_MAX_WINDOW;
     let alarm = sign_ctx(&ops[3], &until_message(until), WATCHDOG_DOMAIN);
-    gw.watchdog_freeze(until, &alarm).expect("a single honest watcher pauses the gateway");
-    assert!(gw.is_frozen());
+    gw.watchdog_freeze(until, &alarm).expect("a single honest watcher pauses new deposits");
 
     let held = gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &deposit([0x21; 32], 500)));
-    assert_eq!(held, Err(GatewayError::Frozen { until }));
+    assert_eq!(held, Err(GatewayError::Frozen { until }), "a watchdog pause holds new deposits");
+
+    let paid = gw
+        .finalize_exit(ticket.exit_id)
+        .expect("a lone watchdog can never strand a pending withdrawal");
+    assert_eq!(paid.amount, 500);
 
     gw.advance_to(until);
-    assert!(!gw.is_frozen());
     let minted = gw
         .process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &deposit([0x22; 32], 500)))
         .expect("the watchdog pause expires on its own");
     assert_eq!(minted.amount, 500);
+}
+
+#[test]
+fn a_quorum_freeze_still_halts_exits_where_a_watchdog_does_not() {
+    let ops: Vec<Op> = (0..4).map(mk).collect();
+    let mut gw = gateway(&ops);
+    gw.advance_to(1_000);
+
+    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &deposit([0x30; 32], 500)))
+        .expect("a deposit mints before the freeze");
+    let ticket = gw
+        .request_exit(ASSET, 500, [0x99; 32])
+        .expect("a withdrawal is queued before the freeze");
+
+    let sigs: Vec<SignerSig> = ops[0..3]
+        .iter()
+        .map(|op| sign_ctx(op, &until_message(1_100), FREEZE_DOMAIN))
+        .collect();
+    gw.emergency_freeze(1_100, &sigs).expect("a bonded quorum freezes the whole gateway");
+
+    let held = gw.finalize_exit(ticket.exit_id);
+    assert_eq!(held, Err(GatewayError::Frozen { until: 1_100 }), "a quorum freeze halts exits too");
+
+    gw.advance_to(1_100);
+    let paid = gw
+        .finalize_exit(ticket.exit_id)
+        .expect("the exit reopens once the quorum freeze expires");
+    assert_eq!(paid.amount, 500);
 }
 
 #[test]

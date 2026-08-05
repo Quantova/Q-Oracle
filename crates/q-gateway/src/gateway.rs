@@ -16,7 +16,7 @@ pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
-const GUARD_SNAPSHOT_VERSION: u8 = 3;
+const GUARD_SNAPSHOT_VERSION: u8 = 4;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
@@ -68,6 +68,7 @@ pub struct Gateway {
     global_pause: bool,
     current_height: u64,
     frozen_until: u64,
+    deposit_frozen_until: u64,
     exit_delay: u64,
     next_exit_id: u64,
     pending_exits: BTreeMap<u64, ExitTicket>,
@@ -95,6 +96,7 @@ impl Gateway {
             global_pause: false,
             current_height: 0,
             frozen_until: 0,
+            deposit_frozen_until: 0,
             exit_delay: 0,
             next_exit_id: 0,
             pending_exits: BTreeMap::new(),
@@ -134,6 +136,10 @@ impl Gateway {
 
     pub fn is_frozen(&self) -> bool {
         self.current_height < self.frozen_until
+    }
+
+    fn mint_freeze_horizon(&self) -> u64 {
+        self.frozen_until.max(self.deposit_frozen_until)
     }
 
     pub fn corridor_tier(&self, source_chain: u32) -> Option<u8> {
@@ -365,8 +371,8 @@ impl Gateway {
             std::slice::from_ref(sig),
             &self.operators,
         )?;
-        if until_height > self.frozen_until {
-            self.frozen_until = until_height;
+        if until_height > self.deposit_frozen_until {
+            self.deposit_frozen_until = until_height;
             self.touch_guard();
         }
         Ok(())
@@ -488,9 +494,9 @@ impl Gateway {
         if self.global_pause {
             return Err(GatewayError::GlobalPause);
         }
-        if self.current_height < self.frozen_until {
+        if self.current_height < self.mint_freeze_horizon() {
             return Err(GatewayError::Frozen {
-                until: self.frozen_until,
+                until: self.mint_freeze_horizon(),
             });
         }
         if self.paused_sources.contains(&source_chain) {
@@ -546,9 +552,9 @@ impl Gateway {
         if self.global_pause {
             return Err(GatewayError::GlobalPause);
         }
-        if self.current_height < self.frozen_until {
+        if self.current_height < self.mint_freeze_horizon() {
             return Err(GatewayError::Frozen {
-                until: self.frozen_until,
+                until: self.mint_freeze_horizon(),
             });
         }
         let fact = &env.fact;
@@ -669,6 +675,7 @@ impl Gateway {
         w.u8(GUARD_SNAPSHOT_VERSION);
         w.u8(self.global_pause as u8);
         w.u64(self.frozen_until);
+        w.u64(self.deposit_frozen_until);
         w.u128(self.epoch_minted);
         w.u32(self.used_refs.len() as u32);
         for (source_chain, reference) in &self.used_refs {
@@ -711,6 +718,7 @@ impl Gateway {
         let state = decode_guard(bytes)?;
         self.global_pause = state.global_pause;
         self.frozen_until = state.frozen_until;
+        self.deposit_frozen_until = state.deposit_frozen_until;
         self.epoch_minted = state.epoch_minted;
         self.used_refs = state.used_refs;
         self.per_asset_minted = state.per_asset_minted;
@@ -727,6 +735,7 @@ impl Gateway {
 struct GuardState {
     global_pause: bool,
     frozen_until: u64,
+    deposit_frozen_until: u64,
     epoch_minted: u128,
     used_refs: BTreeSet<(u32, [u8; 32])>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
@@ -758,6 +767,7 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         other => return Err(CodecError::UnknownTag(other)),
     };
     let frozen_until = r.u64()?;
+    let deposit_frozen_until = r.u64()?;
     let epoch_minted = r.u128()?;
 
     let count = bounded_count(&mut r, 36)?;
@@ -826,6 +836,7 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
     Ok(GuardState {
         global_pause,
         frozen_until,
+        deposit_frozen_until,
         epoch_minted,
         used_refs,
         per_asset_minted,
@@ -1310,6 +1321,48 @@ mod tests {
             restored.finalize_exit(exit_id).map(|t| t.amount),
             Ok(100),
             "the pending exit survives the restart and can be finalized"
+        );
+    }
+
+    #[test]
+    fn the_guard_snapshot_persists_a_watchdog_deposit_pause() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+        gw.advance_to(1_000);
+
+        let until = 1_500;
+        let alarm = SignerSig {
+            operator_id: s[0].0,
+            signature: ml_dsa::sign(&s[0].2, &freeze_message(until, DEST_ID), WATCHDOG_DOMAIN, &[0u8; 32])
+                .unwrap()
+                .to_vec(),
+        };
+        gw.watchdog_freeze(until, &alarm).expect("a watchdog pauses new deposits");
+
+        let snapshot = gw.encode_guard();
+        drop(gw);
+
+        let s2: Vec<_> = (0..3).map(signer).collect();
+        let mut set2 = OperatorSet::new(3);
+        for (id, pk, _) in &s2 {
+            set2.register(*id, *pk);
+        }
+        let mut restored = Gateway::new(9000, DEST_ID, set2, 1_000_000);
+        restored.register_corridor(1, 6);
+        restored.register_asset_cap([0xa1; 16], 1_000);
+        restored.advance_to(1_000);
+        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+
+        assert_eq!(
+            restored.admit_trustless([0xa1; 16], [0x01; 32], 100, 1),
+            Err(GatewayError::Frozen { until }),
+            "the watchdog deposit pause survives the restart"
         );
     }
 
