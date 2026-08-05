@@ -94,6 +94,9 @@ pub fn verify_quorum(
 ) -> Result<BTreeSet<u32>, GatewayError> {
     let mut distinct: BTreeSet<u32> = BTreeSet::new();
     for s in sigs {
+        if distinct.contains(&s.operator_id) {
+            continue;
+        }
         let pk = set
             .pubkey(s.operator_id)
             .ok_or(GatewayError::UnknownOperator(s.operator_id))?;
