@@ -1303,6 +1303,28 @@ mod tests {
     }
 
     #[test]
+    fn a_pending_exit_still_counts_toward_the_cap_after_a_snapshot_restart() {
+        let mut gw = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 500);
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 500, 1), Ok(()));
+        gw.request_exit([0xa1; 16], 500, [0xdd; 32]).expect("the exit request burns");
+        let snapshot = gw.encode_guard();
+
+        let mut restored = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
+        restored.register_corridor(1, 6);
+        restored.register_asset_cap([0xa1; 16], 500);
+        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+        assert!(
+            matches!(
+                restored.admit_trustless([0xa1; 16], [0x02; 32], 500, 1),
+                Err(GatewayError::AssetCapExceeded { .. })
+            ),
+            "a persisted pending exit must still count toward the cap after a restart"
+        );
+    }
+
+    #[test]
     fn an_admin_freeze_signed_for_one_destination_does_not_replay_on_another() {
         let s: Vec<_> = (0..3).map(signer).collect();
         let mut set_here = OperatorSet::new(3);
