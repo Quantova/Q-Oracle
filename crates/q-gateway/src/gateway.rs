@@ -1234,6 +1234,75 @@ mod tests {
     }
 
     #[test]
+    fn a_random_walk_of_mints_exits_cancels_and_finalizes_never_exceeds_the_per_asset_cap() {
+        let mut st = 0x9e37_79b9_7f4a_7c15u64;
+        let mut rng = || {
+            st = st.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = st;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        let mut gw = Gateway::new(9000, DEST_ID, OperatorSet::new(0), u128::MAX);
+        gw.register_corridor(1, 6);
+        let assets = [[0xa1u8; 16], [0xa2u8; 16], [0xa3u8; 16]];
+        for a in &assets {
+            gw.register_asset_cap(*a, 1000);
+        }
+        let mut ref_ctr = 0u64;
+        let mut tickets: Vec<u64> = Vec::new();
+        for _ in 0..8000 {
+            let a = assets[(rng() % 3) as usize];
+            match rng() % 6 {
+                0 | 1 => {
+                    let amt = (rng() % 500) as u128;
+                    if amt > 0 {
+                        let mut r = [0u8; 32];
+                        r[..8].copy_from_slice(&ref_ctr.to_le_bytes());
+                        ref_ctr += 1;
+                        let _ = gw.admit_trustless(a, r, amt, 1);
+                    }
+                }
+                2 => {
+                    let minted = gw.minted_of_asset(&a);
+                    if minted > 0 {
+                        let amt = (rng() as u128 % minted) + 1;
+                        if let Ok(t) = gw.request_exit(a, amt, [0x99; 32]) {
+                            tickets.push(t.exit_id);
+                        }
+                    }
+                }
+                3 => {
+                    if !tickets.is_empty() {
+                        let id = tickets.swap_remove((rng() as usize) % tickets.len());
+                        let _ = gw.cancel_exit(id);
+                    }
+                }
+                4 => {
+                    if !tickets.is_empty() {
+                        let idx = (rng() as usize) % tickets.len();
+                        let id = tickets[idx];
+                        if gw.finalize_exit(id).is_ok() {
+                            tickets.swap_remove(idx);
+                        }
+                    }
+                }
+                _ => gw.advance_epoch(),
+            }
+            for a in &assets {
+                let minted = gw.minted_of_asset(a);
+                assert!(
+                    minted <= gw.asset_cap(a).unwrap(),
+                    "cap invariant broken for {:?}: minted {} exceeds cap {:?}",
+                    a,
+                    minted,
+                    gw.asset_cap(a)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn an_admin_freeze_signed_for_one_destination_does_not_replay_on_another() {
         let s: Vec<_> = (0..3).map(signer).collect();
         let mut set_here = OperatorSet::new(3);
