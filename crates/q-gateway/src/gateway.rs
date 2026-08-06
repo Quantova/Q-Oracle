@@ -1175,6 +1175,32 @@ mod tests {
     }
 
     #[test]
+    fn the_per_asset_total_cap_survives_epoch_advances_and_cannot_be_reset_by_cycling() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 500);
+
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 300, 1), Ok(()));
+        gw.advance_epoch();
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x02; 32], 200, 1), Ok(()));
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 500);
+        gw.advance_epoch();
+        assert!(
+            matches!(
+                gw.admit_trustless([0xa1; 16], [0x03; 32], 1, 1),
+                Err(GatewayError::AssetCapExceeded { .. })
+            ),
+            "advancing the epoch must not reset the per-asset total cap"
+        );
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 500);
+    }
+
+    #[test]
     fn an_admin_freeze_signed_for_one_destination_does_not_replay_on_another() {
         let s: Vec<_> = (0..3).map(signer).collect();
         let mut set_here = OperatorSet::new(3);
