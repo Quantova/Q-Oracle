@@ -155,4 +155,49 @@ mod tests {
         let mut book = VaultBook::new();
         assert_eq!(book.lock(7, 1), Err(ExitError::UnknownVault(7)));
     }
+
+    #[test]
+    fn a_random_walk_of_locks_releases_and_seizes_conserves_free_plus_locked() {
+        let mut st = 0xdead_beef_cafe_babeu64;
+        let mut rng = || {
+            st = st.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = st;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        };
+        let mut book = VaultBook::new();
+        let vaults = [1u32, 2, 3];
+        let mut expected: BTreeMap<u32, u128> = BTreeMap::new();
+        for v in &vaults {
+            let col = (rng() % 10_000) as u128;
+            book.register(*v, col);
+            expected.insert(*v, col);
+        }
+        for _ in 0..8000 {
+            let v = vaults[(rng() % 3) as usize];
+            let amt = (rng() % 3000) as u128;
+            match rng() % 3 {
+                0 => {
+                    let _ = book.lock(v, amt);
+                }
+                1 => {
+                    let _ = book.release(v, amt);
+                }
+                _ => {
+                    if book.seize(v, amt).is_ok() {
+                        *expected.get_mut(&v).expect("registered vault") -= amt;
+                    }
+                }
+            }
+            for v in &vaults {
+                assert_eq!(
+                    book.free_of(*v).saturating_add(book.locked_of(*v)),
+                    expected[v],
+                    "vault {} broke conservation of free plus locked against collateral minus seized",
+                    v
+                );
+            }
+        }
+    }
 }
