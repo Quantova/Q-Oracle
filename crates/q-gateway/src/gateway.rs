@@ -223,6 +223,13 @@ impl Gateway {
         *entry = entry.saturating_add(amount);
     }
 
+    fn pending_exit_of(&self, asset_id: &[u8; 16]) -> u128 {
+        self.pending_exits
+            .values()
+            .filter(|t| &t.asset_id == asset_id)
+            .fold(0u128, |acc, t| acc.saturating_add(t.amount))
+    }
+
     pub fn pause_all(&mut self) {
         self.global_pause = true;
         self.touch_guard();
@@ -515,12 +522,14 @@ impl Gateway {
             .get(&asset_id)
             .ok_or(GatewayError::AssetNotRegistered)?;
         let minted = *self.per_asset_minted.get(&asset_id).unwrap_or(&0);
-        let asset_after = minted
+        let outstanding = minted.saturating_add(self.pending_exit_of(&asset_id));
+        let after_cap = outstanding
             .checked_add(amount)
-            .ok_or(GatewayError::AssetCapExceeded { minted, cap, add: amount })?;
-        if asset_after > cap {
-            return Err(GatewayError::AssetCapExceeded { minted, cap, add: amount });
+            .ok_or(GatewayError::AssetCapExceeded { minted: outstanding, cap, add: amount })?;
+        if after_cap > cap {
+            return Err(GatewayError::AssetCapExceeded { minted: outstanding, cap, add: amount });
         }
+        let asset_after = minted.saturating_add(amount);
         let epoch_after =
             self.epoch_minted
                 .checked_add(amount)
@@ -622,20 +631,22 @@ impl Gateway {
             .get(&fact.asset_id.0)
             .ok_or(GatewayError::AssetNotRegistered)?;
         let minted = *self.per_asset_minted.get(&fact.asset_id.0).unwrap_or(&0);
-        let asset_after = minted
+        let outstanding = minted.saturating_add(self.pending_exit_of(&fact.asset_id.0));
+        let after_cap = outstanding
             .checked_add(fact.amount)
             .ok_or(GatewayError::AssetCapExceeded {
-                minted,
+                minted: outstanding,
                 cap,
                 add: fact.amount,
             })?;
-        if asset_after > cap {
+        if after_cap > cap {
             return Err(GatewayError::AssetCapExceeded {
-                minted,
+                minted: outstanding,
                 cap,
                 add: fact.amount,
             });
         }
+        let asset_after = minted.saturating_add(fact.amount);
 
         let epoch_after =
             self.epoch_minted
@@ -1198,6 +1209,28 @@ mod tests {
             "advancing the epoch must not reset the per-asset total cap"
         );
         assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 500);
+    }
+
+    #[test]
+    fn a_pending_exit_still_counts_toward_the_cap_so_mint_exit_remint_cancel_cannot_exceed_it() {
+        let mut gw = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 500);
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 500, 1), Ok(()));
+        let ticket = gw.request_exit([0xa1; 16], 500, [0x99; 32]).expect("the exit request burns");
+        assert!(
+            matches!(
+                gw.admit_trustless([0xa1; 16], [0x02; 32], 500, 1),
+                Err(GatewayError::AssetCapExceeded { .. })
+            ),
+            "a pending exit must not free cap headroom for a re-mint"
+        );
+        gw.cancel_exit(ticket.exit_id).expect("cancel restores the burned units");
+        assert_eq!(
+            gw.minted_of_asset(&[0xa1; 16]),
+            500,
+            "cancel restores exactly to the cap, never above it"
+        );
     }
 
     #[test]
