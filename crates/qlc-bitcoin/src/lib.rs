@@ -131,47 +131,6 @@ pub fn compact_to_target(bits: u32) -> [u8; 32] {
     target
 }
 
-pub fn leading_zero_bits(hash_be: &[u8; 32]) -> u32 {
-    let mut count = 0u32;
-    for b in hash_be {
-        if *b == 0 {
-            count += 8;
-        } else {
-            count += b.leading_zeros();
-            break;
-        }
-    }
-    count
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChainSummary {
-    pub tip: [u8; 32],
-    pub height: usize,
-    pub cumulative_zero_bits: u64,
-}
-
-pub fn verify_header_chain(headers: &[BlockHeader]) -> Result<ChainSummary, SpvError> {
-    if headers.is_empty() {
-        return Err(SpvError::EmptyChain);
-    }
-    let mut cumulative_zero_bits = 0u64;
-    for (i, h) in headers.iter().enumerate() {
-        if !h.meets_pow() {
-            return Err(SpvError::PowNotMet);
-        }
-        if i > 0 && h.prev_block != headers[i - 1].block_hash() {
-            return Err(SpvError::BrokenLink { index: i });
-        }
-        cumulative_zero_bits += leading_zero_bits(&h.pow_hash_be()) as u64;
-    }
-    Ok(ChainSummary {
-        tip: headers[headers.len() - 1].block_hash(),
-        height: headers.len(),
-        cumulative_zero_bits,
-    })
-}
-
 pub fn merkle_root(txids: &[[u8; 32]]) -> Option<[u8; 32]> {
     if txids.is_empty() {
         return None;
@@ -375,7 +334,7 @@ mod tests {
         let mut second = header;
         second.prev_block = [0u8; 32];
         assert_eq!(
-            verify_header_chain(&[header, second]),
+            crate::chain::verify_chain(&[header, second], 0, &crate::params::BITCOIN),
             Err(SpvError::BrokenLink { index: 1 })
         );
     }
