@@ -31,6 +31,7 @@ pub enum EthError {
     BadSignature,
     MissingReceipt,
     CapExceeded { amount: u128, cap: u128 },
+    UnconfiguredDepositContract,
     Receipt(receipt::ReceiptError),
     Mpt(mpt::MptError),
 }
@@ -325,8 +326,11 @@ fn verify_deposit_core(
     )
     .map_err(EthError::Mpt)?
     .ok_or(EthError::MissingReceipt)?;
-    let raw = receipt::extract_deposit(&value, &store.config.deposit_contract)
-        .map_err(EthError::Receipt)?;
+    let deposit_contract = &store.config.deposit_contract;
+    if deposit_contract.iter().all(|&b| b == deposit_contract[0]) {
+        return Err(EthError::UnconfiguredDepositContract);
+    }
+    let raw = receipt::extract_deposit(&value, deposit_contract).map_err(EthError::Receipt)?;
     if raw.amount > store.config.max_deposit_base_units {
         return Err(EthError::CapExceeded {
             amount: raw.amount,
@@ -532,7 +536,13 @@ mod tests {
         build_fixture_for(config::ethereum(), amount, participation)
     }
 
-    fn build_fixture_for(cfg: EvmChainConfig, amount: u128, participation: Vec<bool>) -> Fixture {
+    const TEST_DEPOSIT_CONTRACT: [u8; 20] = [
+        0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x71, 0x82, 0x93, 0xa4,
+        0xb5, 0xc6, 0xd7, 0xe8, 0xf9, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e,
+    ];
+
+    fn build_fixture_for(mut cfg: EvmChainConfig, amount: u128, participation: Vec<bool>) -> Fixture {
+        cfg.deposit_contract = TEST_DEPOSIT_CONTRACT;
         let recipient = [0x5c; 32];
         let asset_id = [0x77; 16];
         let receipt = deposit_receipt(&cfg.deposit_contract, &recipient, amount, &asset_id);
@@ -551,6 +561,7 @@ mod tests {
     fn build_electra_fixture(amount: u128, participation: Vec<bool>) -> Fixture {
         let mut cfg = config::ethereum();
         cfg.electra_epoch = Some(0);
+        cfg.deposit_contract = TEST_DEPOSIT_CONTRACT;
         let recipient = [0x5c; 32];
         let asset_id = [0x77; 16];
         let receipt = deposit_receipt(&cfg.deposit_contract, &recipient, amount, &asset_id);
@@ -1077,7 +1088,10 @@ mod tests {
     #[test]
     fn a_receipt_from_another_bridge_contract_carries_no_trustless_deposit() {
         let mut f = build_fixture(1_000u128, full_participation());
-        f.store.config.deposit_contract = [0x99; 20];
+        f.store.config.deposit_contract = [
+            0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00,
+            0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00,
+        ];
         assert_eq!(
             verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
             Err(EthError::Receipt(receipt::ReceiptError::NoDeposit))
@@ -1085,8 +1099,19 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn a_placeholder_deposit_contract_fails_closed() {
+        let mut f = build_fixture(1_000u128, full_participation());
+        f.store.config.deposit_contract = [0x11; 20];
+        assert_eq!(
+            verify_trustless_deposit(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::UnconfiguredDepositContract)
+        );
+    }
+
     fn a_log_under_a_foreign_topic_is_not_a_trustless_deposit() {
-        let cfg = config::ethereum();
+        let mut cfg = config::ethereum();
+        cfg.deposit_contract = TEST_DEPOSIT_CONTRACT;
         let recipient = [0x5c; 32];
         let asset_id = [0x77; 16];
         let foreign_topic = keccak256(b"SomeOtherEvent(bytes32,uint256,bytes16)");

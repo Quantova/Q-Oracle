@@ -139,7 +139,11 @@ mod tests {
     }
 
     fn build_fixture(amount: u128, participation: Vec<bool>) -> Fixture {
-        let cfg = config::ethereum();
+        let mut cfg = config::ethereum();
+        cfg.deposit_contract = [
+            0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x71, 0x82, 0x93, 0xa4,
+            0xb5, 0xc6, 0xd7, 0xe8, 0xf9, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e,
+        ];
         let recipient = [0x5c; 32];
         let asset_id = [0x77; 16];
 

@@ -1176,7 +1176,11 @@ mod tests {
         recipient: [u8; 32],
         amount: u128,
     ) -> (LightClientStore, LightClientUpdate, EthDepositProof) {
-        let cfg = eth_config::ethereum();
+        let mut cfg = eth_config::ethereum();
+        cfg.deposit_contract = [
+            0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x71, 0x82, 0x93, 0xa4,
+            0xb5, 0xc6, 0xd7, 0xe8, 0xf9, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e,
+        ];
         let (committee, secrets) = eth_committee(0x11);
 
         let receipt = deposit_receipt(&cfg.deposit_contract, &recipient, amount, &asset_id);

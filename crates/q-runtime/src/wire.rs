@@ -968,6 +968,9 @@ fn eth_err_json(e: &EthError) -> Json {
         EthError::BadSyncCommitteeProof => tagged("eth", "bad_sync_committee_proof", vec![]),
         EthError::BadSignature => tagged("eth", "bad_signature", vec![]),
         EthError::MissingReceipt => tagged("eth", "missing_receipt", vec![]),
+        EthError::UnconfiguredDepositContract => {
+            tagged("eth", "unconfigured_deposit_contract", vec![])
+        }
         EthError::CapExceeded { amount, cap } => tagged(
             "eth",
             "cap_exceeded",
@@ -999,6 +1002,7 @@ fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
         "bad_sync_committee_proof" => Ok(EthError::BadSyncCommitteeProof),
         "bad_signature" => Ok(EthError::BadSignature),
         "missing_receipt" => Ok(EthError::MissingReceipt),
+        "unconfigured_deposit_contract" => Ok(EthError::UnconfiguredDepositContract),
         "cap_exceeded" => Ok(EthError::CapExceeded {
             amount: as_u128(field(j, "amount")?, "amount")?,
             cap: as_u128(field(j, "cap")?, "cap")?,
