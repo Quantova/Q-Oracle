@@ -155,15 +155,12 @@ impl Gateway {
     }
 
     pub fn register_corridor(&mut self, source_chain: u32, confirmation_depth: u32) {
-        self.corridors.insert(
-            source_chain,
-            CorridorConfig {
-                confirmation_depth,
-                quorum: 0,
-                tier: BASE_TIER,
-                active: true,
-            },
-        );
+        self.corridors.entry(source_chain).or_insert(CorridorConfig {
+            confirmation_depth,
+            quorum: 0,
+            tier: BASE_TIER,
+            active: true,
+        });
     }
 
     pub fn set_corridor_active(&mut self, source_chain: u32, active: bool) {
@@ -1160,6 +1157,28 @@ mod tests {
         gw.advance_to(until);
         assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1), Ok(()));
         assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
+    }
+
+    #[test]
+    fn re_registering_a_corridor_preserves_its_active_flag_and_quorum() {
+        let s: Vec<_> = (0..5).map(signer).collect();
+        let mut set = OperatorSet::new(5);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+        gw.set_corridor_quorum(1, 4).expect("a two thirds quorum");
+        gw.set_corridor_active(1, false);
+
+        gw.register_corridor(1, 6);
+
+        assert_eq!(gw.corridor_quorum(1), Some(4));
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1),
+            Err(GatewayError::CorridorInactive(1))
+        );
     }
 
     #[test]
