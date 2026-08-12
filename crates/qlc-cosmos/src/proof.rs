@@ -107,8 +107,12 @@ pub enum ProofError {
 const LEAF_MARKER: u8 = 0x00;
 const MAX_OP_PREFIX_LEN: usize = 64;
 const MAX_INNER_SUFFIX_LEN: usize = 64;
+const MAX_PROOF_PATH_LEN: usize = 128;
 
 fn canonical_ops(proof: &ExistenceProof) -> Result<(), ProofError> {
+    if proof.path.len() > MAX_PROOF_PATH_LEN {
+        return Err(ProofError::MalformedProofOp);
+    }
     if proof.leaf.prefix.first() != Some(&LEAF_MARKER) {
         return Err(ProofError::MalformedProofOp);
     }

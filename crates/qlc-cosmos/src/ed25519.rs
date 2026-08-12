@@ -242,10 +242,10 @@ pub fn verify(public_key: &[u8; 32], message: &[u8], signature: &[u8; 64]) -> bo
     let mut s_bytes = [0u8; 32];
     s_bytes.copy_from_slice(&signature[32..64]);
 
-    if let Some(r_point) = decompress(&r_bytes) {
-        if r_point.is_small_order() {
-            return false;
-        }
+    match decompress(&r_bytes) {
+        Some(r_point) if r_point.is_small_order() => return false,
+        Some(_) => {}
+        None => return false,
     }
 
     let s = match Scalar::from_canonical_32(&s_bytes) {

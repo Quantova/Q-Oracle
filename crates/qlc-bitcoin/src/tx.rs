@@ -136,6 +136,9 @@ impl Transaction {
         }
 
         let locktime = c.u32_le()?;
+        if c.pos != c.bytes.len() {
+            return Err(SpvError::MalformedTransaction);
+        }
 
         let tx = Transaction {
             version,
