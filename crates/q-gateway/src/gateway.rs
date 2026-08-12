@@ -108,6 +108,10 @@ impl Gateway {
         self.governance = governance;
     }
 
+    pub fn governance_configured(&self) -> bool {
+        self.governance.size() > 0
+    }
+
     pub fn guard_revision(&self) -> u64 {
         self.guard_revision
     }

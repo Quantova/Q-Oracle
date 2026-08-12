@@ -857,6 +857,7 @@ fn api_json(api: &ApiError) -> Json {
                 ("pool_network", u32j(*pool_network)),
             ],
         ),
+        ApiError::CorridorConfigLocked => tagged("api", "corridor_config_locked", vec![]),
         ApiError::ProofTierMismatch => tagged("api", "proof_tier_mismatch", vec![]),
         ApiError::NoAnchor(id) => tagged("api", "no_anchor", vec![("network_id", u32j(*id))]),
         ApiError::BitcoinSpv(e) => tagged("api", "bitcoin_spv", vec![("spv", spv_err_json(e))]),
@@ -1212,6 +1213,7 @@ fn api_from(j: &Json) -> Result<ApiError, WireError> {
                 fact_network: as_u32(field(j, "fact_network")?, "fact_network")?,
                 pool_network: as_u32(field(j, "pool_network")?, "pool_network")?,
             }),
+            "corridor_config_locked" => Ok(ApiError::CorridorConfigLocked),
             "proof_tier_mismatch" => Ok(ApiError::ProofTierMismatch),
             "no_anchor" => Ok(ApiError::NoAnchor(as_u32(
                 field(j, "network_id")?,

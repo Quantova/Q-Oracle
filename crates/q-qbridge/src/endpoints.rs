@@ -154,6 +154,7 @@ pub enum ApiError {
     UnknownNetwork(u32),
     PoolNotRegistered([u8; 16]),
     AssetNetworkMismatch { fact_network: u32, pool_network: u32 },
+    CorridorConfigLocked,
     ProofTierMismatch,
     NoAnchor(u32),
     BitcoinSpv(SpvError),
@@ -220,13 +221,18 @@ impl BridgeState {
 
 pub fn handle(state: &mut BridgeState, request: Request) -> Response {
     match request {
-        Request::CreatePool(request) => match state.pools.create_pool(&request) {
-            Ok(spec) => {
-                install_pool(&mut state.gateway, &spec);
-                Response::PoolCreated(PoolView::from(&spec))
+        Request::CreatePool(request) => {
+            if state.gateway.governance_configured() {
+                return Response::Error(ApiError::CorridorConfigLocked);
             }
-            Err(err) => Response::Error(ApiError::Pool(err)),
-        },
+            match state.pools.create_pool(&request) {
+                Ok(spec) => {
+                    install_pool(&mut state.gateway, &spec);
+                    Response::PoolCreated(PoolView::from(&spec))
+                }
+                Err(err) => Response::Error(ApiError::Pool(err)),
+            }
+        }
         Request::ListPools(request) => {
             let views: Vec<PoolView> = match request.network_id {
                 Some(id) => match Network::from_id(id) {
@@ -657,6 +663,29 @@ mod tests {
                 assert_eq!(pools.len(), 1);
                 assert_eq!(pools[0], view);
             }
+            other => panic!("expected Pools, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pool_creation_is_locked_once_a_governance_set_is_installed() {
+        let mut state = empty_state(0);
+        let mut governance = OperatorSet::new(1);
+        assert!(governance.register(1, mk(1).pk));
+        state.gateway.set_governance(governance);
+
+        let attempt = handle(
+            &mut state,
+            Request::CreatePool(pool_request(Network::Polygon.id(), "GHO")),
+        );
+        assert_eq!(attempt, Response::Error(ApiError::CorridorConfigLocked));
+
+        let listed = handle(
+            &mut state,
+            Request::ListPools(ListPoolsRequest { network_id: None }),
+        );
+        match listed {
+            Response::Pools(pools) => assert!(pools.is_empty()),
             other => panic!("expected Pools, got {:?}", other),
         }
     }
