@@ -340,7 +340,7 @@ fn verify_deposit_core(
         anchor,
         source_ref,
         raw,
-        block_number: update.execution.block_number,
+        block_number: update.finalized_header.slot,
     })
 }
 
@@ -1044,7 +1044,7 @@ mod tests {
         assert_eq!(proven.amount, f.amount);
         assert_eq!(proven.recipient, f.recipient);
         assert_eq!(proven.asset_id, f.asset_id);
-        assert_eq!(proven.block_number, 20_000_000);
+        assert_eq!(proven.block_number, PERIOD * PERIOD_SLOTS + 40);
         assert_eq!(proven.finality_depth, 64);
         assert_ne!(proven.source_ref, [0u8; 32]);
     }
