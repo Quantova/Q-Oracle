@@ -53,6 +53,7 @@ fn deposit_proof(recipient: [u8; 32], asset: [u8; 16], amount: u128) -> Existenc
                 suffix: vec![0x33, 0x44, 0x55],
             },
         ],
+        store: None,
     }
 }
 
@@ -63,8 +64,8 @@ fn signed_scene(
 ) -> (Header, Commit, ValidatorSet, ExistenceProof) {
     let vs = [keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
     let set = ValidatorSet::new(vs.iter().map(|k| k.info).collect());
-    let proof = deposit_proof(recipient, asset, amount);
-    let app_hash = proof.calculate_root();
+    let (app_hash, proof) =
+        qlc_cosmos::proof::wrap_store_layer(deposit_proof(recipient, asset, amount), b"bridge");
 
     let header = Header {
         version_block: 11,

@@ -11,9 +11,12 @@ pub struct ChainConfig {
     pub trusting_period_secs: u64,
     pub max_clock_drift_secs: u64,
     pub bridge_store_prefix: &'static [u8],
+    pub bridge_store_name: &'static [u8],
 }
 
 pub const BRIDGE_STORE_PREFIX: &[u8] = b"bridge/deposits/";
+
+pub const BRIDGE_STORE_NAME: &[u8] = b"bridge";
 
 pub const DEFAULT_TRUSTING_PERIOD_SECS: u64 = 1_209_600;
 
@@ -30,6 +33,7 @@ impl ChainConfig {
             trusting_period_secs: DEFAULT_TRUSTING_PERIOD_SECS,
             max_clock_drift_secs: DEFAULT_MAX_CLOCK_DRIFT_SECS,
             bridge_store_prefix: BRIDGE_STORE_PREFIX,
+            bridge_store_name: BRIDGE_STORE_NAME,
         }
     }
 }

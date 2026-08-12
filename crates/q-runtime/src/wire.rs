@@ -642,7 +642,7 @@ fn inner_op_from(j: &Json) -> Result<InnerOp, WireError> {
 }
 
 fn existence_proof_json(p: &ExistenceProof) -> Json {
-    object(vec![
+    let mut fields = vec![
         ("key", hexs(&p.key)),
         ("value", hexs(&p.value)),
         ("leaf", leaf_op_json(&p.leaf)),
@@ -650,7 +650,11 @@ fn existence_proof_json(p: &ExistenceProof) -> Json {
             "path",
             Json::Array(p.path.iter().map(inner_op_json).collect()),
         ),
-    ])
+    ];
+    if let Some(store) = &p.store {
+        fields.push(("store", existence_proof_json(store)));
+    }
+    object(fields)
 }
 
 fn existence_proof_from(j: &Json) -> Result<ExistenceProof, WireError> {
@@ -664,11 +668,16 @@ fn existence_proof_from(j: &Json) -> Result<ExistenceProof, WireError> {
     for op in path_json {
         path.push(inner_op_from(op)?);
     }
+    let store = match field(j, "store") {
+        Ok(s) => Some(Box::new(existence_proof_from(s)?)),
+        Err(_) => None,
+    };
     Ok(ExistenceProof {
         key: as_hex(field(j, "key")?, "key")?,
         value: as_hex(field(j, "value")?, "value")?,
         leaf: leaf_op_from(field(j, "leaf")?)?,
         path,
+        store,
     })
 }
 
@@ -1165,6 +1174,9 @@ fn proof_err_json(e: &ProofError) -> Json {
         ProofError::BadValueLength => tagged("proof", "bad_value_length", vec![]),
         ProofError::MalformedProofOp => tagged("proof", "malformed_proof_op", vec![]),
         ProofError::ForeignStoreKey => tagged("proof", "foreign_store_key", vec![]),
+        ProofError::MissingStoreProof => tagged("proof", "missing_store_proof", vec![]),
+        ProofError::ForeignStore => tagged("proof", "foreign_store", vec![]),
+        ProofError::StoreRootMismatch => tagged("proof", "store_root_mismatch", vec![]),
     }
 }
 
@@ -1174,6 +1186,9 @@ fn proof_err_from(j: &Json) -> Result<ProofError, WireError> {
         "bad_value_length" => Ok(ProofError::BadValueLength),
         "malformed_proof_op" => Ok(ProofError::MalformedProofOp),
         "foreign_store_key" => Ok(ProofError::ForeignStoreKey),
+        "missing_store_proof" => Ok(ProofError::MissingStoreProof),
+        "foreign_store" => Ok(ProofError::ForeignStore),
+        "store_root_mismatch" => Ok(ProofError::StoreRootMismatch),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }
@@ -1875,6 +1890,7 @@ mod tests {
                 prefix: vec![0x01, 0x0a],
                 suffix: vec![0x1b, 0x2c],
             }],
+            store: None,
         };
         round_request(Request::SubmitDeposit(DepositRequest {
             proof: DepositProof::Cosmos {

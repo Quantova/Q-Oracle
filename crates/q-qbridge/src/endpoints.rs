@@ -1431,6 +1431,7 @@ mod tests {
                     suffix: vec![0x33, 0x44, 0x55],
                 },
             ],
+            store: None,
         }
     }
 
@@ -1446,8 +1447,8 @@ mod tests {
             cosmos_keyed(4, 25),
         ];
         let set = ValidatorSet::new(vs.iter().map(|k| k.info).collect());
-        let proof = cosmos_deposit_proof(recipient, asset, amount);
-        let app_hash = proof.calculate_root();
+        let (app_hash, proof) =
+            qlc_cosmos::proof::wrap_store_layer(cosmos_deposit_proof(recipient, asset, amount), b"bridge");
         let header = Header {
             version_block: 11,
             version_app: 0,

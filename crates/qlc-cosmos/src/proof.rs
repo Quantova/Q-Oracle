@@ -50,6 +50,7 @@ pub struct ExistenceProof {
     pub value: Vec<u8>,
     pub leaf: LeafOp,
     pub path: Vec<InnerOp>,
+    pub store: Option<Box<ExistenceProof>>,
 }
 
 impl ExistenceProof {
@@ -70,6 +71,20 @@ pub struct Deposit {
     pub recipient: [u8; 32],
 }
 
+pub fn wrap_store_layer(mut iavl: ExistenceProof, store_name: &[u8]) -> ([u8; 32], ExistenceProof) {
+    let iavl_root = iavl.calculate_root();
+    let store = ExistenceProof {
+        key: store_name.to_vec(),
+        value: iavl_root.to_vec(),
+        leaf: LeafOp { prefix: vec![LEAF_MARKER] },
+        path: Vec::new(),
+        store: None,
+    };
+    let app_hash = store.calculate_root();
+    iavl.store = Some(Box::new(store));
+    (app_hash, iavl)
+}
+
 pub fn encode_deposit_value(recipient: &[u8; 32], asset_id: &[u8; 16], amount: u128) -> Vec<u8> {
     let mut out = Vec::with_capacity(DEPOSIT_VALUE_LEN);
     out.extend_from_slice(recipient);
@@ -84,6 +99,9 @@ pub enum ProofError {
     BadValueLength,
     MalformedProofOp,
     ForeignStoreKey,
+    MissingStoreProof,
+    ForeignStore,
+    StoreRootMismatch,
 }
 
 const LEAF_MARKER: u8 = 0x00;
@@ -113,18 +131,28 @@ fn canonical_ops(proof: &ExistenceProof) -> Result<(), ProofError> {
 
 pub fn extract_deposit(
     app_hash: &[u8; 32],
+    store_name: &[u8],
     store_prefix: &[u8],
     proof: &ExistenceProof,
 ) -> Result<Deposit, ProofError> {
     canonical_ops(proof)?;
-    if &proof.calculate_root() != app_hash {
-        return Err(ProofError::RootMismatch);
-    }
     if proof.value.len() != DEPOSIT_VALUE_LEN {
         return Err(ProofError::BadValueLength);
     }
     if store_prefix.is_empty() || !proof.key.starts_with(store_prefix) {
         return Err(ProofError::ForeignStoreKey);
+    }
+    let iavl_root = proof.calculate_root();
+    let store = proof.store.as_deref().ok_or(ProofError::MissingStoreProof)?;
+    canonical_ops(store)?;
+    if store_name.is_empty() || store.key != store_name {
+        return Err(ProofError::ForeignStore);
+    }
+    if store.value != iavl_root {
+        return Err(ProofError::StoreRootMismatch);
+    }
+    if &store.calculate_root() != app_hash {
+        return Err(ProofError::RootMismatch);
     }
     let mut recipient = [0u8; 32];
     recipient.copy_from_slice(&proof.value[0..32]);
@@ -147,6 +175,7 @@ mod tests {
     use super::*;
 
     const STORE_PREFIX: &[u8] = b"bridge/deposits/";
+    const STORE_NAME: &[u8] = b"bridge";
 
     fn sample_proof() -> (ExistenceProof, Deposit) {
         let recipient = [0x51u8; 32];
@@ -163,6 +192,7 @@ mod tests {
                 InnerOp { prefix: vec![0x01, 0xaa], suffix: vec![0xbb, 0xcc] },
                 InnerOp { prefix: vec![0x01], suffix: vec![0xde, 0xad, 0xbe, 0xef] },
             ],
+            store: None,
         };
         let deposit = Deposit {
             source_ref: sha256(&key),
@@ -174,49 +204,82 @@ mod tests {
     }
 
     #[test]
-    fn a_valid_proof_extracts_the_deposit() {
-        let (proof, expected) = sample_proof();
-        let app_hash = proof.calculate_root();
-        assert_eq!(extract_deposit(&app_hash, STORE_PREFIX, &proof), Ok(expected));
+    fn a_valid_two_layer_proof_extracts_the_deposit() {
+        let (iavl, expected) = sample_proof();
+        let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
+        assert_eq!(extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof), Ok(expected));
     }
 
     #[test]
     fn the_amount_is_carried_in_base_units() {
-        let (proof, _) = sample_proof();
-        let app_hash = proof.calculate_root();
-        let deposit = extract_deposit(&app_hash, STORE_PREFIX, &proof).unwrap();
+        let (iavl, _) = sample_proof();
+        let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
+        let deposit = extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof).unwrap();
         assert_eq!(deposit.amount, 4_200_000_000u128);
     }
 
     #[test]
-    fn a_tampered_value_breaks_the_root() {
-        let (mut proof, _) = sample_proof();
+    fn a_proof_in_a_foreign_store_is_rejected() {
+        let (iavl, _) = sample_proof();
+        let (app_hash, proof) = wrap_store_layer(iavl, b"staking");
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            Err(ProofError::ForeignStore)
+        );
+    }
+
+    #[test]
+    fn a_single_layer_proof_without_a_store_is_rejected() {
+        let (proof, _) = sample_proof();
         let app_hash = proof.calculate_root();
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            Err(ProofError::MissingStoreProof)
+        );
+    }
+
+    #[test]
+    fn a_tampered_value_breaks_the_store_root() {
+        let (iavl, _) = sample_proof();
+        let (app_hash, mut proof) = wrap_store_layer(iavl, STORE_NAME);
         proof.value[48] ^= 0x01;
-        assert_eq!(extract_deposit(&app_hash, STORE_PREFIX, &proof), Err(ProofError::RootMismatch));
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            Err(ProofError::StoreRootMismatch)
+        );
     }
 
     #[test]
-    fn a_tampered_key_breaks_the_root() {
-        let (mut proof, _) = sample_proof();
-        let app_hash = proof.calculate_root();
-        proof.key[0] ^= 0x01;
-        assert_eq!(extract_deposit(&app_hash, STORE_PREFIX, &proof), Err(ProofError::RootMismatch));
+    fn a_tampered_key_breaks_the_store_root() {
+        let (iavl, _) = sample_proof();
+        let (app_hash, mut proof) = wrap_store_layer(iavl, STORE_NAME);
+        proof.key[20] ^= 0x01;
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            Err(ProofError::StoreRootMismatch)
+        );
     }
 
     #[test]
-    fn a_tampered_inner_node_breaks_the_root() {
-        let (mut proof, _) = sample_proof();
-        let app_hash = proof.calculate_root();
+    fn a_tampered_inner_node_breaks_the_store_root() {
+        let (iavl, _) = sample_proof();
+        let (app_hash, mut proof) = wrap_store_layer(iavl, STORE_NAME);
         proof.path[1].suffix[0] ^= 0x01;
-        assert_eq!(extract_deposit(&app_hash, STORE_PREFIX, &proof), Err(ProofError::RootMismatch));
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            Err(ProofError::StoreRootMismatch)
+        );
     }
 
     #[test]
     fn a_proof_against_a_foreign_app_hash_is_rejected() {
-        let (proof, _) = sample_proof();
+        let (iavl, _) = sample_proof();
+        let (_app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         let foreign = [0x99u8; 32];
-        assert_eq!(extract_deposit(&foreign, STORE_PREFIX, &proof), Err(ProofError::RootMismatch));
+        assert_eq!(
+            extract_deposit(&foreign, STORE_NAME, STORE_PREFIX, &proof),
+            Err(ProofError::RootMismatch)
+        );
     }
 
     #[test]
@@ -224,7 +287,7 @@ mod tests {
         let recipient = [0x51u8; 32];
         let asset_id = [0x22u8; 16];
         let value = encode_deposit_value(&recipient, &asset_id, 4_200_000_000u128);
-        let proof = ExistenceProof {
+        let iavl = ExistenceProof {
             key: b"staking/deposits/quantova-recipient".to_vec(),
             value,
             leaf: LeafOp { prefix: vec![0x00, 0x02, 0x00] },
@@ -232,39 +295,43 @@ mod tests {
                 InnerOp { prefix: vec![0x01, 0xaa], suffix: vec![0xbb, 0xcc] },
                 InnerOp { prefix: vec![0x01], suffix: vec![0xde, 0xad, 0xbe, 0xef] },
             ],
+            store: None,
         };
-        let app_hash = proof.calculate_root();
+        let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         assert_eq!(
-            extract_deposit(&app_hash, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::ForeignStoreKey)
         );
     }
 
     #[test]
     fn an_empty_store_prefix_is_fail_closed() {
-        let (proof, _) = sample_proof();
-        let app_hash = proof.calculate_root();
-        assert_eq!(extract_deposit(&app_hash, b"", &proof), Err(ProofError::ForeignStoreKey));
+        let (iavl, _) = sample_proof();
+        let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
+        assert_eq!(
+            extract_deposit(&app_hash, STORE_NAME, b"", &proof),
+            Err(ProofError::ForeignStoreKey)
+        );
     }
 
     #[test]
     fn an_inner_op_posing_as_a_leaf_is_rejected() {
-        let (mut proof, _) = sample_proof();
-        proof.path[0].prefix = vec![0x00, 0xaa];
-        let app_hash = proof.calculate_root();
+        let (mut iavl, _) = sample_proof();
+        iavl.path[0].prefix = vec![0x00, 0xaa];
+        let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         assert_eq!(
-            extract_deposit(&app_hash, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::MalformedProofOp)
         );
     }
 
     #[test]
     fn a_leaf_without_the_leaf_marker_is_rejected() {
-        let (mut proof, _) = sample_proof();
-        proof.leaf.prefix = vec![0x01, 0x02, 0x00];
-        let app_hash = proof.calculate_root();
+        let (mut iavl, _) = sample_proof();
+        iavl.leaf.prefix = vec![0x01, 0x02, 0x00];
+        let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         assert_eq!(
-            extract_deposit(&app_hash, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::MalformedProofOp)
         );
     }

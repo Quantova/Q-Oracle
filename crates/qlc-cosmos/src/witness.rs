@@ -110,14 +110,15 @@ mod tests {
                 InnerOp { prefix: vec![0x01, 0x0a], suffix: vec![0x1b, 0x2c] },
                 InnerOp { prefix: vec![0x01], suffix: vec![0x33, 0x44, 0x55] },
             ],
+            store: None,
         }
     }
 
     fn scene(signers: &[usize]) -> (Header, Commit, ValidatorSet, ExistenceProof) {
         let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
         let set = ValidatorSet::new(vs.iter().map(|k| k.info).collect());
-        let proof = deposit_proof();
-        let app_hash = proof.calculate_root();
+        let (app_hash, proof) =
+            crate::proof::wrap_store_layer(deposit_proof(), COSMOS_HUB.bridge_store_name);
 
         let header = Header {
             version_block: 11,

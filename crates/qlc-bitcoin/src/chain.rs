@@ -90,7 +90,12 @@ pub fn verify_chain(
             if h.prev_block != prev.block_hash() {
                 return Err(SpvError::BrokenLink { index: i });
             }
-            bits_expectation(height, prev.bits, h.bits, params, i)?;
+            let interval = params.retarget_interval() as usize;
+            if height % params.retarget_interval() == 0 && i >= interval {
+                check_retarget_boundary(&headers[i - interval], prev, h, params)?;
+            } else {
+                bits_expectation(height, prev.bits, h.bits, params, i)?;
+            }
         }
         work = work.wrapping_add(&block_work(h.bits));
     }

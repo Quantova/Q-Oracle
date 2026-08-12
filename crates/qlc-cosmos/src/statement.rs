@@ -137,7 +137,8 @@ fn verify_deposit_core(
     let mut app_hash = [0u8; 32];
     app_hash.copy_from_slice(&header.app_hash);
 
-    let deposit = extract_deposit(&app_hash, cfg.bridge_store_prefix, proof).map_err(CorridorError::Proof)?;
+    let deposit = extract_deposit(&app_hash, cfg.bridge_store_name, cfg.bridge_store_prefix, proof)
+        .map_err(CorridorError::Proof)?;
     Ok((deposit, signed_power))
 }
 
@@ -246,14 +247,15 @@ mod tests {
                 InnerOp { prefix: vec![0x01, 0x0a], suffix: vec![0x1b, 0x2c] },
                 InnerOp { prefix: vec![0x01], suffix: vec![0x33, 0x44, 0x55] },
             ],
+            store: None,
         }
     }
 
     fn scene(signers: &[usize]) -> (Header, Commit, ValidatorSet, ExistenceProof) {
         let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
         let set = ValidatorSet::new(vs.iter().map(|k| k.info).collect());
-        let proof = deposit_proof();
-        let app_hash = proof.calculate_root();
+        let (app_hash, proof) =
+            crate::proof::wrap_store_layer(deposit_proof(), COSMOS_HUB.bridge_store_name);
 
         let header = Header {
             version_block: 11,
@@ -367,8 +369,10 @@ mod tests {
         let recipient = [0x51u8; 32];
         let asset_id = *b"qATOM.atom\0\0\0\0\0\0";
         proof.value = encode_deposit_value(&recipient, &asset_id, 7_500_001u128);
+        proof.store = None;
+        let (app_hash2, proof) = crate::proof::wrap_store_layer(proof, COSMOS_HUB.bridge_store_name);
         let mut header2 = header.clone();
-        header2.app_hash = proof.calculate_root().to_vec();
+        header2.app_hash = app_hash2.to_vec();
         let commit2 = resign(&header2, &set);
         let bumped = verify_deposit(&COSMOS_HUB, &anchor(&set), &header2, &commit2, &set, &proof, wnow()).unwrap();
 
@@ -415,7 +419,7 @@ mod tests {
         proof.value[48] ^= 0x01;
         assert_eq!(
             verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof, wnow()),
-            Err(CorridorError::Proof(ProofError::RootMismatch))
+            Err(CorridorError::Proof(ProofError::StoreRootMismatch))
         );
     }
 
@@ -434,6 +438,7 @@ mod tests {
                 InnerOp { prefix: vec![0x01, 0x0a], suffix: vec![0x1b, 0x2c] },
                 InnerOp { prefix: vec![0x01], suffix: vec![0x33, 0x44, 0x55] },
             ],
+            store: None,
         };
         let app_hash = proof.calculate_root();
 
@@ -522,7 +527,7 @@ mod tests {
         proof.value[48] ^= 0x01;
         assert_eq!(
             verify_trustless_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof, wnow()),
-            Err(CorridorError::Proof(ProofError::RootMismatch))
+            Err(CorridorError::Proof(ProofError::StoreRootMismatch))
         );
     }
 
