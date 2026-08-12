@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use q_exits::{
-    BurnFeed, BurnWatchError, DeskConfig, ExitConfig, ExitDesk, ExitState, FeedError,
-    FinalizedBlock, MemberConfig, PersistentLedger, QuantovaAnchor, QuantovaBurnSource,
-    ReplayLedger, ReplayStore,
+    BurnFeed, BurnWatchError, DeskConfig, ExitConfig, ExitDesk, ExitId, ExitState, FeedError,
+    FinalizedBlock, MemberConfig, PersistentJournal, QuantovaAnchor, QuantovaBurnSource,
+    ReplayStore,
 };
 
 use qtv_attest::aggregate::aggregate;
@@ -254,33 +254,82 @@ fn a_gated_off_feed_opens_nothing() {
 }
 
 #[test]
-fn the_persisted_ledger_refuses_a_replayed_burn_across_a_restart() {
+fn a_pending_exit_survives_a_restart_through_the_journal() {
     let members = attesters();
     let beacon = Beacon::genesis();
+    let path = temp_path("journal-pending");
 
-    let path = temp_path("replay");
+    let deadline;
     {
         let node = node(&members, &beacon);
-        let ledger = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+        let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
         let mut desk =
-            ExitDesk::with_ledger(config(), anchor(&members, &beacon), Box::new(ledger)).unwrap();
+            ExitDesk::with_journal(config(), anchor(&members, &beacon), Box::new(journal)).unwrap();
         desk.register_vault(VAULT, 2_000);
         let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
         let opened = feed.drive(&node, &mut desk, VAULT, 10).unwrap();
         assert_eq!(opened.len(), 1, "the first run opens the exit");
+        deadline = desk.exit(opened[0]).unwrap().deadline;
+        assert_eq!(desk.locked_collateral(VAULT), REQUIRED);
     }
 
-    let reloaded = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
-    assert!(reloaded.is_released(&BURN_REF), "the burn_ref survives the restart");
+    let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+    let mut desk =
+        ExitDesk::with_journal(config(), anchor(&members, &beacon), Box::new(journal)).unwrap();
+    desk.register_vault(VAULT, 2_000);
+    desk.reconstruct().unwrap();
+
+    assert_eq!(desk.exit_count(), 1, "the pending exit is rebuilt, not lost");
+    let exit = desk.exit(ExitId(0)).unwrap();
+    assert_eq!(exit.state, ExitState::Pending);
+    assert_eq!(exit.deadline, deadline, "the original deadline survives so a restart cannot reset the slash window");
+    assert_eq!(desk.locked_collateral(VAULT), REQUIRED, "the collateral is re-locked");
+    assert!(desk.is_consumed(&BURN_REF));
+    assert_eq!(desk.slashable(deadline + 1), vec![ExitId(0)], "the rebuilt exit is still slashable on its original schedule");
 
     let node = node(&members, &beacon);
-    let mut desk =
-        ExitDesk::with_ledger(config(), anchor(&members, &beacon), Box::new(reloaded)).unwrap();
-    desk.register_vault(VAULT, 2_000);
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-    let opened = feed.drive(&node, &mut desk, VAULT, 10).unwrap();
-    assert!(opened.is_empty(), "the replayed burn opens no second exit after a restart");
-    assert_eq!(desk.locked_collateral(VAULT), 0);
+    let opened = feed.drive(&node, &mut desk, VAULT, 20).unwrap();
+    assert!(opened.is_empty(), "the rebuilt exit is not opened a second time");
+    assert_eq!(desk.locked_collateral(VAULT), REQUIRED);
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn a_slashed_exit_is_not_reopened_after_a_restart() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let path = temp_path("journal-slashed");
+
+    {
+        let node = node(&members, &beacon);
+        let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+        let mut desk =
+            ExitDesk::with_journal(config(), anchor(&members, &beacon), Box::new(journal)).unwrap();
+        desk.register_vault(VAULT, 2_000);
+        let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
+        let id = feed.drive(&node, &mut desk, VAULT, 10).unwrap()[0];
+        let deadline = desk.exit(id).unwrap().deadline;
+        desk.slash(id, deadline + 1).unwrap();
+        assert_eq!(desk.exit(id).unwrap().state, ExitState::Slashed);
+    }
+
+    let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+    let mut desk =
+        ExitDesk::with_journal(config(), anchor(&members, &beacon), Box::new(journal)).unwrap();
+    desk.register_vault(VAULT, 2_000);
+    desk.reconstruct().unwrap();
+
+    assert_eq!(desk.exit_count(), 1);
+    assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Slashed, "a terminal exit is not resurrected as pending");
+    assert!(desk.is_consumed(&BURN_REF));
+    assert!(desk.slashable(u64::MAX).is_empty(), "a slashed exit is never paid out a second time after a restart");
+
+    let node = node(&members, &beacon);
+    let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
+    let opened = feed.drive(&node, &mut desk, VAULT, 20).unwrap();
+    assert!(opened.is_empty(), "the burn of a slashed exit opens no new exit");
 
     std::fs::remove_file(&path).ok();
 }

@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use q_exits::{
     BurnFeed, ExitConfig, ExitDecision, ExitDesk, ExitError, ExitId, FeedError, PayoutWatcher,
-    PersistentLedger, QuantovaBurnSource, ReplayStore, RpcBurnSource,
+    PersistentJournal, QuantovaBurnSource, ReplayStore, RpcBurnSource,
 };
 use q_federated::SourceEndpoint;
 use q_gateway::{Gateway, OperatorSet};
@@ -45,11 +45,12 @@ impl ExitService {
     // build from a complete trust config: anchor, replay ledger, vault registry, rpc endpoint
     pub fn build(cfg: &ExitTrustConfig) -> Result<ExitService, ExitError> {
         let anchor = cfg.build_anchor()?;
-        let ledger = PersistentLedger::open(ReplayStore::new(cfg.ledger_path.clone()))?;
-        let mut desk = ExitDesk::with_ledger(cfg.desk_config(), anchor, Box::new(ledger))?;
+        let journal = PersistentJournal::open(ReplayStore::new(cfg.ledger_path.with_extension("journal")))?;
+        let mut desk = ExitDesk::with_journal(cfg.desk_config(), anchor, Box::new(journal))?;
         for vault in &cfg.vaults {
             desk.register_vault(vault.vault_id, vault.collateral);
         }
+        desk.reconstruct()?;
         Ok(ExitService {
             desk,
             feed: BurnFeed::new(cfg.start_height, ExitConfig { enabled: true }),

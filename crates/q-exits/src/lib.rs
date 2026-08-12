@@ -8,6 +8,7 @@ pub mod burn_proof;
 pub mod errors;
 pub mod exits;
 pub mod feed;
+pub mod journal;
 pub mod ledger;
 pub mod outbound;
 pub mod payout;
@@ -26,6 +27,10 @@ pub use exits::{
     REDEEM_WINDOW_MS, SECURE_RATIO_BPS, SLASH_PREMIUM_BPS, EXIT_STATEMENT_VERSION,
 };
 pub use feed::{BurnFeed, ExitConfig, FeedError};
+pub use journal::{
+    ExitEvent, ExitJournal, JournaledExit, NullJournal, PersistentJournal, JOURNAL_VERSION,
+    MAX_JOURNAL_ENTRIES,
+};
 pub use ledger::{
     MemoryLedger, PersistentLedger, ReplayLedger, LEDGER_VERSION, MAX_LEDGER_ENTRIES,
 };

@@ -4,6 +4,7 @@
 use crate::anchor::QuantovaAnchor;
 use crate::burn_proof::ProofOfBurn;
 use crate::errors::ExitError;
+use crate::journal::{ExitEvent, ExitJournal, JournaledExit, NullJournal};
 use crate::ledger::{MemoryLedger, ReplayLedger};
 use crate::payout::PayoutWatcher;
 use crate::vault::VaultBook;
@@ -111,17 +112,35 @@ pub struct ExitDesk {
     vaults: VaultBook,
     exits: Vec<Exit>,
     consumed: Box<dyn ReplayLedger + Send>,
+    journal: Box<dyn ExitJournal + Send>,
 }
 
 impl ExitDesk {
     pub fn new(cfg: DeskConfig, anchor: QuantovaAnchor) -> Result<ExitDesk, ExitError> {
-        ExitDesk::with_ledger(cfg, anchor, Box::new(MemoryLedger::new()))
+        ExitDesk::assemble(cfg, anchor, Box::new(MemoryLedger::new()), Box::new(NullJournal::new()))
     }
 
     pub fn with_ledger(
         cfg: DeskConfig,
         anchor: QuantovaAnchor,
         consumed: Box<dyn ReplayLedger + Send>,
+    ) -> Result<ExitDesk, ExitError> {
+        ExitDesk::assemble(cfg, anchor, consumed, Box::new(NullJournal::new()))
+    }
+
+    pub fn with_journal(
+        cfg: DeskConfig,
+        anchor: QuantovaAnchor,
+        journal: Box<dyn ExitJournal + Send>,
+    ) -> Result<ExitDesk, ExitError> {
+        ExitDesk::assemble(cfg, anchor, Box::new(MemoryLedger::new()), journal)
+    }
+
+    fn assemble(
+        cfg: DeskConfig,
+        anchor: QuantovaAnchor,
+        consumed: Box<dyn ReplayLedger + Send>,
+        journal: Box<dyn ExitJournal + Send>,
     ) -> Result<ExitDesk, ExitError> {
         if cfg.corridor == 0
             || cfg.secure_bps <= BPS_DEN as u32
@@ -136,7 +155,59 @@ impl ExitDesk {
             vaults: VaultBook::new(),
             exits: Vec::new(),
             consumed,
+            journal,
         })
+    }
+
+    // replay a durable journal after the vaults are registered to rebuild exits opened before a restart
+    pub fn reconstruct(&mut self) -> Result<(), ExitError> {
+        for event in self.journal.events().to_vec() {
+            match event {
+                ExitEvent::Open { index, exit } => {
+                    if index as usize != self.exits.len() {
+                        return Err(ExitError::PersistFailed);
+                    }
+                    self.vaults.lock(exit.vault_id, exit.locked)?;
+                    self.consumed.record(exit.burn_ref)?;
+                    self.exits.push(Exit {
+                        statement: ExitStatement {
+                            version: exit.version,
+                            corridor: exit.corridor,
+                            asset_id: exit.asset_id,
+                            amount: exit.amount,
+                            beneficiary: exit.beneficiary,
+                            burn_ref: exit.burn_ref,
+                            finalized_height: exit.finalized_height,
+                        },
+                        vault_id: exit.vault_id,
+                        locked: exit.locked,
+                        issued_at: exit.issued_at,
+                        deadline: exit.deadline,
+                        state: ExitState::Pending,
+                    });
+                }
+                ExitEvent::Settle { index, foreign_ref } => {
+                    let exit = self.exits.get_mut(index as usize).ok_or(ExitError::PersistFailed)?;
+                    if exit.state != ExitState::Pending {
+                        return Err(ExitError::PersistFailed);
+                    }
+                    let (vault_id, locked) = (exit.vault_id, exit.locked);
+                    exit.state = ExitState::Settled;
+                    self.consumed.record(foreign_ref)?;
+                    self.vaults.release(vault_id, locked)?;
+                }
+                ExitEvent::Slash { index } => {
+                    let exit = self.exits.get_mut(index as usize).ok_or(ExitError::PersistFailed)?;
+                    if exit.state != ExitState::Pending {
+                        return Err(ExitError::PersistFailed);
+                    }
+                    let (vault_id, locked) = (exit.vault_id, exit.locked);
+                    exit.state = ExitState::Slashed;
+                    self.vaults.seize(vault_id, locked)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn corridor(&self) -> u32 {
@@ -219,6 +290,28 @@ impl ExitDesk {
         }
         let required = self.required_collateral(statement.amount)?;
         self.vaults.lock(vault_id, required)?;
+        let issued_at = now;
+        let deadline = now.saturating_add(self.cfg.window);
+        let record = ExitEvent::Open {
+            index: self.exits.len() as u32,
+            exit: JournaledExit {
+                version: statement.version,
+                corridor: statement.corridor,
+                asset_id: statement.asset_id,
+                amount: statement.amount,
+                beneficiary: statement.beneficiary,
+                burn_ref: statement.burn_ref,
+                finalized_height: statement.finalized_height,
+                vault_id,
+                locked: required,
+                issued_at,
+                deadline,
+            },
+        };
+        if let Err(e) = self.journal.append(&record) {
+            self.vaults.release(vault_id, required)?;
+            return Err(e);
+        }
         if let Err(e) = self.consumed.record(statement.burn_ref) {
             self.vaults.release(vault_id, required)?;
             return Err(e);
@@ -227,8 +320,8 @@ impl ExitDesk {
             statement,
             vault_id,
             locked: required,
-            issued_at: now,
-            deadline: now.saturating_add(self.cfg.window),
+            issued_at,
+            deadline,
             state: ExitState::Pending,
         };
         self.exits.push(exit);
@@ -263,6 +356,10 @@ impl ExitDesk {
         if self.consumed.is_released(&attestation.foreign_ref) {
             return Err(ExitError::ReplayedPayout);
         }
+        self.journal.append(&ExitEvent::Settle {
+            index: id.0 as u32,
+            foreign_ref: attestation.foreign_ref,
+        })?;
         self.consumed.record(attestation.foreign_ref)?;
         let exit = self.exits.get_mut(id.0).ok_or(ExitError::UnknownExit)?;
         let vault_id = exit.vault_id;
@@ -289,6 +386,7 @@ impl ExitDesk {
         let amount = exit.statement.amount;
         let user_payout = self.user_premium(amount)?;
         let remainder = locked.checked_sub(user_payout).ok_or(ExitError::Overflow)?;
+        self.journal.append(&ExitEvent::Slash { index: id.0 as u32 })?;
         self.exits[id.0].state = ExitState::Slashed;
         self.vaults.seize(vault_id, locked)?;
         Ok(SlashOutcome {
