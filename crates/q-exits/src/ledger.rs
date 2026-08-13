@@ -62,6 +62,8 @@ pub trait ReplayLedger {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    // undo an in-memory record when the durable write that should follow it failed
+    fn forget(&mut self, _burn_ref: &[u8; 32]) {}
 }
 
 #[derive(Default)]
@@ -95,6 +97,10 @@ impl ReplayLedger for MemoryLedger {
 
     fn len(&self) -> usize {
         self.released.len()
+    }
+
+    fn forget(&mut self, burn_ref: &[u8; 32]) {
+        self.released.remove(burn_ref);
     }
 }
 
