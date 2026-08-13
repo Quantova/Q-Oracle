@@ -133,6 +133,18 @@ fn hex_array<const N: usize>(j: &Json, name: &'static str) -> Result<[u8; N], Wi
     Ok(out)
 }
 
+fn hex_bounded(j: &Json, name: &'static str, max: usize) -> Result<Vec<u8>, WireError> {
+    let bytes = as_hex(j, name)?;
+    if bytes.len() > max {
+        return Err(WireError::BadLen {
+            field: name,
+            expected: max,
+            got: bytes.len(),
+        });
+    }
+    Ok(bytes)
+}
+
 fn u128s(v: u128) -> Json {
     Json::str(v.to_string())
 }
@@ -385,7 +397,7 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                     start_height: as_u32(field(j, "start_height")?, "start_height")?,
                     deposit_height: as_u32(field(j, "deposit_height")?, "deposit_height")?,
                     branch,
-                    raw_tx: as_hex(field(j, "raw_tx")?, "raw_tx")?,
+                    raw_tx: hex_bounded(field(j, "raw_tx")?, "raw_tx", crate::watch::MAX_RAW_TX)?,
                 },
                 fact: decode_fact(j)?,
             })
