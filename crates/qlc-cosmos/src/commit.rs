@@ -128,10 +128,6 @@ pub fn tally_signed_power(
     if commit.block_id.hash != header.hash() {
         return Err(CommitError::HeaderMismatch);
     }
-    // Index the validators by address once so each signature is an O(1) lookup. The prior linear
-    // find rehashed every validator for every signature, making a crafted commit + set O(sigs*set)
-    // SHA-256 work; keying counted in a set likewise drops the O(sigs^2) duplicate scan. The tally is
-    // now linear in the input, which the ingress byte cap already bounds.
     let mut by_address: HashMap<[u8; 20], &crate::validator::ValidatorInfo> =
         HashMap::with_capacity(set.validators.len());
     for v in &set.validators {

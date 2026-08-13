@@ -276,6 +276,15 @@ fn handle_connection(
         return write_response(&mut stream, 200, &body);
     }
 
+    if method == "create_pool" {
+        return write_error(
+            &mut stream,
+            403,
+            "not_permitted",
+            "pool creation is not exposed over the public API; the asset registry is provisioned at boot",
+        );
+    }
+
     let parsed = if body_text.trim().is_empty() {
         Json::Object(Vec::new())
     } else {
@@ -642,6 +651,22 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.contains("\"status\":\"ok\""), "{response}");
         assert!(response.contains("\"revision\""), "{response}");
+    }
+
+    #[test]
+    fn create_pool_is_refused_over_the_public_socket() {
+        let port = serve_seeded();
+        let body = "{\"network_id\":1,\"identifier\":\"EVIL\",\"decimals\":18,\"per_asset_cap\":\"1\",\"per_epoch_cap\":\"1\"}";
+        let response = round_trip(
+            port,
+            &format!(
+                "POST /v1/create_pool HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(response.contains("\"error\":\"not_permitted\""), "{response}");
     }
 
     #[test]
