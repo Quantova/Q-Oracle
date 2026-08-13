@@ -165,9 +165,6 @@ impl ReplayLedger for PersistentLedger {
     }
 
     fn forget(&mut self, burn_ref: &[u8; 32]) {
-        // Undo an in-memory record whose durable journal follow-up failed. record() already appended
-        // the frame to disk, so drop it from the set and rewrite the file to match. A rewrite failure
-        // leaves the ref recorded, which fails safe: the exit is refused, never double paid.
         if self.released.remove(burn_ref) {
             let _ = self.compact();
         }
