@@ -167,6 +167,9 @@ impl ExitDesk {
                     if index as usize != self.exits.len() {
                         return Err(ExitError::PersistFailed);
                     }
+                    if self.consumed.is_released(&exit.burn_ref) {
+                        return Err(ExitError::PersistFailed);
+                    }
                     self.vaults.lock(exit.vault_id, exit.locked)?;
                     self.consumed.record(exit.burn_ref)?;
                     self.exits.push(Exit {
@@ -308,11 +311,11 @@ impl ExitDesk {
                 deadline,
             },
         };
-        if let Err(e) = self.journal.append(&record) {
+        if let Err(e) = self.consumed.record(statement.burn_ref) {
             self.vaults.release(vault_id, required)?;
             return Err(e);
         }
-        if let Err(e) = self.consumed.record(statement.burn_ref) {
+        if let Err(e) = self.journal.append(&record) {
             self.vaults.release(vault_id, required)?;
             return Err(e);
         }

@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use q_exits::{
-    BurnFeed, BurnWatchError, DeskConfig, ExitConfig, ExitDesk, ExitId, ExitState, FeedError,
-    FinalizedBlock, MemberConfig, PersistentJournal, QuantovaAnchor, QuantovaBurnSource,
-    ReplayStore,
+    BurnFeed, BurnWatchError, DeskConfig, ExitConfig, ExitDesk, ExitError, ExitEvent, ExitId,
+    ExitJournal, ExitState, FeedError, FinalizedBlock, JournaledExit, MemberConfig,
+    PersistentJournal, QuantovaAnchor, QuantovaBurnSource, ReplayStore, EXIT_STATEMENT_VERSION,
 };
 
 use qtv_attest::aggregate::aggregate;
@@ -292,6 +292,44 @@ fn a_pending_exit_survives_a_restart_through_the_journal() {
     let opened = feed.drive(&node, &mut desk, VAULT, 20).unwrap();
     assert!(opened.is_empty(), "the rebuilt exit is not opened a second time");
     assert_eq!(desk.locked_collateral(VAULT), REQUIRED);
+
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn a_journal_with_a_duplicate_open_is_refused_not_double_paid() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let path = temp_path("journal-dup");
+
+    {
+        let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+        let framed = JournaledExit {
+            version: EXIT_STATEMENT_VERSION,
+            corridor: CORRIDOR,
+            asset_id: ASSET,
+            amount: AMOUNT,
+            beneficiary: BENEFICIARY,
+            burn_ref: BURN_REF,
+            finalized_height: HEIGHT,
+            vault_id: VAULT,
+            locked: REQUIRED,
+            issued_at: 10,
+            deadline: 110,
+        };
+        journal.append(&ExitEvent::Open { index: 0, exit: framed.clone() }).unwrap();
+        journal.append(&ExitEvent::Open { index: 1, exit: framed }).unwrap();
+    }
+
+    let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+    let mut desk =
+        ExitDesk::with_journal(config(), anchor(&members, &beacon), Box::new(journal)).unwrap();
+    desk.register_vault(VAULT, 2_000);
+    assert_eq!(
+        desk.reconstruct(),
+        Err(ExitError::PersistFailed),
+        "a second open for a burn already seen must fail closed, never build two payable exits"
+    );
 
     std::fs::remove_file(&path).ok();
 }
