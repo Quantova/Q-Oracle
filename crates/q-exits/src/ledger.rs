@@ -163,6 +163,15 @@ impl ReplayLedger for PersistentLedger {
     fn len(&self) -> usize {
         self.released.len()
     }
+
+    fn forget(&mut self, burn_ref: &[u8; 32]) {
+        // Undo an in-memory record whose durable journal follow-up failed. record() already appended
+        // the frame to disk, so drop it from the set and rewrite the file to match. A rewrite failure
+        // leaves the ref recorded, which fails safe: the exit is refused, never double paid.
+        if self.released.remove(burn_ref) {
+            let _ = self.compact();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -215,6 +224,25 @@ mod tests {
             "a persist failure leaves memory in step with disk"
         );
         assert_eq!(ledger.len(), 0);
+    }
+
+    #[test]
+    fn forgetting_a_persistent_ref_clears_it_from_memory_and_disk() {
+        let path = temp_path("forget");
+        {
+            let mut ledger = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+            ledger.record([0x5a; 32]).unwrap();
+            assert!(ledger.is_released(&[0x5a; 32]));
+            ledger.forget(&[0x5a; 32]);
+            assert!(!ledger.is_released(&[0x5a; 32]), "forget clears the in-memory set");
+        }
+        let reopened = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+        assert!(
+            !reopened.is_released(&[0x5a; 32]),
+            "the durable file drops the forgotten ref so the burn can still open an exit"
+        );
+        assert_eq!(reopened.len(), 0);
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
