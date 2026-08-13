@@ -316,6 +316,7 @@ impl ExitDesk {
             return Err(e);
         }
         if let Err(e) = self.journal.append(&record) {
+            self.consumed.forget(&statement.burn_ref);
             self.vaults.release(vault_id, required)?;
             return Err(e);
         }
