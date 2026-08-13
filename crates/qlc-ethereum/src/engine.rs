@@ -1099,7 +1099,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn a_placeholder_deposit_contract_fails_closed() {
         let mut f = build_fixture(1_000u128, full_participation());
         f.store.config.deposit_contract = [0x11; 20];
@@ -1109,6 +1108,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn a_log_under_a_foreign_topic_is_not_a_trustless_deposit() {
         let mut cfg = config::ethereum();
         cfg.deposit_contract = TEST_DEPOSIT_CONTRACT;
