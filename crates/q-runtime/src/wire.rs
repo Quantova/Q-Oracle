@@ -2077,6 +2077,36 @@ mod tests {
     }
 
     #[test]
+    fn no_method_but_the_exact_create_pool_string_decodes_to_a_create_pool_request() {
+        let body = object(vec![
+            ("network_id", Json::Int(1)),
+            ("identifier", Json::str("EVIL")),
+            ("decimals", Json::Int(18)),
+            ("per_asset_cap", Json::str("1")),
+            ("per_epoch_cap", Json::str("1")),
+        ]);
+        for alias in [
+            "Create_Pool",
+            "CREATE_POOL",
+            "create_pool ",
+            " create_pool",
+            "create_pool\t",
+            "createpool",
+            "submit_deposit",
+            "list_pools",
+        ] {
+            assert!(
+                !matches!(decode_request(alias, &body), Ok(Request::CreatePool(_))),
+                "method {alias:?} must not smuggle a create_pool past the transport gate"
+            );
+        }
+        assert!(matches!(
+            decode_request("create_pool", &body),
+            Ok(Request::CreatePool(_))
+        ));
+    }
+
+    #[test]
     fn an_oversized_bitcoin_headers_array_is_rejected_before_allocation() {
         let headers = Json::Array(vec![Json::str(""); MAX_HEADERS + 1]);
         let body = object(vec![(
