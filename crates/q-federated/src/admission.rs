@@ -240,7 +240,7 @@ mod tests {
         let c = find(SOLANA).unwrap();
         assert_eq!(
             admit(&mut gw, &c, &sources, &env),
-            Err(FederatedError::Gateway(GatewayError::BadSignature(0))),
+            Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 0, need: 3 })),
             "the signed preimage binds the destination chain id so it cannot replay"
         );
         assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
