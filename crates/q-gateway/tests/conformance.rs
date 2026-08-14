@@ -99,7 +99,7 @@ fn a_quorum_signed_for_one_chain_id_is_refused_by_a_sibling_gateway() {
     let mut sibling = gateway_with(&ops, 3, chain_b);
     assert_eq!(
         sibling.process_deposit(&env),
-        Err(GatewayError::BadSignature(0)),
+        Err(GatewayError::BelowThreshold { got: 0, need: 3 }),
         "a sibling chain sharing the u32 destination refuses the replayed quorum"
     );
     assert_eq!(sibling.minted_of_asset(&ASSET), 0);
@@ -186,7 +186,7 @@ fn vector_signature_under_a_foreign_context_does_not_count() {
             sign_ctx(&ops[2], &f.attest_preimage(DEST_ID), REORG_DOMAIN),
         ],
     };
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BadSignature(2)));
+    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BelowThreshold { got: 2, need: 3 }));
     assert_eq!(gw.minted_of_asset(&ASSET), 0);
 }
 
@@ -204,7 +204,7 @@ fn vector_signature_over_a_reshaped_fact_does_not_count() {
             attest(&ops[2], &reshaped),
         ],
     };
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BadSignature(2)));
+    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BelowThreshold { got: 2, need: 3 }));
     assert_eq!(gw.minted_of_asset(&ASSET), 0);
 }
 

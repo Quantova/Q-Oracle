@@ -297,7 +297,7 @@ impl Gateway {
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
         let message = reorg_message(source_chain, fork_depth, self.dest_chain_id);
-        let distinct = verify_quorum(&message, REORG_DOMAIN, sigs, &self.operators)?;
+        let distinct = verify_quorum(&message, REORG_DOMAIN, sigs, &self.operators);
         if distinct.len() < self.operators.threshold() {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -319,7 +319,7 @@ impl Gateway {
             return Err(GatewayError::NoGovernanceSet);
         }
         let message = tier_message(source_chain, proposed, self.dest_chain_id);
-        let distinct = verify_quorum(&message, TIER_DOMAIN, sigs, &self.governance)?;
+        let distinct = verify_quorum(&message, TIER_DOMAIN, sigs, &self.governance);
         if distinct.len() < self.governance.threshold() {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -346,7 +346,7 @@ impl Gateway {
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
         let message = freeze_message(until_height, self.dest_chain_id);
-        let distinct = verify_quorum(&message, FREEZE_DOMAIN, sigs, &self.operators)?;
+        let distinct = verify_quorum(&message, FREEZE_DOMAIN, sigs, &self.operators);
         if distinct.len() < self.operators.threshold() {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -373,12 +373,15 @@ impl Gateway {
             });
         }
         let message = freeze_message(until_height, self.dest_chain_id);
-        verify_quorum(
+        let distinct = verify_quorum(
             &message,
             WATCHDOG_DOMAIN,
             std::slice::from_ref(sig),
             &self.operators,
-        )?;
+        );
+        if distinct.is_empty() {
+            return Err(GatewayError::BelowThreshold { got: 0, need: 1 });
+        }
         if until_height > self.deposit_frozen_until {
             self.deposit_frozen_until = until_height;
             self.touch_guard();
@@ -408,7 +411,7 @@ impl Gateway {
                 .max(supermajority_floor(self.operators.size()))
         };
         let message = batch_message(source_chain, batch_index, self.dest_chain_id);
-        let distinct = verify_quorum(&message, BATCH_DOMAIN, sigs, &self.operators)?;
+        let distinct = verify_quorum(&message, BATCH_DOMAIN, sigs, &self.operators);
         if distinct.len() < required {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -619,7 +622,7 @@ impl Gateway {
         }
 
         let message = fact.attest_preimage(self.dest_chain_id);
-        let distinct = verify_quorum(&message, ATTEST_DOMAIN, &env.signatures, &self.operators)?;
+        let distinct = verify_quorum(&message, ATTEST_DOMAIN, &env.signatures, &self.operators);
         if distinct.len() < required {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -1376,7 +1379,7 @@ mod tests {
             .expect("the freeze verifies on the destination it was signed for");
         assert_eq!(
             there.emergency_freeze(until, &sigs),
-            Err(GatewayError::BadSignature(0)),
+            Err(GatewayError::BelowThreshold { got: 0, need: 3 }),
             "a freeze bound to one destination chain id must not verify on a second gateway"
         );
     }

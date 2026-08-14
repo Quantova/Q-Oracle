@@ -266,7 +266,7 @@ fn only_an_ml_dsa_attestation_over_the_canonical_preimage_counts() {
 
     assert_eq!(
         admit(&mut gw, &c, &sources, &env),
-        Err(FederatedError::Gateway(GatewayError::BadSignature(2)))
+        Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 2, need: 3 }))
     );
     assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
     assert!(!c.tier.is_proof_backed_tier());

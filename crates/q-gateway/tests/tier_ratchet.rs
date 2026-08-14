@@ -119,7 +119,7 @@ fn an_operator_quorum_cannot_move_the_tier() {
         .collect();
     assert_eq!(
         gw.set_corridor_tier(SOURCE, 2, &by_operators),
-        Err(GatewayError::UnknownOperator(0))
+        Err(GatewayError::BelowThreshold { got: 0, need: 3 })
     );
     assert_eq!(gw.corridor_tier(SOURCE), Some(1));
 }

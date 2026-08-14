@@ -156,7 +156,7 @@ fn unknown_operator_is_rejected() {
     let outsider = mk_op(99);
     let fact = deposit_fact([0x14; 32], ASSET_A, 500);
     let env = attest(&[&ops[0], &ops[1], &outsider], &fact);
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::UnknownOperator(99)));
+    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BelowThreshold { got: 2, need: 3 }));
 }
 
 #[test]
@@ -167,7 +167,7 @@ fn tampered_signature_is_rejected() {
     let mut env = attest(&[&ops[0], &ops[1], &ops[2]], &fact);
     let last = env.signatures[2].signature.len() - 1;
     env.signatures[2].signature[last] ^= 0x01;
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BadSignature(2)));
+    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BelowThreshold { got: 2, need: 3 }));
 }
 
 #[test]

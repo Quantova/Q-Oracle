@@ -217,7 +217,7 @@ fn a_stranger_alarm_is_not_a_watchdog() {
     let alarm = sign_ctx(&outsider, &until_message(until), WATCHDOG_DOMAIN);
     assert_eq!(
         gw.watchdog_freeze(until, &alarm),
-        Err(GatewayError::UnknownOperator(99))
+        Err(GatewayError::BelowThreshold { got: 0, need: 1 })
     );
     assert!(!gw.is_frozen());
 }
