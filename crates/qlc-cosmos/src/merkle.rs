@@ -20,7 +20,7 @@ pub fn inner_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
 
 fn largest_pow2_lt(n: usize) -> usize {
     let mut k = 1;
-    while k * 2 < n {
+    while k < n - k {
         k *= 2;
     }
     k
@@ -154,5 +154,13 @@ mod tests {
         let root = merkle_root(&l);
         let aunts = proof_aunts(&l, 4);
         assert!(!verify_inclusion(&root, &l[4], 1, 6, &aunts));
+    }
+
+    #[test]
+    fn a_hostile_total_near_the_usize_ceiling_fails_closed_without_overflowing() {
+        let leaf = [0x42u8; 32];
+        let aunts = [[0u8; 32]];
+        assert!(!verify_inclusion(&[0u8; 32], &leaf, 0, usize::MAX, &aunts));
+        assert!(!verify_inclusion(&[0u8; 32], &leaf, 0, (1usize << 63) + 1, &aunts));
     }
 }
