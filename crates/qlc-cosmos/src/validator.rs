@@ -68,9 +68,11 @@ pub fn has_two_thirds(signed_power: u128, total_power: u128) -> bool {
 }
 
 pub fn overlap_power(old: &ValidatorSet, new: &ValidatorSet) -> u128 {
+    let new_addresses: std::collections::HashSet<[u8; 20]> =
+        new.validators.iter().map(|v| v.address()).collect();
     let mut overlap: u128 = 0;
     for v in &old.validators {
-        if new.get_by_address(&v.address()).is_some() {
+        if new_addresses.contains(&v.address()) {
             overlap += v.voting_power as u128;
         }
     }
@@ -179,5 +181,28 @@ mod tests {
         assert_eq!(overlap_power(&old, &new), 40);
         assert!(overlap_meets(&old, &new, 1, 3));
         assert!(!overlap_meets(&old, &new, 2, 3));
+    }
+
+    fn distinct_key(i: u32) -> [u8; 32] {
+        let mut k = [0xf1u8; 32];
+        k[0..4].copy_from_slice(&i.to_le_bytes());
+        k
+    }
+
+    #[test]
+    fn overlap_stays_linear_against_a_large_untrusted_set() {
+        let old = ValidatorSet::new((0..128).map(|i| validator(i as u8, 10)).collect());
+        let mut new_vals: Vec<ValidatorInfo> = (0..40).map(|i| validator(i as u8, 10)).collect();
+        for i in 0..40_000u32 {
+            new_vals.push(ValidatorInfo { pubkey: distinct_key(i), voting_power: 1 });
+        }
+        let new = ValidatorSet::new(new_vals);
+        let start = std::time::Instant::now();
+        let overlap = overlap_power(&old, &new);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "overlap over a large untrusted set must not be quadratic"
+        );
+        assert_eq!(overlap, 40 * 10, "the forty shared validators contribute their power once each");
     }
 }
