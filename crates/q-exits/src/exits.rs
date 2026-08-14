@@ -513,4 +513,108 @@ mod tests {
         s.burn_ref = [0u8; 32];
         assert_eq!(s.validate(), Err(ExitError::ZeroBurnRef));
     }
+
+    use crate::journal::{JournaledExit, PersistentJournal};
+    use crate::store::ReplayStore;
+    use std::path::PathBuf;
+
+    fn journal_path(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!("q-oracle-reconstruct-{tag}-{}-{nanos}.jrn", std::process::id()));
+        path
+    }
+
+    fn journaled(vault_id: u32, locked: u128, burn_ref: [u8; 32]) -> JournaledExit {
+        JournaledExit {
+            version: EXIT_STATEMENT_VERSION,
+            corridor: 1,
+            asset_id: [0xa1; 16],
+            amount: 1_000,
+            beneficiary: [0x55; 32],
+            burn_ref,
+            finalized_height: 4_200_000,
+            vault_id,
+            locked,
+            issued_at: 10,
+            deadline: 110,
+        }
+    }
+
+    #[test]
+    fn an_open_then_settle_journal_rebuilds_without_double_release_or_drop() {
+        let path = journal_path("open-settle");
+        let burn = [0x11; 32];
+        let foreign = [0x77; 32];
+        {
+            let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+            journal
+                .append(&ExitEvent::Open { index: 0, exit: journaled(1, 1_500, burn) })
+                .unwrap();
+            journal
+                .append(&ExitEvent::Settle { index: 0, foreign_ref: foreign })
+                .unwrap();
+        }
+        let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+        let mut desk = ExitDesk::with_journal(cfg(), anchor(), Box::new(journal)).unwrap();
+        desk.register_vault(1, 2_000);
+        desk.reconstruct().expect("a clean open+settle journal rebuilds");
+
+        assert_eq!(desk.exit_count(), 1);
+        assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Settled);
+        assert_eq!(
+            desk.free_collateral(1),
+            2_000,
+            "the lock then release nets to zero, no collateral double-released"
+        );
+        assert_eq!(desk.locked_collateral(1), 0);
+        assert!(desk.is_consumed(&burn), "the burn ref survives the rebuild");
+        assert!(desk.is_consumed(&foreign), "the payout ref survives the rebuild");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn an_open_then_slash_journal_rebuilds_the_seizure_once() {
+        let path = journal_path("open-slash");
+        let burn = [0x22; 32];
+        {
+            let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+            journal
+                .append(&ExitEvent::Open { index: 0, exit: journaled(1, 1_500, burn) })
+                .unwrap();
+            journal.append(&ExitEvent::Slash { index: 0 }).unwrap();
+        }
+        let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+        let mut desk = ExitDesk::with_journal(cfg(), anchor(), Box::new(journal)).unwrap();
+        desk.register_vault(1, 2_000);
+        desk.reconstruct().expect("a clean open+slash journal rebuilds");
+
+        assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Slashed);
+        assert_eq!(desk.free_collateral(1), 500, "the seizure is applied exactly once");
+        assert_eq!(desk.locked_collateral(1), 0);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_settle_over_an_unknown_index_fails_closed_rather_than_dropping() {
+        let path = journal_path("dangling-settle");
+        {
+            let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+            journal
+                .append(&ExitEvent::Settle { index: 5, foreign_ref: [0x88; 32] })
+                .unwrap();
+        }
+        let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+        let mut desk = ExitDesk::with_journal(cfg(), anchor(), Box::new(journal)).unwrap();
+        desk.register_vault(1, 2_000);
+        assert_eq!(
+            desk.reconstruct(),
+            Err(ExitError::PersistFailed),
+            "a settle that references no open exit is refused, not silently dropped"
+        );
+        std::fs::remove_file(&path).ok();
+    }
 }

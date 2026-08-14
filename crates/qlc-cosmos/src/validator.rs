@@ -190,6 +190,29 @@ mod tests {
     }
 
     #[test]
+    fn total_power_and_the_two_thirds_multiply_do_not_overflow_at_maximum_voting_power() {
+        let set = ValidatorSet::new((0..200).map(|i| validator(i as u8, u64::MAX)).collect());
+        assert_eq!(set.total_power(), (u64::MAX as u128) * 200);
+        assert!(has_two_thirds(set.total_power(), set.total_power()));
+        assert!(!has_two_thirds(set.total_power() / 2, set.total_power()));
+    }
+
+    #[test]
+    fn the_validator_set_hash_stays_linear_against_a_large_untrusted_set() {
+        let set = ValidatorSet::new(
+            (0..60_000u32)
+                .map(|i| ValidatorInfo { pubkey: distinct_key(i), voting_power: 1 })
+                .collect(),
+        );
+        let start = std::time::Instant::now();
+        let _ = set.hash();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "hashing a large untrusted validator set must not be quadratic"
+        );
+    }
+
+    #[test]
     fn overlap_stays_linear_against_a_large_untrusted_set() {
         let old = ValidatorSet::new((0..128).map(|i| validator(i as u8, 10)).collect());
         let mut new_vals: Vec<ValidatorInfo> = (0..40).map(|i| validator(i as u8, 10)).collect();
