@@ -1,6 +1,9 @@
 # Copyright 2026 Quantova Inc
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 
+[graph]
+all-features = true
+
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
