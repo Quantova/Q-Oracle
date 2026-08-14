@@ -298,10 +298,11 @@ impl Gateway {
     ) -> Result<(), GatewayError> {
         let message = reorg_message(source_chain, fork_depth, self.dest_chain_id);
         let distinct = verify_quorum(&message, REORG_DOMAIN, sigs, &self.operators);
-        if distinct.len() < self.operators.threshold() {
+        let need = self.operators.threshold().max(1);
+        if distinct.len() < need {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
-                need: self.operators.threshold(),
+                need,
             });
         }
         self.paused_sources.insert(source_chain);
@@ -320,10 +321,11 @@ impl Gateway {
         }
         let message = tier_message(source_chain, proposed, self.dest_chain_id);
         let distinct = verify_quorum(&message, TIER_DOMAIN, sigs, &self.governance);
-        if distinct.len() < self.governance.threshold() {
+        let need = self.governance.threshold().max(1);
+        if distinct.len() < need {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
-                need: self.governance.threshold(),
+                need,
             });
         }
         let corridor = self
@@ -347,10 +349,11 @@ impl Gateway {
     ) -> Result<(), GatewayError> {
         let message = freeze_message(until_height, self.dest_chain_id);
         let distinct = verify_quorum(&message, FREEZE_DOMAIN, sigs, &self.operators);
-        if distinct.len() < self.operators.threshold() {
+        let need = self.operators.threshold().max(1);
+        if distinct.len() < need {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
-                need: self.operators.threshold(),
+                need,
             });
         }
         if until_height > self.frozen_until {
@@ -1635,6 +1638,38 @@ mod tests {
         assert_eq!(
             gw.process_deposit(&envelope(&s[0..6], &first)),
             Err(GatewayError::ReplayedReference)
+        );
+    }
+
+    #[test]
+    fn a_zero_threshold_operator_set_never_freezes_or_pauses_on_no_signatures() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(0);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        assert_eq!(
+            gw.emergency_freeze(5_000, &[]),
+            Err(GatewayError::BelowThreshold { got: 0, need: 1 }),
+            "a zero threshold must not fail open into a no-signature freeze"
+        );
+        assert_eq!(gw.frozen_until(), 0, "the freeze did not take effect");
+        assert_eq!(
+            gw.report_reorg(1, 3, &[]),
+            Err(GatewayError::BelowThreshold { got: 0, need: 1 }),
+            "a zero threshold must not fail open into a no-signature pause"
+        );
+        assert!(!gw.is_source_paused(1), "the source was not paused");
+
+        let empty = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000);
+        let mut empty = empty;
+        empty.register_corridor(1, 6);
+        assert_eq!(
+            empty.emergency_freeze(5_000, &[]),
+            Err(GatewayError::BelowThreshold { got: 0, need: 1 }),
+            "a trustless gateway with no operators must not be freezable by anyone"
         );
     }
 
