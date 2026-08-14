@@ -165,8 +165,8 @@ impl ReplayLedger for PersistentLedger {
     }
 
     fn forget(&mut self, burn_ref: &[u8; 32]) {
-        if self.released.remove(burn_ref) {
-            let _ = self.compact();
+        if self.released.remove(burn_ref) && self.compact().is_err() {
+            self.released.insert(*burn_ref);
         }
     }
 }
@@ -240,6 +240,20 @@ mod tests {
         );
         assert_eq!(reopened.len(), 0);
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_forget_whose_compact_fails_keeps_the_ref_durably_consumed() {
+        let mut ledger = PersistentLedger {
+            released: BTreeSet::from([[0xcc; 32]]),
+            store: ReplayStore::new("/no-such-q-oracle-exit-dir/replay.led"),
+        };
+        ledger.forget(&[0xcc; 32]);
+        assert!(
+            ledger.is_released(&[0xcc; 32]),
+            "a compact failure leaves the ref consumed, not half-forgotten across a restart"
+        );
+        assert_eq!(ledger.len(), 1);
     }
 
     #[test]
