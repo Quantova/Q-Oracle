@@ -298,7 +298,10 @@ impl Gateway {
     ) -> Result<(), GatewayError> {
         let message = reorg_message(source_chain, fork_depth, self.dest_chain_id);
         let distinct = verify_quorum(&message, REORG_DOMAIN, sigs, &self.operators);
-        let need = self.operators.threshold().max(1);
+        let need = self
+            .operators
+            .threshold()
+            .max(supermajority_floor(self.operators.size()));
         if distinct.len() < need {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -321,7 +324,10 @@ impl Gateway {
         }
         let message = tier_message(source_chain, proposed, self.dest_chain_id);
         let distinct = verify_quorum(&message, TIER_DOMAIN, sigs, &self.governance);
-        let need = self.governance.threshold().max(1);
+        let need = self
+            .governance
+            .threshold()
+            .max(supermajority_floor(self.governance.size()));
         if distinct.len() < need {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -349,7 +355,10 @@ impl Gateway {
     ) -> Result<(), GatewayError> {
         let message = freeze_message(until_height, self.dest_chain_id);
         let distinct = verify_quorum(&message, FREEZE_DOMAIN, sigs, &self.operators);
-        let need = self.operators.threshold().max(1);
+        let need = self
+            .operators
+            .threshold()
+            .max(supermajority_floor(self.operators.size()));
         if distinct.len() < need {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -1652,13 +1661,13 @@ mod tests {
         gw.register_corridor(1, 6);
         assert_eq!(
             gw.emergency_freeze(5_000, &[]),
-            Err(GatewayError::BelowThreshold { got: 0, need: 1 }),
+            Err(GatewayError::BelowThreshold { got: 0, need: 2 }),
             "a zero threshold must not fail open into a no-signature freeze"
         );
         assert_eq!(gw.frozen_until(), 0, "the freeze did not take effect");
         assert_eq!(
             gw.report_reorg(1, 3, &[]),
-            Err(GatewayError::BelowThreshold { got: 0, need: 1 }),
+            Err(GatewayError::BelowThreshold { got: 0, need: 2 }),
             "a zero threshold must not fail open into a no-signature pause"
         );
         assert!(!gw.is_source_paused(1), "the source was not paused");
@@ -1668,7 +1677,7 @@ mod tests {
         empty.register_corridor(1, 6);
         assert_eq!(
             empty.emergency_freeze(5_000, &[]),
-            Err(GatewayError::BelowThreshold { got: 0, need: 1 }),
+            Err(GatewayError::BelowThreshold { got: 0, need: 2 }),
             "a trustless gateway with no operators must not be freezable by anyone"
         );
     }
