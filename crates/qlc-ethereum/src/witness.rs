@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(witness.facts.attested_header_root, f.update.attested_header.hash_tree_root());
         assert_eq!(witness.facts.receipts_root, f.update.execution.receipts_root);
         assert_eq!(witness.facts.participants, 400);
-        assert_eq!(witness.statement.corridor_id, 1);
+        assert_eq!(witness.statement.corridor_id, 2);
     }
 
     #[test]

@@ -118,7 +118,7 @@ fn no_forks() -> Vec<Fork> {
 pub fn ethereum() -> EvmChainConfig {
     EvmChainConfig {
         chain_id: 1,
-        corridor_id: 1,
+        corridor_id: 2,
         name: "Ethereum",
         consensus: ConsensusKind::BeaconSyncCommittee,
         genesis_validators_root: [
@@ -140,7 +140,7 @@ pub fn ethereum() -> EvmChainConfig {
 pub fn bnb_chain() -> EvmChainConfig {
     EvmChainConfig {
         chain_id: 56,
-        corridor_id: 2,
+        corridor_id: 3,
         name: "BNB Smart Chain",
         consensus: ConsensusKind::ForeignConsensus,
         genesis_validators_root: [0u8; 32],
@@ -158,7 +158,7 @@ pub fn bnb_chain() -> EvmChainConfig {
 pub fn polygon() -> EvmChainConfig {
     EvmChainConfig {
         chain_id: 137,
-        corridor_id: 5,
+        corridor_id: 4,
         name: "Polygon",
         consensus: ConsensusKind::ForeignConsensus,
         genesis_validators_root: [0u8; 32],
@@ -176,7 +176,7 @@ pub fn polygon() -> EvmChainConfig {
 pub fn avalanche() -> EvmChainConfig {
     EvmChainConfig {
         chain_id: 43114,
-        corridor_id: 20,
+        corridor_id: 5,
         name: "Avalanche",
         consensus: ConsensusKind::ForeignConsensus,
         genesis_validators_root: [0u8; 32],
@@ -212,7 +212,7 @@ pub fn arbitrum() -> EvmChainConfig {
 pub fn optimism() -> EvmChainConfig {
     EvmChainConfig {
         chain_id: 10,
-        corridor_id: 21,
+        corridor_id: 7,
         name: "Optimism",
         consensus: ConsensusKind::SettlesToEthereum,
         genesis_validators_root: ethereum().genesis_validators_root,
@@ -230,7 +230,7 @@ pub fn optimism() -> EvmChainConfig {
 pub fn base() -> EvmChainConfig {
     EvmChainConfig {
         chain_id: 8453,
-        corridor_id: 7,
+        corridor_id: 8,
         name: "Base",
         consensus: ConsensusKind::SettlesToEthereum,
         genesis_validators_root: ethereum().genesis_validators_root,
@@ -248,7 +248,7 @@ pub fn base() -> EvmChainConfig {
 pub fn robinhood_chain() -> EvmChainConfig {
     EvmChainConfig {
         chain_id: 0,
-        corridor_id: 22,
+        corridor_id: 33,
         name: "Robinhood Chain",
         consensus: ConsensusKind::SettlesToEthereum,
         genesis_validators_root: ethereum().genesis_validators_root,

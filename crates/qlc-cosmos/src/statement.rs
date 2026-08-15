@@ -305,12 +305,12 @@ mod tests {
         let out = verify_deposit(&COSMOS_HUB, &anchor(&set), &header, &commit, &set, &proof, wnow()).unwrap();
 
         assert_eq!(out.statement.kind, StatementKind::CosmosTendermint);
-        assert_eq!(out.statement.corridor_id, 8);
+        assert_eq!(out.statement.corridor_id, 16);
         assert_eq!(out.statement.anchor, header.hash());
         assert_eq!(out.statement.finality_depth, COSMOS_HUB.confirmation_depth);
         assert_eq!(out.statement.event.amount, 7_500_000u128);
         assert_eq!(out.statement.event.recipient, [0x51u8; 32]);
-        assert_eq!(out.event.source_chain, 8);
+        assert_eq!(out.event.source_chain, 16);
         assert_eq!(out.event.height, 18_500_000);
         assert_eq!(out.signed_power, 100);
     }
@@ -322,7 +322,7 @@ mod tests {
         let lowered = lower(&out.statement);
 
         assert_eq!(lowered.kind, StatementKind::CosmosTendermint);
-        assert_eq!(lowered.corridor_id, 8);
+        assert_eq!(lowered.corridor_id, 16);
         assert_eq!(lowered.dest_chain_id, qlc_stark::QUANTOVA_DEST_CHAIN_ID);
         assert_eq!(lowered.nonce, header.height as u64);
         assert_eq!(lowered.public_input_digest, shake256_256(&out.statement.encode()));
@@ -473,7 +473,7 @@ mod tests {
         header.chain_id = crate::chain::OSMOSIS.chain_id.to_string();
         let commit = resign(&header, &set);
         let out = verify_deposit(&crate::chain::OSMOSIS, &anchor(&set), &header, &commit, &set, &proof, wnow()).unwrap();
-        assert_eq!(out.statement.corridor_id, 9);
+        assert_eq!(out.statement.corridor_id, 17);
         assert_eq!(out.statement.kind, StatementKind::CosmosTendermint);
     }
 
