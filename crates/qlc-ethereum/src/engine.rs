@@ -697,7 +697,7 @@ mod tests {
         let statement =
             verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls).unwrap();
         assert_eq!(statement.kind, qlc_stark::StatementKind::EvmLightClient);
-        assert_eq!(statement.corridor_id, 1);
+        assert_eq!(statement.corridor_id, 2);
         assert_eq!(statement.anchor, f.finalized_root);
         assert_eq!(statement.event.amount, f.amount);
         assert_eq!(statement.event.recipient, f.recipient);
@@ -1005,7 +1005,7 @@ mod tests {
             verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls).unwrap();
         let lowered = lower_to_stark(&statement);
         assert_eq!(lowered.kind, qlc_stark::StatementKind::EvmLightClient);
-        assert_eq!(lowered.corridor_id, 1);
+        assert_eq!(lowered.corridor_id, 2);
         assert_eq!(lowered.public_input_digest, shake256_256(&statement.encode()));
     }
 
@@ -1041,7 +1041,7 @@ mod tests {
             log_index: 0,
         };
         let ev = to_verified_event(&f.store.config, 20_000_000, [0x09; 32], &raw);
-        assert_eq!(ev.source_chain, 1);
+        assert_eq!(ev.source_chain, 2);
         assert_eq!(ev.asset_id, f.asset_id);
         assert_eq!(ev.amount, f.amount);
         assert_eq!(ev.height, 20_000_000);

@@ -38,11 +38,11 @@ impl ChainConfig {
     }
 }
 
-pub const COSMOS_HUB: ChainConfig = ChainConfig::new("cosmoshub-4", 8, 2);
-pub const OSMOSIS: ChainConfig = ChainConfig::new("osmosis-1", 9, 2);
-pub const CELESTIA: ChainConfig = ChainConfig::new("celestia", 10, 2);
-pub const INJECTIVE: ChainConfig = ChainConfig::new("injective-1", 11, 2);
-pub const SEI: ChainConfig = ChainConfig::new("pacific-1", 12, 2);
+pub const COSMOS_HUB: ChainConfig = ChainConfig::new("cosmoshub-4", 16, 2);
+pub const OSMOSIS: ChainConfig = ChainConfig::new("osmosis-1", 17, 2);
+pub const CELESTIA: ChainConfig = ChainConfig::new("celestia", 18, 2);
+pub const INJECTIVE: ChainConfig = ChainConfig::new("injective-1", 19, 2);
+pub const SEI: ChainConfig = ChainConfig::new("pacific-1", 20, 2);
 
 pub const FAMILY: [ChainConfig; 5] = [COSMOS_HUB, OSMOSIS, CELESTIA, INJECTIVE, SEI];
 
@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn cosmos_hub_matches_the_registry_corridor() {
-        assert_eq!(COSMOS_HUB.corridor_id, 8);
+        assert_eq!(COSMOS_HUB.corridor_id, 16);
         assert_eq!(COSMOS_HUB.chain_id, "cosmoshub-4");
     }
 

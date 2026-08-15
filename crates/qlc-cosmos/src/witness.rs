@@ -187,7 +187,7 @@ mod tests {
         let witness = prove_ready_witness(&out);
         assert_eq!(witness.facts.header_height, 18_500_000);
         assert_eq!(witness.facts.signed_power, 100);
-        assert_eq!(witness.statement.corridor_id, 8);
+        assert_eq!(witness.statement.corridor_id, 16);
     }
 
     #[test]
