@@ -190,6 +190,9 @@ impl ExitDesk {
                     });
                 }
                 ExitEvent::Settle { index, foreign_ref } => {
+                    if self.consumed.is_released(&foreign_ref) {
+                        return Err(ExitError::PersistFailed);
+                    }
                     let exit = self.exits.get_mut(index as usize).ok_or(ExitError::PersistFailed)?;
                     if exit.state != ExitState::Pending {
                         return Err(ExitError::PersistFailed);
