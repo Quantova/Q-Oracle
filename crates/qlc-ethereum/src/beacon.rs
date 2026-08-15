@@ -16,8 +16,8 @@ pub const NEXT_SYNC_COMMITTEE_INDEX: u64 = 55;
 pub const CURRENT_SYNC_COMMITTEE_DEPTH: usize = 5;
 pub const CURRENT_SYNC_COMMITTEE_INDEX: u64 = 54;
 
-pub const EXECUTION_RECEIPTS_DEPTH: usize = 5;
-pub const EXECUTION_RECEIPTS_INDEX: u64 = 19;
+pub const EXECUTION_RECEIPTS_DEPTH: usize = 9;
+pub const EXECUTION_RECEIPTS_INDEX: u64 = 803;
 
 pub const FINALIZED_ROOT_GINDEX_ELECTRA: u64 = 169;
 pub const FINALIZED_ROOT_DEPTH_ELECTRA: usize = 7;
@@ -286,6 +286,17 @@ mod tests {
         assert_eq!(state_gindex, CURRENT_SYNC_COMMITTEE_INDEX);
         assert_eq!(CURRENT_SYNC_COMMITTEE_INDEX, 54);
         assert_eq!(CURRENT_SYNC_COMMITTEE_DEPTH, 5);
+    }
+
+    #[test]
+    fn the_execution_receipts_gindex_composes_the_body_payload_and_receipts_fields() {
+        let execution_payload_field = 9u64;
+        let receipts_root_field = 3u64;
+        let body_to_payload = (1u64 << 4) + execution_payload_field;
+        let composed = body_to_payload * (1u64 << 5) + receipts_root_field;
+        assert_eq!(composed, EXECUTION_RECEIPTS_INDEX);
+        assert_eq!(composed, 803);
+        assert_eq!(composed.ilog2() as usize, EXECUTION_RECEIPTS_DEPTH);
     }
 
     #[test]
