@@ -492,6 +492,7 @@ impl Gateway {
             });
         }
         self.pending_exits.remove(&exit_id);
+        self.touch_guard();
         Ok(ticket)
     }
 
