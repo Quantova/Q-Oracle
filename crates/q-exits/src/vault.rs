@@ -55,8 +55,9 @@ impl VaultBook {
                 need: amount,
             });
         }
+        let locked = vault.locked.checked_add(amount).ok_or(ExitError::Overflow)?;
         vault.free -= amount;
-        vault.locked = vault.locked.checked_add(amount).ok_or(ExitError::Overflow)?;
+        vault.locked = locked;
         Ok(())
     }
 
@@ -65,8 +66,10 @@ impl VaultBook {
             .vaults
             .get_mut(&vault_id)
             .ok_or(ExitError::UnknownVault(vault_id))?;
-        vault.locked = vault.locked.checked_sub(amount).ok_or(ExitError::Overflow)?;
-        vault.free = vault.free.checked_add(amount).ok_or(ExitError::Overflow)?;
+        let locked = vault.locked.checked_sub(amount).ok_or(ExitError::Overflow)?;
+        let free = vault.free.checked_add(amount).ok_or(ExitError::Overflow)?;
+        vault.locked = locked;
+        vault.free = free;
         Ok(())
     }
 
