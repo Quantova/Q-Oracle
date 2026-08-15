@@ -150,6 +150,7 @@ pub fn tally_signed_power(
         if sig.signature.len() != 64 {
             continue;
         }
+        counted.insert(sig.validator_address);
         let vote = CanonicalVote {
             vote_type: PRECOMMIT_TYPE,
             height: commit.height,
@@ -163,7 +164,6 @@ pub fn tally_signed_power(
         signature.copy_from_slice(&sig.signature);
         if verify(&validator.pubkey, &message, &signature) {
             signed += validator.voting_power as u128;
-            counted.insert(sig.validator_address);
         }
     }
 
