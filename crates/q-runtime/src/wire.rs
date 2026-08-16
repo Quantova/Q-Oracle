@@ -64,7 +64,7 @@ impl WireError {
                 (404, "unknown_method", format!("no method {m} under /v1/"))
             }
             WireError::BadBody(e) => (400, "bad_request", format!("the body is not JSON, {e}")),
-            other => (400, "bad_request", format!("{other:?}")),
+            _ => (400, "bad_request", "the request is malformed".to_string()),
         }
     }
 }
@@ -100,11 +100,11 @@ fn as_usize(j: &Json, name: &'static str) -> Result<usize, WireError> {
 }
 
 fn as_i64(j: &Json, name: &'static str) -> Result<i64, WireError> {
-    Ok(as_u64(j, name)? as i64)
+    i64::try_from(as_u64(j, name)?).map_err(|_| WireError::BadNumber(name))
 }
 
 fn as_i32(j: &Json, name: &'static str) -> Result<i32, WireError> {
-    Ok(as_u64(j, name)? as i32)
+    i32::try_from(as_u64(j, name)?).map_err(|_| WireError::BadNumber(name))
 }
 
 fn as_u128(j: &Json, name: &'static str) -> Result<u128, WireError> {
