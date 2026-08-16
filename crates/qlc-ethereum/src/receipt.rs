@@ -12,6 +12,7 @@ pub enum ReceiptError {
     NotSuccessful,
     NoDeposit,
     AmountOverflow,
+    MultipleDeposits,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +55,7 @@ pub fn extract_deposit(
     let logs = fields[3].as_list().ok_or(ReceiptError::Malformed)?;
     let topic0 = deposit_topic();
 
+    let mut found: Option<RawDeposit> = None;
     for (index, log) in logs.iter().enumerate() {
         let parts = match log.as_list() {
             Some(p) if p.len() == 3 => p,
@@ -91,7 +93,10 @@ pub fn extract_deposit(
         recipient.copy_from_slice(recipient_bytes);
         let mut asset_id = [0u8; 16];
         asset_id.copy_from_slice(&data[32..48]);
-        return Ok(RawDeposit {
+        if found.is_some() {
+            return Err(ReceiptError::MultipleDeposits);
+        }
+        found = Some(RawDeposit {
             recipient,
             amount,
             asset_id,
@@ -99,7 +104,7 @@ pub fn extract_deposit(
         });
     }
 
-    Err(ReceiptError::NoDeposit)
+    found.ok_or(ReceiptError::NoDeposit)
 }
 
 #[cfg(any(test, feature = "test-util"))]
@@ -166,6 +171,24 @@ mod tests {
         assert_eq!(deposit.amount, 7_500_000_000_000_000_000u128);
         assert_eq!(deposit.asset_id, asset);
         assert_eq!(deposit.log_index, 0);
+    }
+
+    #[test]
+    fn a_receipt_with_two_deposit_logs_is_refused() {
+        let asset = [0x11; 16];
+        let log_a = encode_log(&contract(), &[deposit_topic(), [0x5c; 32]], &deposit_data(10, &asset));
+        let log_b = encode_log(&contract(), &[deposit_topic(), [0x6d; 32]], &deposit_data(20, &asset));
+        let bytes = rlp::encode_list(&[
+            rlp::encode_bytes(&[1u8]),
+            rlp::encode_uint(21000),
+            rlp::encode_bytes(&[0u8; 256]),
+            rlp::encode_list(&[log_a, log_b]),
+        ]);
+        assert_eq!(
+            extract_deposit(&bytes, &contract()),
+            Err(ReceiptError::MultipleDeposits),
+            "a receipt must not silently drop a second deposit log"
+        );
     }
 
     #[test]
