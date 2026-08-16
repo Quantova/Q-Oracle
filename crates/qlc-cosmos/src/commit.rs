@@ -117,6 +117,7 @@ pub struct Commit {
 pub enum CommitError {
     HeaderMismatch,
     NotEnoughVotingPower { signed: u128, total: u128 },
+    SetTooLarge,
 }
 
 pub fn tally_signed_power(
@@ -125,6 +126,11 @@ pub fn tally_signed_power(
     commit: &Commit,
     set: &ValidatorSet,
 ) -> Result<u128, CommitError> {
+    if set.validators.len() > crate::validator::MAX_VALIDATORS
+        || commit.signatures.len() > crate::validator::MAX_VALIDATORS
+    {
+        return Err(CommitError::SetTooLarge);
+    }
     if commit.block_id.hash != header.hash() {
         return Err(CommitError::HeaderMismatch);
     }
