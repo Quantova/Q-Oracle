@@ -188,12 +188,11 @@ impl Gateway {
 
     pub fn corridor_quorum(&self, source_chain: u32) -> Option<usize> {
         self.corridors.get(&source_chain).map(|c| {
+            let floor = supermajority_floor(self.operators.size());
             if c.quorum > 0 {
-                c.quorum
+                c.quorum.max(floor)
             } else {
-                self.operators
-                    .threshold()
-                    .max(supermajority_floor(self.operators.size()))
+                self.operators.threshold().max(floor)
             }
         })
     }
