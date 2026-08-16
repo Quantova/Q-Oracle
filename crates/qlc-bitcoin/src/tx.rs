@@ -84,6 +84,8 @@ fn put_varint(out: &mut Vec<u8>, n: u64) {
 
 const MAX_COUNT: u64 = 100_000;
 
+const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
+
 impl Transaction {
     /// Parse a raw Bitcoin transaction, legacy or segwit. The txid is always taken over the
     /// legacy serialization with no marker, flag, or witness, so a segwit transaction reduces to
@@ -120,6 +122,9 @@ impl Transaction {
         let mut outputs = Vec::with_capacity(output_count as usize);
         for _ in 0..output_count {
             let value = c.u64_le()?;
+            if value > MAX_MONEY {
+                return Err(SpvError::MalformedTransaction);
+            }
             let script_len = c.varint()?;
             let script = c.take(script_len as usize)?.to_vec();
             outputs.push(TxOutput { value, script });
