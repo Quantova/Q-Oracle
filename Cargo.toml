@@ -29,7 +29,7 @@ license = "Apache-2.0 OR MIT"
 rust-version = "1.75"
 
 [workspace.dependencies]
-qtv-crypto = { path = "../Q-Crypto" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "33c7e9395ad23f07019909470d319211213e904f" }
 qlc-bitcoin = { path = "crates/qlc-bitcoin" }
 qlc-ethereum = { path = "crates/qlc-ethereum" }
 qlc-cosmos = { path = "crates/qlc-cosmos" }
