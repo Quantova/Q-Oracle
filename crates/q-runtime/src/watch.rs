@@ -240,7 +240,7 @@ pub fn ingest_once(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boot::{boot, shared, DEST_CHAIN};
+    use crate::boot::{boot, boot_configured, shared, DEST_CHAIN};
     use q_assets::Network;
     use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
     use q_federated::derive_asset_id;
@@ -381,7 +381,7 @@ mod tests {
             min_work: U256::ONE,
         };
 
-        let state = shared(boot());
+        let state = shared(boot_configured());
         state
             .write()
             .unwrap()
@@ -521,7 +521,7 @@ mod tests {
             hash: crafted_chain(txid)[0].block_hash(),
             min_work: U256::ONE,
         };
-        let state = shared(boot());
+        let state = shared(boot_configured());
         state
             .write()
             .unwrap()

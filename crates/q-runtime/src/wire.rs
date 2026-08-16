@@ -915,6 +915,7 @@ fn spv_err_json(e: &SpvError) -> Json {
         SpvError::InsufficientWork => tagged("spv", "insufficient_work", vec![]),
         SpvError::MalformedTransaction => tagged("spv", "malformed_transaction", vec![]),
         SpvError::TransactionMismatch => tagged("spv", "transaction_mismatch", vec![]),
+        SpvError::MerkleBranchTooLong => tagged("spv", "merkle_branch_too_long", vec![]),
     }
 }
 
@@ -947,6 +948,7 @@ fn spv_err_from(j: &Json) -> Result<SpvError, WireError> {
         "insufficient_work" => Ok(SpvError::InsufficientWork),
         "malformed_transaction" => Ok(SpvError::MalformedTransaction),
         "transaction_mismatch" => Ok(SpvError::TransactionMismatch),
+        "merkle_branch_too_long" => Ok(SpvError::MerkleBranchTooLong),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }
@@ -1032,6 +1034,7 @@ fn receipt_err_json(e: &ReceiptError) -> Json {
         ReceiptError::NotSuccessful => tagged("receipt", "not_successful", vec![]),
         ReceiptError::NoDeposit => tagged("receipt", "no_deposit", vec![]),
         ReceiptError::AmountOverflow => tagged("receipt", "amount_overflow", vec![]),
+        ReceiptError::MultipleDeposits => tagged("receipt", "multiple_deposits", vec![]),
     }
 }
 
@@ -1041,6 +1044,7 @@ fn receipt_err_from(j: &Json) -> Result<ReceiptError, WireError> {
         "not_successful" => Ok(ReceiptError::NotSuccessful),
         "no_deposit" => Ok(ReceiptError::NoDeposit),
         "amount_overflow" => Ok(ReceiptError::AmountOverflow),
+        "multiple_deposits" => Ok(ReceiptError::MultipleDeposits),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }
@@ -1171,6 +1175,7 @@ fn commit_err_json(e: &CommitError) -> Json {
             "not_enough_voting_power",
             vec![("signed", u128s(*signed)), ("total", u128s(*total))],
         ),
+        CommitError::SetTooLarge => tagged("commit", "set_too_large", vec![]),
     }
 }
 
@@ -1181,6 +1186,7 @@ fn commit_err_from(j: &Json) -> Result<CommitError, WireError> {
             signed: as_u128(field(j, "signed")?, "signed")?,
             total: as_u128(field(j, "total")?, "total")?,
         }),
+        "set_too_large" => Ok(CommitError::SetTooLarge),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }

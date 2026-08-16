@@ -213,6 +213,14 @@ pub fn boot_with(operators: OperatorSet, dest_chain_id: u64, epoch_cap: u128) ->
     BridgeState::seeded(gateway)
 }
 
+#[cfg(test)]
+pub(crate) const CONFIGURED_DEST_CHAIN_ID: u64 = 0x5100_0000_0000_9000;
+
+#[cfg(test)]
+pub(crate) fn boot_configured() -> BridgeState {
+    boot_with(OperatorSet::new(0), CONFIGURED_DEST_CHAIN_ID, DEFAULT_EPOCH_CAP)
+}
+
 /// Declare the independent foreign source an operator watches for a corridor. The federated
 /// admission gate reads this registry to refuse a quorum whose signers share a source.
 pub fn declare_operator_source(
@@ -489,7 +497,7 @@ mod tests {
 
     #[test]
     fn a_bitcoin_deposit_on_a_booted_seeded_pool_routes_to_the_trustless_seam() {
-        let mut state = boot();
+        let mut state = boot_configured();
         let asset = derive_asset_id(Network::Bitcoin, "BTC").0;
         let bridge = p2pkh([0x11; 20]);
         let recipient = [0x42u8; 32];
