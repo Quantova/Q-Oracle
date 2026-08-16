@@ -220,6 +220,8 @@ dependencies = [
 name = "qlc-airlock"
 version = "0.1.0"
 dependencies = [
+ "qlc-core",
+ "qlc-registry",
  "qlc-stark",
 ]
 
@@ -250,6 +252,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "qlc-registry"
+version = "0.1.0"
+dependencies = [
+ "qlc-core",
+]
+
+[[package]]
 name = "qlc-stark"
 version = "0.1.0"
 
@@ -259,7 +268,7 @@ version = "0.1.0"
 dependencies = [
  "qtv-crypto 0.3.0 (git+https://github.com/Quantova/Q-Crypto.git?rev=33c7e9395ad23f07019909470d319211213e904f)",
  "qtv-idfmt",
- "zeroize",
+ "qtv-wipe",
 ]
 
 [[package]]
@@ -328,8 +337,12 @@ dependencies = [
  "qtv-codec",
  "qtv-crypto 0.3.0 (git+https://github.com/Quantova/Q-Crypto.git?rev=33c7e9395ad23f07019909470d319211213e904f)",
  "qtv-idfmt",
- "zeroize",
+ "qtv-wipe",
 ]
+
+[[package]]
+name = "qtv-wipe"
+version = "0.1.0"
 
 [[package]]
 name = "quote"

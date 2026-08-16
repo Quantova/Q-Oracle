@@ -57,6 +57,9 @@ fn check_time(cfg: &ChainConfig, trusted: &TrustedState, new_header: &Header, no
 }
 
 fn check_header(cfg: &ChainConfig, trusted: &TrustedState, new_header: &Header, new_set: &ValidatorSet, now: Timestamp) -> Result<(), LightError> {
+    if new_set.validators.len() > crate::validator::MAX_VALIDATORS {
+        return Err(LightError::UntrustedValidatorSet);
+    }
     if new_header.chain_id != cfg.chain_id {
         return Err(LightError::ChainMismatch);
     }

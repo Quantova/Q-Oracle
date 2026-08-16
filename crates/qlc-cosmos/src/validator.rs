@@ -35,6 +35,8 @@ impl ValidatorInfo {
     }
 }
 
+pub const MAX_VALIDATORS: usize = 1 << 13;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatorSet {
     pub validators: Vec<ValidatorInfo>,

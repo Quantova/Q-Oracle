@@ -51,7 +51,10 @@ pub enum SpvError {
     InsufficientWork,
     MalformedTransaction,
     TransactionMismatch,
+    MerkleBranchTooLong,
 }
+
+pub const MAX_MERKLE_BRANCH: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MerkleStep {
@@ -154,6 +157,9 @@ pub fn merkle_root(txids: &[[u8; 32]]) -> Option<[u8; 32]> {
 }
 
 pub fn fold_merkle_branch(txid: [u8; 32], branch: &[MerkleStep]) -> Result<[u8; 32], SpvError> {
+    if branch.len() > MAX_MERKLE_BRANCH {
+        return Err(SpvError::MerkleBranchTooLong);
+    }
     let mut cur = txid;
     for step in branch {
         if step.hash == cur {
