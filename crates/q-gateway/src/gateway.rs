@@ -16,7 +16,7 @@ pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
-const GUARD_SNAPSHOT_VERSION: u8 = 4;
+const GUARD_SNAPSHOT_VERSION: u8 = 5;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
@@ -742,6 +742,14 @@ impl Gateway {
             w.fixed(&ticket.destination);
             w.u64(ticket.unlock_height);
         }
+        w.u32(self.corridors.len() as u32);
+        for (source_chain, corridor) in &self.corridors {
+            w.u32(*source_chain);
+            w.u32(corridor.confirmation_depth);
+            w.u32(corridor.quorum as u32);
+            w.u8(corridor.tier);
+            w.u8(corridor.active as u8);
+        }
         w.finish()
     }
 
@@ -759,6 +767,9 @@ impl Gateway {
         self.per_asset_epoch_minted = state.per_asset_epoch_minted;
         self.next_exit_id = state.next_exit_id;
         self.pending_exits = state.pending_exits;
+        for (source_chain, corridor) in state.corridors {
+            self.corridors.insert(source_chain, corridor);
+        }
         Ok(())
     }
 }
@@ -776,6 +787,7 @@ struct GuardState {
     per_asset_epoch_minted: BTreeMap<[u8; 16], u128>,
     next_exit_id: u64,
     pending_exits: BTreeMap<u64, ExitTicket>,
+    corridors: BTreeMap<u32, CorridorConfig>,
 }
 
 fn bounded_count(r: &mut Reader, item_size: usize) -> Result<usize, CodecError> {
@@ -863,6 +875,29 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         );
     }
 
+    let count = bounded_count(&mut r, 14)?;
+    let mut corridors = BTreeMap::new();
+    for _ in 0..count {
+        let source_chain = r.u32()?;
+        let confirmation_depth = r.u32()?;
+        let quorum = r.u32()? as usize;
+        let tier = r.u8()?;
+        let active = match r.u8()? {
+            0 => false,
+            1 => true,
+            other => return Err(CodecError::UnknownTag(other)),
+        };
+        corridors.insert(
+            source_chain,
+            CorridorConfig {
+                confirmation_depth,
+                quorum,
+                tier,
+                active,
+            },
+        );
+    }
+
     r.finish()?;
     Ok(GuardState {
         global_pause,
@@ -877,6 +912,7 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         per_asset_epoch_minted,
         next_exit_id,
         pending_exits,
+        corridors,
     })
 }
 
@@ -1360,6 +1396,24 @@ mod tests {
                 Err(GatewayError::AssetCapExceeded { .. })
             ),
             "a persisted pending exit must still count toward the cap after a restart"
+        );
+    }
+
+    #[test]
+    fn a_closed_corridor_stays_closed_after_a_snapshot_restart() {
+        let mut gw = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
+        gw.register_corridor(1, 6);
+        gw.set_corridor_active(1, false);
+        let snapshot = gw.encode_guard();
+
+        let mut restored = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
+        restored.register_corridor(1, 6);
+        restored.register_asset_cap([0xa1; 16], 500);
+        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+        assert_eq!(
+            restored.admit_trustless([0xa1; 16], [0x01; 32], 500, 1),
+            Err(GatewayError::CorridorInactive(1)),
+            "a corridor closed before the snapshot must not re-open on restart"
         );
     }
 
