@@ -239,7 +239,7 @@ fn verify_sync_aggregate(
             needed,
         });
     }
-    let fork_version = store.config.fork_version_at_slot(signature_slot);
+    let fork_version = store.config.fork_version_at_slot(signature_slot.saturating_sub(1));
     let domain = compute_domain(
         DOMAIN_SYNC_COMMITTEE,
         fork_version.0,
