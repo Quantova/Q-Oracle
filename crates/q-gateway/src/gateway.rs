@@ -112,6 +112,14 @@ impl Gateway {
         self.governance.size() > 0
     }
 
+    pub fn chain_id(&self) -> u32 {
+        self.chain_id
+    }
+
+    pub fn dest_chain_id(&self) -> u64 {
+        self.dest_chain_id
+    }
+
     pub fn guard_revision(&self) -> u64 {
         self.guard_revision
     }
