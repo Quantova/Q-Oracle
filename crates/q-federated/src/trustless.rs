@@ -93,11 +93,18 @@ pub fn admit_bitcoin_trustless(
     fact: &BridgeFact,
 ) -> Result<TrustlessMint, TrustlessError> {
     let mint = match_bitcoin_deposit(corridor, proven, fact)?;
-    apply_replay_and_cap(gateway, &mint)?;
+    apply_replay_and_cap(gateway, &mint, fact.dest_chain)?;
     Ok(mint)
 }
 
-fn apply_replay_and_cap(gateway: &mut Gateway, mint: &TrustlessMint) -> Result<(), TrustlessError> {
+fn apply_replay_and_cap(
+    gateway: &mut Gateway,
+    mint: &TrustlessMint,
+    dest_chain: u32,
+) -> Result<(), TrustlessError> {
+    if gateway.dest_chain_id() == 0 || dest_chain != gateway.chain_id() {
+        return Err(TrustlessError::Gateway(GatewayError::WrongDestination));
+    }
     gateway
         .admit_trustless(mint.asset_id, mint.source_ref, mint.amount, mint.source_chain)
         .map_err(|e| match e {
@@ -167,7 +174,7 @@ pub fn admit_ethereum_trustless(
     fact: &BridgeFact,
 ) -> Result<TrustlessMint, TrustlessError> {
     let mint = match_ethereum_deposit(corridor, proven, fact)?;
-    apply_replay_and_cap(gateway, &mint)?;
+    apply_replay_and_cap(gateway, &mint, fact.dest_chain)?;
     Ok(mint)
 }
 
@@ -228,7 +235,7 @@ pub fn admit_cosmos_trustless(
     fact: &BridgeFact,
 ) -> Result<TrustlessMint, TrustlessError> {
     let mint = match_cosmos_deposit(corridor, proven, fact)?;
-    apply_replay_and_cap(gateway, &mint)?;
+    apply_replay_and_cap(gateway, &mint, fact.dest_chain)?;
     Ok(mint)
 }
 
