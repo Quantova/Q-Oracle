@@ -166,11 +166,9 @@ pub fn verify_ack_quorum(
     chain_id: u64,
     threshold: usize,
 ) -> Result<usize, ExitAckError> {
-    if threshold < EXIT_ACK_QUORUM_MIN {
-        return Err(ExitAckError::ThinThreshold {
-            threshold,
-            floor: EXIT_ACK_QUORUM_MIN,
-        });
+    let floor = EXIT_ACK_QUORUM_MIN.max(operators.len().saturating_mul(2).div_ceil(3));
+    if threshold < floor {
+        return Err(ExitAckError::ThinThreshold { threshold, floor });
     }
     if !envelope.decision.well_formed() {
         return Err(ExitAckError::Malformed);
@@ -415,6 +413,21 @@ mod tests {
             verify_ack_quorum(&envelope, &operators, chain_id, 1),
             Err(ExitAckError::ThinThreshold { threshold: 1, floor: 2 })
         );
+    }
+
+    #[test]
+    fn a_threshold_below_two_thirds_of_the_operator_set_is_refused() {
+        let chain_id = 9000;
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let signers: Vec<_> = (1..=6).map(operator).collect();
+        let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
+        let envelope = envelope_signed_by(&decision, chain_id, &signers);
+        assert_eq!(
+            verify_ack_quorum(&envelope, &operators, chain_id, 2),
+            Err(ExitAckError::ThinThreshold { threshold: 2, floor: 4 }),
+            "two acks cannot settle against a six operator set"
+        );
+        assert_eq!(verify_ack_quorum(&envelope, &operators, chain_id, 4), Ok(6));
     }
 
     #[test]
