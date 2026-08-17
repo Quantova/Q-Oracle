@@ -423,7 +423,7 @@ impl Gateway {
             return Err(GatewayError::CorridorInactive(source_chain));
         }
         let required = if corridor.quorum > 0 {
-            corridor.quorum
+            corridor.quorum.max(supermajority_floor(self.operators.size()))
         } else {
             self.operators
                 .threshold()
@@ -630,7 +630,7 @@ impl Gateway {
 
         let size = self.operators.size();
         let required = if corridor.quorum > 0 {
-            corridor.quorum
+            corridor.quorum.max(supermajority_floor(size))
         } else {
             self.operators.threshold().max(supermajority_floor(size))
         };
