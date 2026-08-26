@@ -4,7 +4,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Network {
-    Bitcoin = 0,
+    Bitcoin = 43,
     BitcoinCash = 1,
     Ethereum = 2,
     BnbChain = 3,
@@ -181,7 +181,8 @@ mod tests {
 
     #[test]
     fn an_id_outside_the_registry_resolves_to_nothing() {
-        assert_eq!(Network::from_id(43), None);
+        // Zero is the reserved chain sentinel, so no network may claim it.
+        assert_eq!(Network::from_id(0), None);
         assert_eq!(Network::from_id(999), None);
     }
 
@@ -194,7 +195,7 @@ mod tests {
 
     #[test]
     fn the_shared_ids_match_the_light_client_registry() {
-        assert_eq!(Network::Bitcoin.id(), 0);
+        assert_eq!(Network::Bitcoin.id(), 43);
         assert_eq!(Network::Ethereum.id(), 2);
         assert_eq!(Network::Solana.id(), 22);
         assert_eq!(Network::Tron.id(), 23);
