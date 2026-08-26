@@ -16,6 +16,7 @@ fn real_attestation() -> q_airlock::AttestationEnvelope {
         dest_chain_id: DEST_ID,
         route_id: 7,
         required_confirmations: 6,
+        era: [0x11u8; 32],
     };
     let lock = ObservedLock {
         source_chain: 1,

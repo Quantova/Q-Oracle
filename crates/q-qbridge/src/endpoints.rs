@@ -456,7 +456,7 @@ mod tests {
     const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use q_airlock::SignerSig;
     use q_codec::{
-        AssetId, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION,
+        AssetId, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
     };
     use q_federated::{derive_asset_id, SourceEndpoint};
     use q_gateway::OperatorSet;
@@ -493,7 +493,7 @@ mod tests {
     }
 
     fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),

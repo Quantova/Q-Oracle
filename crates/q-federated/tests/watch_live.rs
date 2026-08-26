@@ -67,6 +67,7 @@ fn feed_for(id: u32, c: &Corridor, source_ref: [u8; 32], amount: u128) -> Operat
         dest_chain_id: DEST_ID,
         route_id: 1,
         required_confirmations: c.confirmation_depth,
+        era: [0x11u8; 32],
     });
     OperatorFeed::new(operator, own_node(c.chain_id, lock_for(c, source_ref, amount)))
 }
@@ -77,6 +78,7 @@ fn gateway(ids: &[u32], threshold: usize) -> Gateway {
         set.register(*id, public_key(*id));
     }
     let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000_000_000);
+    gw.set_era([0x11u8; 32]);
     install(&mut gw);
     gw
 }

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{BridgeFact, CodecError, Direction, Reader, Writer, ATTEST_DOMAIN};
+use q_codec::{attest_context, BridgeFact, CodecError, Direction, Reader, Writer};
 
 use crate::errors::GatewayError;
 use crate::operators::{verify_quorum, OperatorSet};
@@ -52,6 +52,7 @@ pub struct MintReceipt {
 pub struct Gateway {
     chain_id: u32,
     dest_chain_id: u64,
+    era: [u8; 32],
     operators: OperatorSet,
     governance: OperatorSet,
     used_refs: BTreeSet<(u32, [u8; 32])>,
@@ -80,6 +81,7 @@ impl Gateway {
         Gateway {
             chain_id,
             dest_chain_id,
+            era: [0u8; 32],
             operators,
             governance: OperatorSet::new(0),
             used_refs: BTreeSet::new(),
@@ -118,6 +120,10 @@ impl Gateway {
 
     pub fn dest_chain_id(&self) -> u64 {
         self.dest_chain_id
+    }
+
+    pub fn set_era(&mut self, era: [u8; 32]) {
+        self.era = era;
     }
 
     pub fn guard_revision(&self) -> u64 {
@@ -642,7 +648,7 @@ impl Gateway {
         }
 
         let message = fact.attest_preimage(self.dest_chain_id);
-        let distinct = verify_quorum(&message, ATTEST_DOMAIN, &env.signatures, &self.operators);
+        let distinct = verify_quorum(&message, &attest_context(&self.era), &env.signatures, &self.operators);
         if distinct.len() < required {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -993,7 +999,7 @@ mod tests {
     }
 
     fn sign(sk: &ml_dsa::SecretKey, id: u32, f: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(sk, &f.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
         SignerSig {
             operator_id: id,
             signature: sig.to_vec(),
@@ -1034,7 +1040,7 @@ mod tests {
         let signatures = s
             .iter()
             .map(|(id, _, sk)| {
-                let sig = ml_dsa::sign(sk, &f.attest_preimage(0), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+                let sig = ml_dsa::sign(sk, &f.attest_preimage(0), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
                 SignerSig {
                     operator_id: *id,
                     signature: sig.to_vec(),

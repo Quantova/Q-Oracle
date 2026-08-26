@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use q_airlock::SignerSig;
-use q_codec::{BridgeFact, ATTEST_DOMAIN};
+use q_codec::{attest_context, BridgeFact};
 use qtv_crypto::sha3::sha3_256;
 
 use crate::signer::AttestationSigner;
@@ -131,7 +131,7 @@ impl<S: AttestationSigner> Operator<S> {
         self.seen_facts.entry(key).or_insert(digest);
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
-        let signature = self.signer.sign(&message, ATTEST_DOMAIN);
+        let signature = self.signer.sign(&message, &attest_context(&ctx.era));
         self.signed_refs.insert(key);
 
         Ok(SignedObservation {
@@ -159,6 +159,7 @@ mod tests {
             dest_chain_id: DEST_ID,
             route_id: 7,
             required_confirmations: 6,
+            era: [0x11u8; 32],
         }
     }
 
@@ -190,7 +191,7 @@ mod tests {
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&signed.sig.signature);
         let preimage = signed.fact.attest_preimage(DEST_ID);
-        assert!(ml_dsa::verify(&pk, &preimage, &sig, ATTEST_DOMAIN));
+        assert!(ml_dsa::verify(&pk, &preimage, &sig, &attest_context(&[0x11u8; 32])));
     }
 
     #[test]

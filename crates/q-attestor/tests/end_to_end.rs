@@ -21,6 +21,7 @@ fn context() -> CorridorContext {
         dest_chain_id: DEST_ID,
         route_id: 1,
         required_confirmations: 6,
+        era: [0x11u8; 32],
     }
 }
 
@@ -61,6 +62,7 @@ fn full_pipeline_from_watcher_to_mint() {
         set.register(id, signer_pubkey(id));
     }
     let mut gw = Gateway::new(CHAIN_ID, DEST_ID, set, 1_000_000);
+    gw.set_era([0x11u8; 32]);
     gw.register_corridor(SOURCE, 6);
     gw.register_asset_cap(ASSET, 1_000);
 

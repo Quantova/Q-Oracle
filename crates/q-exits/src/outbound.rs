@@ -8,6 +8,15 @@ use qtv_crypto::ml_dsa::{self, PublicKey, SECRET_KEY_BYTES, SIGNATURE_BYTES};
 use crate::exits::ExitStatement;
 
 pub const EXIT_ACK_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/EXIT-ACK/v1";
+
+// Binds an exit acknowledgement to the chain era it was raised for, so an exit proof from one launch
+// of a reused chain name cannot be replayed on the next. The era is the dest chain genesis hash.
+pub fn exit_ack_context(era: &[u8; 32]) -> Vec<u8> {
+    let mut ctx = Vec::with_capacity(EXIT_ACK_DOMAIN.len() + 32);
+    ctx.extend_from_slice(EXIT_ACK_DOMAIN);
+    ctx.extend_from_slice(era);
+    ctx
+}
 pub const EXIT_FACT_VERSION: u8 = 1;
 pub const EXIT_FACT_ENCODED_LEN: usize = 106;
 pub const ARTIFACT_EXIT_ACK: u8 = 0x03;
@@ -118,8 +127,9 @@ pub fn sign_decision(
     secret: &[u8; SECRET_KEY_BYTES],
     decision: &ExitDecision,
     chain_id: u64,
+    era: &[u8; 32],
 ) -> Option<Vec<u8>> {
-    ml_dsa::sign(secret, &decision.ack_preimage(chain_id), EXIT_ACK_DOMAIN, &[0u8; 32])
+    ml_dsa::sign(secret, &decision.ack_preimage(chain_id), &exit_ack_context(era), &[0u8; 32])
         .map(|signature| signature.to_vec())
 }
 
@@ -164,6 +174,7 @@ pub fn verify_ack_quorum(
     envelope: &ExitEnvelope,
     operators: &[AckOperator],
     chain_id: u64,
+    era: &[u8; 32],
     threshold: usize,
 ) -> Result<usize, ExitAckError> {
     let floor = EXIT_ACK_QUORUM_MIN.max(operators.len().saturating_mul(2).div_ceil(3));
@@ -184,7 +195,7 @@ pub fn verify_ack_quorum(
             Ok(bytes) => bytes,
             Err(_) => continue,
         };
-        if ml_dsa::verify(&operator.public_key, &preimage, signature, EXIT_ACK_DOMAIN) {
+        if ml_dsa::verify(&operator.public_key, &preimage, signature, &exit_ack_context(era)) {
             distinct.insert(signer.operator_id);
         }
     }
@@ -199,6 +210,7 @@ pub fn verify_ack_quorum(
 
 #[cfg(test)]
 mod tests {
+    const TEST_ERA: [u8; 32] = [0x11u8; 32];
     use super::*;
     use crate::exits::EXIT_STATEMENT_VERSION;
 
@@ -279,14 +291,14 @@ mod tests {
         let (pk, sk) = ml_dsa::keygen(&seed);
         let decision = ExitDecision::slash(&statement(), 550, 9000);
         let chain_id = 0x0123_4567_89AB_CDEFu64;
-        let signature = sign_decision(&sk, &decision, chain_id).expect("a well formed decision signs");
+        let signature = sign_decision(&sk, &decision, chain_id, &TEST_ERA).expect("a well formed decision signs");
         let sig: &[u8; qtv_crypto::ml_dsa::SIGNATURE_BYTES] =
             signature.as_slice().try_into().expect("the signature is the fixed length");
-        assert!(ml_dsa::verify(&pk, &decision.ack_preimage(chain_id), sig, EXIT_ACK_DOMAIN));
+        assert!(ml_dsa::verify(&pk, &decision.ack_preimage(chain_id), sig, &exit_ack_context(&TEST_ERA)));
         let mut tampered = decision.clone();
         tampered.amount += 1;
         assert!(
-            !ml_dsa::verify(&pk, &tampered.ack_preimage(chain_id), sig, EXIT_ACK_DOMAIN),
+            !ml_dsa::verify(&pk, &tampered.ack_preimage(chain_id), sig, &exit_ack_context(&TEST_ERA)),
             "a signature does not carry to a tampered decision"
         );
     }
@@ -312,14 +324,14 @@ mod tests {
             "the burn reference moves the signed preimage"
         );
 
-        let signature = sign_decision(&sk, &fact_a, chain_id).unwrap();
+        let signature = sign_decision(&sk, &fact_a, chain_id, &TEST_ERA).unwrap();
         let sig: &[u8; SIGNATURE_BYTES] = signature.as_slice().try_into().unwrap();
         assert!(
-            ml_dsa::verify(&pk, &fact_a.ack_preimage(chain_id), sig, EXIT_ACK_DOMAIN),
+            ml_dsa::verify(&pk, &fact_a.ack_preimage(chain_id), sig, &exit_ack_context(&TEST_ERA)),
             "the fact verifies against the burn it names"
         );
         assert!(
-            !ml_dsa::verify(&pk, &fact_b.ack_preimage(chain_id), sig, EXIT_ACK_DOMAIN),
+            !ml_dsa::verify(&pk, &fact_b.ack_preimage(chain_id), sig, &exit_ack_context(&TEST_ERA)),
             "the same signature cannot settle a burn the fact does not name"
         );
     }
@@ -334,7 +346,7 @@ mod tests {
             decision: decision.clone(),
             signatures: vec![SignerSig {
                 operator_id: 0,
-                signature: sign_decision(&sk, &decision, 9000).unwrap(),
+                signature: sign_decision(&sk, &decision, 9000, &TEST_ERA).unwrap(),
             }],
         };
         let bytes = envelope.encode();
@@ -366,7 +378,7 @@ mod tests {
                 .iter()
                 .map(|(op, sk)| SignerSig {
                     operator_id: op.operator_id,
-                    signature: sign_decision(sk, decision, chain_id).unwrap(),
+                    signature: sign_decision(sk, decision, chain_id, &TEST_ERA).unwrap(),
                 })
                 .collect(),
         }
@@ -379,7 +391,7 @@ mod tests {
         let signers: Vec<_> = (1..=3).map(operator).collect();
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let envelope = envelope_signed_by(&decision, chain_id, &signers);
-        assert_eq!(verify_ack_quorum(&envelope, &operators, chain_id, 2), Ok(3));
+        assert_eq!(verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2), Ok(3));
     }
 
     #[test]
@@ -392,12 +404,12 @@ mod tests {
             decision: decision.clone(),
             signatures: vec![SignerSig {
                 operator_id: op_b.operator_id,
-                signature: sign_decision(&sk_a, &decision, chain_id).unwrap(),
+                signature: sign_decision(&sk_a, &decision, chain_id, &TEST_ERA).unwrap(),
             }],
         };
         let operators = vec![op_a, op_b];
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, 2),
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
             Err(ExitAckError::BelowThreshold { got: 0, need: 2 })
         );
     }
@@ -410,7 +422,7 @@ mod tests {
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let envelope = envelope_signed_by(&decision, chain_id, &signers);
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, 1),
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 1),
             Err(ExitAckError::ThinThreshold { threshold: 1, floor: 2 })
         );
     }
@@ -423,11 +435,11 @@ mod tests {
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let envelope = envelope_signed_by(&decision, chain_id, &signers);
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, 2),
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
             Err(ExitAckError::ThinThreshold { threshold: 2, floor: 4 }),
             "two acks cannot settle against a six operator set"
         );
-        assert_eq!(verify_ack_quorum(&envelope, &operators, chain_id, 4), Ok(6));
+        assert_eq!(verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 4), Ok(6));
     }
 
     #[test]
@@ -438,7 +450,7 @@ mod tests {
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let envelope = envelope_signed_by(&decision, chain_id, &signers[0..1]);
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, 2),
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
             Err(ExitAckError::BelowThreshold { got: 1, need: 2 })
         );
     }

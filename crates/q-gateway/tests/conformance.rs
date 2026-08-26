@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION};
+use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
 use q_gateway::gateway::REORG_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -36,7 +36,7 @@ fn sign_ctx(op: &Op, message: &[u8], context: &[u8]) -> SignerSig {
 }
 
 fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-    sign_ctx(op, &fact.attest_preimage(DEST_ID), ATTEST_DOMAIN)
+    sign_ctx(op, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]))
 }
 
 fn deposit(source_ref: [u8; 32], amount: u128) -> BridgeFact {
@@ -73,7 +73,7 @@ fn gateway_with(ops: &[Op], threshold: usize, dest_chain_id: u64) -> Gateway {
 }
 
 fn attest_with(op: &Op, fact: &BridgeFact, dest_chain_id: u64) -> SignerSig {
-    sign_ctx(op, &fact.attest_preimage(dest_chain_id), ATTEST_DOMAIN)
+    sign_ctx(op, &fact.attest_preimage(dest_chain_id), &attest_context(&[0u8; 32]))
 }
 
 #[test]

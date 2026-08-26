@@ -79,7 +79,7 @@ mod tests {
     use crate::sources::SourceEndpoint;
     use q_airlock::SignerSig;
     use q_codec::{
-        AssetId, BridgeFact, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION,
+        AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
     };
     use q_gateway::OperatorSet;
     use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -120,7 +120,7 @@ mod tests {
     }
 
     fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),

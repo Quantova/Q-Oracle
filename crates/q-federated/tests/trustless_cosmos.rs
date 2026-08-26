@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION};
+use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
 use q_federated::corridors::{origin_tag, Tier, TrustGrade};
 use q_federated::{admit_cosmos_trustless, install, Corridor, TrustlessError, SOLANA};
 use q_gateway::{Gateway, OperatorSet};
@@ -185,7 +185,7 @@ fn mk(id: u32) -> Op {
 }
 
 fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
     SignerSig {
         operator_id: op.id,
         signature: sig.to_vec(),

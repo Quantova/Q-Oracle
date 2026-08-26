@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, Writer, ATTEST_DOMAIN, FACT_VERSION};
+use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, Writer, attest_context, FACT_VERSION};
 use q_gateway::gateway::REORG_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -38,7 +38,7 @@ fn sign_over(op: &TestOp, message: &[u8], context: &[u8]) -> SignerSig {
 }
 
 fn sign_fact(op: &TestOp, fact: &BridgeFact) -> SignerSig {
-    sign_over(op, &fact.attest_preimage(DEST_ID), ATTEST_DOMAIN)
+    sign_over(op, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]))
 }
 
 fn deposit_fact(source_ref: [u8; 32], asset: [u8; 16], amount: u128) -> BridgeFact {

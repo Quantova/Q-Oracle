@@ -3,7 +3,7 @@
 
 use q_airlock::{Artifact, AttestationEnvelope, SignerSig, StarkEnvelope};
 use q_codec::{
-    AssetId, BridgeFact, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION,
+    AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
 };
 use q_isolation::{admit_artifact, Crossing, Refused};
 use q_prover_bridge::{prove_statement, verify_statement, CommitmentProof, CorridorStatement};
@@ -68,7 +68,7 @@ pub fn attest<S: AttestationSigner>(
     dest_chain_id: u64,
 ) -> AttestationEnvelope {
     let preimage = fact.attest_preimage(dest_chain_id);
-    let signature = signer.sign(&preimage, ATTEST_DOMAIN);
+    let signature = signer.sign(&preimage, &attest_context(&[0u8; 32]));
     AttestationEnvelope {
         fact: fact.clone(),
         signatures: vec![SignerSig {
@@ -119,6 +119,7 @@ mod tests {
             dest_chain_id: DEST_ID,
             route_id: 7,
             required_confirmations: 6,
+            era: [0x11u8; 32],
         }
     }
 
@@ -253,7 +254,7 @@ mod tests {
         assert_eq!(env.attestation.signatures[0].operator_id, s.operator_id());
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&env.attestation.signatures[0].signature);
-        assert!(ml_dsa::verify(&pk, &f.attest_preimage(DEST_ID), &sig, ATTEST_DOMAIN));
+        assert!(ml_dsa::verify(&pk, &f.attest_preimage(DEST_ID), &sig, &attest_context(&[0u8; 32])));
     }
 
     #[test]
@@ -275,10 +276,10 @@ mod tests {
         let env = package(&base, &s, DEST_ID);
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&env.attestation.signatures[0].signature);
-        assert!(ml_dsa::verify(&pk, &base.attest_preimage(DEST_ID), &sig, ATTEST_DOMAIN));
+        assert!(ml_dsa::verify(&pk, &base.attest_preimage(DEST_ID), &sig, &attest_context(&[0u8; 32])));
         for reshaped in reshapes() {
             assert_ne!(reshaped, base);
-            assert!(!ml_dsa::verify(&pk, &reshaped.attest_preimage(DEST_ID), &sig, ATTEST_DOMAIN));
+            assert!(!ml_dsa::verify(&pk, &reshaped.attest_preimage(DEST_ID), &sig, &attest_context(&[0u8; 32])));
         }
     }
 

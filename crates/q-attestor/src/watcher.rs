@@ -21,6 +21,7 @@ pub struct CorridorContext {
     pub dest_chain_id: u64,
     pub route_id: u32,
     pub required_confirmations: u32,
+    pub era: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

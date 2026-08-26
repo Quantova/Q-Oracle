@@ -1703,7 +1703,7 @@ mod tests {
     const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use crate::json::parse;
     use q_airlock::{AttestationEnvelope, SignerSig};
-    use q_codec::{AssetId, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION};
+    use q_codec::{AssetId, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
     use qtv_crypto::ml_dsa;
 
     fn round_request(req: Request) {
@@ -1772,7 +1772,7 @@ mod tests {
         seed[0] = 1;
         let (_pk, sk) = ml_dsa::keygen(&seed);
         let fact = sample_fact();
-        let sig = ml_dsa::sign(&sk, &fact.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(&sk, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
         let env = AttestationEnvelope {
             fact,
             signatures: vec![SignerSig {

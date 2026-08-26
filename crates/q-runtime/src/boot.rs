@@ -202,14 +202,15 @@ pub const DEFAULT_EPOCH_CAP: u128 = 1_000_000_000_000_000_000_000_000;
 /// and the proof-backed trustless path out of the box and safely refuses federated mints until an
 /// operator quorum and its independent sources are declared.
 pub fn boot() -> BridgeState {
-    boot_with(OperatorSet::new(0), DEST_CHAIN_ID, DEFAULT_EPOCH_CAP)
+    boot_with(OperatorSet::new(0), DEST_CHAIN_ID, [0u8; 32], DEFAULT_EPOCH_CAP)
 }
 
 /// Build a seeded bridge state against a configured operator set and epoch budget. The federated
 /// corridors mint once their operators are registered here and their independent sources declared
 /// through [`declare_operator_source`].
-pub fn boot_with(operators: OperatorSet, dest_chain_id: u64, epoch_cap: u128) -> BridgeState {
-    let gateway = Gateway::new(DEST_CHAIN, dest_chain_id, operators, epoch_cap);
+pub fn boot_with(operators: OperatorSet, dest_chain_id: u64, era: [u8; 32], epoch_cap: u128) -> BridgeState {
+    let mut gateway = Gateway::new(DEST_CHAIN, dest_chain_id, operators, epoch_cap);
+    gateway.set_era(era);
     BridgeState::seeded(gateway)
 }
 
@@ -218,7 +219,7 @@ pub(crate) const CONFIGURED_DEST_CHAIN_ID: u64 = 0x5100_0000_0000_9000;
 
 #[cfg(test)]
 pub(crate) fn boot_configured() -> BridgeState {
-    boot_with(OperatorSet::new(0), CONFIGURED_DEST_CHAIN_ID, DEFAULT_EPOCH_CAP)
+    boot_with(OperatorSet::new(0), CONFIGURED_DEST_CHAIN_ID, [0u8; 32], DEFAULT_EPOCH_CAP)
 }
 
 /// Declare the independent foreign source an operator watches for a corridor. The federated
@@ -281,7 +282,7 @@ mod tests {
     use q_airlock::{AttestationEnvelope, SignerSig};
     use q_assets::Network;
     use q_codec::{
-        AssetId, BridgeFact, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION,
+        AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
     };
     use q_federated::derive_asset_id;
     use q_qbridge::{
@@ -438,7 +439,7 @@ mod tests {
     }
 
     fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(TEST_DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(TEST_DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),
@@ -452,7 +453,7 @@ mod tests {
         for op in &ops {
             set.register(op.id, op.pk);
         }
-        let mut state = boot_with(set, TEST_DEST_ID, DEFAULT_EPOCH_CAP);
+        let mut state = boot_with(set, TEST_DEST_ID, [0u8; 32], DEFAULT_EPOCH_CAP);
         for op in &ops {
             declare_operator_source(
                 &mut state,

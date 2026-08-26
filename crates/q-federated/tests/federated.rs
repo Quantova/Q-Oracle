@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use q_airlock::{parse, Artifact, AttestationEnvelope, SignerSig};
 use q_codec::{
-    AssetId, BridgeFact, Direction, Recipient, SourceRef, ATTEST_DOMAIN, FACT_VERSION,
+    AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
 };
 use q_federated::{
     admit, corridors, find, install, Corridor, FederatedError, SourceEndpoint, SourceRegistry,
@@ -62,7 +62,7 @@ fn deposit(c: &Corridor, source_ref: [u8; 32], amount: u128) -> BridgeFact {
 }
 
 fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), ATTEST_DOMAIN, &[0u8; 32]).unwrap();
+    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
     SignerSig {
         operator_id: op.id,
         signature: sig.to_vec(),

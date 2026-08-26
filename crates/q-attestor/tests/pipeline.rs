@@ -51,6 +51,7 @@ fn ctx() -> CorridorContext {
         dest_chain_id: DEST_ID,
         route_id: 7,
         required_confirmations: 6,
+        era: [0x11u8; 32],
     }
 }
 

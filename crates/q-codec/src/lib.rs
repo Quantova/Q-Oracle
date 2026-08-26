@@ -4,6 +4,15 @@
 
 
 pub const ATTEST_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/ATTEST/v1";
+
+// Binds a deposit attestation to the chain era it was raised for, so a proof from one launch of a
+// reused chain name cannot be replayed on the next. The era is the dest chain genesis hash.
+pub fn attest_context(era: &[u8; 32]) -> Vec<u8> {
+    let mut ctx = Vec::with_capacity(ATTEST_DOMAIN.len() + 32);
+    ctx.extend_from_slice(ATTEST_DOMAIN);
+    ctx.extend_from_slice(era);
+    ctx
+}
 pub const FACT_VERSION: u8 = 1;
 pub const FACT_ENCODED_LEN: usize = 138;
 
