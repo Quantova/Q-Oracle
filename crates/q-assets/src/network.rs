@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shared_ids_match_the_light_client_registry() {
+    fn the_canonical_network_ids_stay_pinned() {
         assert_eq!(Network::Bitcoin.id(), 43);
         assert_eq!(Network::Ethereum.id(), 2);
         assert_eq!(Network::Solana.id(), 22);
