@@ -38,6 +38,8 @@ pub const MAX_VALIDATORS: usize = 4096;
 
 pub const MAX_PROOF_PATH: usize = 256;
 
+pub const MAX_PROOF_DEPTH: usize = 8;
+
 /// Every rejection the wire raises before the dispatcher is reached. A transport frame that names no
 /// method is a not-found, everything else the request layer refuses is a bad request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -670,6 +672,13 @@ fn existence_proof_json(p: &ExistenceProof) -> Json {
 }
 
 fn existence_proof_from(j: &Json) -> Result<ExistenceProof, WireError> {
+    existence_proof_at(j, 0)
+}
+
+fn existence_proof_at(j: &Json, depth: usize) -> Result<ExistenceProof, WireError> {
+    if depth >= MAX_PROOF_DEPTH {
+        return Err(WireError::BadField("store"));
+    }
     let path_json = field(j, "path")?
         .as_array()
         .ok_or(WireError::BadType("path"))?;
@@ -681,7 +690,7 @@ fn existence_proof_from(j: &Json) -> Result<ExistenceProof, WireError> {
         path.push(inner_op_from(op)?);
     }
     let store = match field(j, "store") {
-        Ok(s) => Some(Box::new(existence_proof_from(s)?)),
+        Ok(s) => Some(Box::new(existence_proof_at(s, depth + 1)?)),
         Err(_) => None,
     };
     Ok(ExistenceProof {
@@ -1941,6 +1950,52 @@ mod tests {
         assert_eq!(
             existence_proof_from(&big_path),
             Err(WireError::BadField("path"))
+        );
+    }
+
+    #[test]
+    fn a_deep_store_chain_is_rejected_by_the_decoder_bound() {
+        fn level(inner: Option<Json>) -> Json {
+            let mut fields = vec![
+                ("key", Json::str("00")),
+                ("value", Json::str("00")),
+                ("leaf", object(vec![("prefix", Json::str(""))])),
+                ("path", Json::Array(Vec::new())),
+            ];
+            if let Some(inner) = inner {
+                fields.push(("store", inner));
+            }
+            object(fields)
+        }
+        let mut node = level(None);
+        for _ in 0..MAX_PROOF_DEPTH + 4 {
+            node = level(Some(node));
+        }
+        assert_eq!(
+            existence_proof_from(&node),
+            Err(WireError::BadField("store")),
+            "the store chain is bounded by the decoder itself, not only the json depth cap"
+        );
+    }
+
+    #[test]
+    fn a_store_chain_within_the_bound_still_decodes() {
+        fn level(inner: Option<Json>) -> Json {
+            let mut fields = vec![
+                ("key", Json::str("00")),
+                ("value", Json::str("00")),
+                ("leaf", object(vec![("prefix", Json::str(""))])),
+                ("path", Json::Array(Vec::new())),
+            ];
+            if let Some(inner) = inner {
+                fields.push(("store", inner));
+            }
+            object(fields)
+        }
+        let real = level(Some(level(None)));
+        assert!(
+            existence_proof_from(&real).is_ok(),
+            "a real two layer cosmos store proof stays inside the bound"
         );
     }
 
