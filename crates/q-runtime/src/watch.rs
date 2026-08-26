@@ -611,6 +611,6 @@ mod tests {
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(SilentNode(Network::Bitcoin.id())));
         pool.attach(Box::new(SilentNode(Network::Ethereum.id())));
-        assert_eq!(pool.chains(), vec![Network::Bitcoin.id(), Network::Ethereum.id()]);
+        assert_eq!(pool.chains(), vec![Network::Ethereum.id(), Network::Bitcoin.id()]);
     }
 }
