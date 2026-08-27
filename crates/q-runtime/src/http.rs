@@ -232,9 +232,6 @@ fn handle_connection(
         return write_error(&mut stream, 413, "too_large", "the request body is too large");
     }
 
-    // Grow the buffer only as bytes actually arrive rather than pre-sizing to the declared
-    // Content-Length, so a tiny request cannot force a full MAX_BODY zeroed allocation it never
-    // fills. The initial capacity is capped, and the loop still stops at content_length.
     let mut body = Vec::with_capacity(content_length.min(64 * 1024));
     let mut chunk = [0u8; 8192];
     while body.len() < content_length {

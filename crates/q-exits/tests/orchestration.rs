@@ -219,8 +219,6 @@ fn a_burn_for_another_destination_is_dropped_not_re_queued_forever() {
     let beacon = Beacon::genesis();
     let node = node(&members, &beacon);
 
-    // The desk serves a different destination chain than the burn names, so the
-    // burn fails permanently with WrongDestination and must not accumulate.
     let mut cfg = config();
     cfg.dest_chain = CHAIN_ID + 1;
     let mut desk = ExitDesk::new(cfg, anchor(&members, &beacon)).unwrap();

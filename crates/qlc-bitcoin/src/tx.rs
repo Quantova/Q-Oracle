@@ -87,9 +87,6 @@ const MAX_COUNT: u64 = 100_000;
 const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
 
 impl Transaction {
-    /// Parse a raw Bitcoin transaction, legacy or segwit. The txid is always taken over the
-    /// legacy serialization with no marker, flag, or witness, so a segwit transaction reduces to
-    /// the same txid a block's Merkle tree commits to.
     pub fn parse(bytes: &[u8]) -> Result<Transaction, SpvError> {
         let mut c = Cursor::new(bytes);
         let version = c.u32_le()?;
@@ -106,10 +103,10 @@ impl Transaction {
         let mut inputs = Vec::with_capacity(input_count as usize);
         for _ in 0..input_count {
             let start = c.pos;
-            c.take(36)?; // previous outpoint, txid plus index
+            c.take(36)?;
             let script_len = c.varint()?;
             c.take(script_len as usize)?;
-            c.take(4)?; // sequence
+            c.take(4)?;
             inputs.push(TxInput {
                 raw: bytes[start..c.pos].to_vec(),
             });
@@ -174,15 +171,10 @@ impl Transaction {
         out
     }
 
-    /// The transaction id, double SHA-256 over the legacy serialization, the same value a
-    /// block's Merkle tree commits and an inclusion proof folds to.
     pub fn txid(&self) -> [u8; 32] {
         double_sha256(&self.legacy_bytes())
     }
 
-    /// The Quantova recipient carried in the single OP_RETURN output as an exact 32 byte push,
-    /// the address the mint credits. A transaction without exactly one such output does not
-    /// name a recipient and is not a deposit.
     pub fn op_return_recipient(&self) -> Option<[u8; 32]> {
         let mut found: Option<[u8; 32]> = None;
         for output in &self.outputs {
@@ -199,9 +191,6 @@ impl Transaction {
         found
     }
 
-    /// The total value, in satoshis, paid to the bridge deposit script across every output that
-    /// pays it. Summing rather than taking the first output means a transaction cannot split the
-    /// deposit across outputs to understate the amount.
     pub fn value_to_script(&self, deposit_script: &[u8]) -> u128 {
         let mut total: u128 = 0;
         for output in &self.outputs {
@@ -212,9 +201,6 @@ impl Transaction {
         total
     }
 
-    /// Bind a transaction to a deposit: it pays the bridge deposit script a positive amount and
-    /// names exactly one recipient. Returns the proven amount and recipient, so neither is taken
-    /// on a relayer's word.
     pub fn deposit_to(&self, deposit_script: &[u8]) -> Option<(u128, [u8; 32])> {
         let amount = self.value_to_script(deposit_script);
         if amount == 0 {
@@ -225,11 +211,6 @@ impl Transaction {
     }
 }
 
-/// Check a raw transaction is the claimed deposit. Its id must equal the id proven included in
-/// the proof of work chain, and its outputs must pay the bridge deposit script the claimed
-/// amount and name the claimed recipient. Every value is read from the transaction bytes, so a
-/// relayer cannot state an amount or a recipient the transaction does not carry. This is the
-/// content half of a trustless Bitcoin deposit, the inclusion half is the SPV Merkle proof.
 pub fn check_deposit_tx(
     raw_tx: &[u8],
     deposit_script: &[u8],
@@ -292,7 +273,6 @@ mod tests {
     }
 
     fn build(outputs: Vec<TxOutput>) -> Transaction {
-        // one dummy input, previous outpoint plus an empty script plus a sequence
         let mut raw = vec![0u8; 36];
         raw.push(0x00);
         raw.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
@@ -379,24 +359,19 @@ mod tests {
         ]);
         let raw = serialize_legacy(&tx);
         let txid = tx.txid();
-        // The exact transaction values check out.
         assert!(check_deposit_tx(&raw, &bridge, txid, 250_000, recipient).is_ok());
-        // A claimed amount the transaction does not pay is refused.
         assert_eq!(
             check_deposit_tx(&raw, &bridge, txid, 250_001, recipient),
             Err(SpvError::TransactionMismatch)
         );
-        // A claimed recipient the transaction does not name is refused.
         assert_eq!(
             check_deposit_tx(&raw, &bridge, txid, 250_000, [0x43u8; 32]),
             Err(SpvError::TransactionMismatch)
         );
-        // A transaction id other than this transaction's own is refused.
         assert_eq!(
             check_deposit_tx(&raw, &bridge, [0u8; 32], 250_000, recipient),
             Err(SpvError::TransactionMismatch)
         );
-        // Malformed transaction bytes are refused.
         assert_eq!(
             check_deposit_tx(&[0u8; 4], &bridge, txid, 250_000, recipient),
             Err(SpvError::MalformedTransaction)

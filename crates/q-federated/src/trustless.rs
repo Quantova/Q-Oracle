@@ -24,8 +24,6 @@ pub enum TrustlessError {
     Gateway(GatewayError),
 }
 
-/// A trustless deposit that has passed the fact-match gate and is cleared to mint. Every field is
-/// carried from the proof, never from the fact, so the fact only names an intent the proof met.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustlessMint {
     pub asset_id: [u8; 16],
@@ -36,11 +34,6 @@ pub struct TrustlessMint {
     pub confirmations: u32,
 }
 
-/// The pure verification-plus-fact-match gate for a proof-backed corridor. A verified Bitcoin
-/// deposit clears only when the fact names the same source chain, the same deposit by its
-/// transaction id, the amount the transaction actually pays, and the recipient it actually names,
-/// and only when the proven confirmations reach the corridor depth. The proven values, not the
-/// fact's, are carried forward.
 pub fn match_bitcoin_deposit(
     corridor: &Corridor,
     proven: &TrustlessDeposit,
@@ -117,11 +110,6 @@ fn apply_replay_and_cap(
         })
 }
 
-/// The pure verification-plus-fact-match gate for a proof-backed Ethereum corridor. A verified
-/// Ethereum deposit clears only when the fact names the same source chain, the same deposit by the
-/// reference derived from its receipt, the amount, recipient and asset the bridge log actually
-/// carries, and only when the proven finality depth reaches the corridor depth. The proven values,
-/// not the fact's, are carried forward.
 pub fn match_ethereum_deposit(
     corridor: &Corridor,
     proven: &EthereumDeposit,
@@ -178,11 +166,6 @@ pub fn admit_ethereum_trustless(
     Ok(mint)
 }
 
-/// The pure verification-plus-fact-match gate for a proof-backed Cosmos corridor. A verified Cosmos
-/// deposit clears only when the fact names the same source chain, the same deposit by the reference
-/// derived from its proven key, the amount, recipient and asset the value under the app hash
-/// actually carries, and only when the proven confirmations reach the corridor depth. The proven
-/// values, not the fact's, are carried forward.
 pub fn match_cosmos_deposit(
     corridor: &Corridor,
     proven: &CosmosDeposit,

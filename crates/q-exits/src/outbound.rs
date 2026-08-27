@@ -9,8 +9,6 @@ use crate::exits::ExitStatement;
 
 pub const EXIT_ACK_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/EXIT-ACK/v1";
 
-// Binds an exit acknowledgement to the chain era it was raised for, so an exit proof from one launch
-// of a reused chain name cannot be replayed on the next. The era is the dest chain genesis hash.
 pub fn exit_ack_context(era: &[u8; 32]) -> Vec<u8> {
     let mut ctx = Vec::with_capacity(EXIT_ACK_DOMAIN.len() + 32);
     ctx.extend_from_slice(EXIT_ACK_DOMAIN);
@@ -122,7 +120,6 @@ pub struct SignerSig {
     pub signature: Vec<u8>,
 }
 
-// one operator signs the decision; the quorum of these is the only artifact that crosses
 pub fn sign_decision(
     secret: &[u8; SECRET_KEY_BYTES],
     decision: &ExitDecision,
@@ -258,7 +255,6 @@ mod tests {
         assert_eq!(slash[EXIT_FACT_ENCODED_LEN - 1], 2);
     }
 
-    // pins the wire layout the chain verifier must match
     #[test]
     fn the_ack_preimage_matches_the_pinned_cross_repo_vector() {
         let decision = ExitDecision {
@@ -305,7 +301,6 @@ mod tests {
 
     #[test]
     fn the_exit_fact_commits_to_the_burn_it_names() {
-        // a fact for burn A cannot be reused to settle a different burn B
         let mut seed = [0u8; 32];
         seed[0] = 9;
         let (pk, sk) = ml_dsa::keygen(&seed);

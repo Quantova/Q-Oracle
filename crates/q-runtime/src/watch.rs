@@ -1,27 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! The per-chain block-ingestion seam.
-//!
-//! A [`ChainWatcher`] is one source chain's ingestion feed. A concrete implementation is a real RPC
-//! client that pulls foreign headers and blocks from a node of that chain and turns them into a
-//! [`DepositProof`] the runtime already routes:
-//!
-//! - a proof-backed chain (Bitcoin, Ethereum, Cosmos) runs its light-client verifier
-//!   ([`qlc_bitcoin::verify_trustless_deposit`], [`qlc_ethereum`], [`qlc_cosmos`]) over the pulled
-//!   headers and emits the verified deposit through [`bitcoin_proof`], [`ethereum_proof`] or
-//!   [`cosmos_proof`];
-//! - a federated chain gathers the operator quorum's attestations and emits them through
-//!   [`federated_proof`].
-//!
-//! The concrete per-chain RPC clients attach here, at [`WatcherPool::attach`]. They are the one
-//! genuinely large remaining integration and are not stubbed in this crate. What is wired here is
-//! the seam: [`ingest_once`] polls every attached watcher and routes each proof through the same
-//! tested `handle` a submitted deposit takes, so a federated proof reaches the quorum admission and
-//! a proof-backed proof reaches the trustless admission. The authoritative on-chain mint for a
-//! proof-backed corridor stays at the seam `q_federated::trustless` documents. This loop opens no
-//! no-quorum mint.
-
 use std::collections::BTreeMap;
 
 use q_airlock::AttestationEnvelope;
@@ -73,17 +52,11 @@ fn within_bounds(proof: &DepositProof) -> bool {
     }
 }
 
-/// One source chain's ingestion feed. The concrete implementation is the RPC client that pulls
-/// foreign headers and blocks and emits verified deposits ready for admission.
 pub trait ChainWatcher: Send {
-    /// The origin network id this watcher feeds, as `q_assets::Network::id`.
     fn source_chain(&self) -> u32;
-    /// Pull the deposits that have newly reached finality on the source chain, each already carried
-    /// as the proof its corridor tier requires.
     fn poll_proven(&self) -> Result<Vec<DepositProof>, WatchError>;
 }
 
-/// A federated attestation quorum, ready for the quorum admission path.
 pub fn federated_proof(envelope: AttestationEnvelope) -> DepositProof {
     DepositProof::Federated(envelope)
 }
@@ -120,7 +93,6 @@ pub fn cosmos_proof(
     }
 }
 
-/// The set of attached per-chain watchers, one per source chain.
 #[derive(Default)]
 pub struct WatcherPool {
     watchers: BTreeMap<u32, Box<dyn ChainWatcher>>,
@@ -133,7 +105,6 @@ impl WatcherPool {
         }
     }
 
-    /// Attach a concrete per-chain RPC watcher. This is the seam the real clients bind to.
     pub fn attach(&mut self, watcher: Box<dyn ChainWatcher>) {
         self.watchers.insert(watcher.source_chain(), watcher);
     }
@@ -157,7 +128,6 @@ pub enum Durability {
     PersistFailed,
 }
 
-/// One deposit the ingestion cycle routed, with the answer the dispatcher returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ingested {
     pub source_chain: u32,
@@ -186,10 +156,6 @@ pub(crate) fn persist_or_rollback(
     }
 }
 
-/// Run one ingestion cycle. Poll every attached watcher and route each proven deposit through the
-/// same tested `handle` a submitted deposit takes, over the shared state behind its mutex. A source
-/// whose RPC is unavailable is skipped without stalling the others. The mint stays at the trustless
-/// seam; nothing here admits without the admission path the proof's tier already enforces.
 pub fn ingest_once(
     state: &SharedState,
     pool: &WatcherPool,

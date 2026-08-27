@@ -6,8 +6,6 @@ use crate::params::NetworkParams;
 use crate::tx::Transaction;
 use crate::{MerkleStep, SpvError};
 
-/// A Bitcoin deposit proven trustless end to end. Every field is read from the transaction and
-/// the proof of work chain, never taken on a relayer's word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrustlessDeposit {
     pub txid: [u8; 32],
@@ -16,10 +14,6 @@ pub struct TrustlessDeposit {
     pub confirmations: u32,
 }
 
-/// Prove a complete trustless Bitcoin deposit: parse the raw transaction, take its id, prove that
-/// id is included in the verified chain with the network confirmation depth, then read the amount
-/// and recipient the transaction pays the bridge deposit script. The two proof halves, inclusion
-/// and content, are joined here so nothing about the deposit is asserted by a caller.
 pub fn verify_trustless_deposit(
     chain: &VerifiedChain,
     params: &NetworkParams,

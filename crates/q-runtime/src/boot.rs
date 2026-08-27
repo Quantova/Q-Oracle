@@ -21,7 +21,6 @@ use crate::exits::{load_exit_config, ExitConfigError, ExitTrustConfig};
 use crate::http::{serve, SharedState};
 use crate::persist::GuardStore;
 
-// poll gap, swept in short slices so a stop returns promptly
 const EXIT_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const EXIT_POLL_SLICE: Duration = Duration::from_millis(100);
 
@@ -32,7 +31,6 @@ fn unix_millis() -> u64 {
         .unwrap_or(0)
 }
 
-// the running exit service: desk, chain burn source, and feed, no custody key
 pub struct ExitService {
     desk: ExitDesk,
     feed: BurnFeed,
@@ -42,7 +40,6 @@ pub struct ExitService {
 }
 
 impl ExitService {
-    // build from a complete trust config: anchor, replay ledger, vault registry, rpc endpoint
     pub fn build(cfg: &ExitTrustConfig) -> Result<ExitService, ExitError> {
         let anchor = cfg.build_anchor()?;
         let journal = PersistentJournal::open(ReplayStore::new(cfg.ledger_path.with_extension("journal")))?;
@@ -76,12 +73,10 @@ impl ExitService {
         self.vault_id
     }
 
-    // poll finalized burns and open an exit for each verified proof of burn
     pub fn poll_burns(&mut self, now: u64) -> Result<Vec<ExitId>, FeedError> {
         self.feed.drive(&self.source, &mut self.desk, self.vault_id, now)
     }
 
-    // drive against a supplied source, the seam a test drives with a mock chain
     pub fn poll_burns_from(
         &mut self,
         source: &dyn QuantovaBurnSource,
@@ -90,7 +85,6 @@ impl ExitService {
         self.feed.drive(source, &mut self.desk, self.vault_id, now)
     }
 
-    // settle on a verified foreign payout, returning the SETTLE decision to attest
     pub fn settle(
         &mut self,
         id: ExitId,
@@ -102,7 +96,6 @@ impl ExitService {
         Ok(ExitDecision::settle(&statement, self.dest_chain))
     }
 
-    // sweep exits past their window into SLASH decisions, each paying the user the premium
     pub fn sweep_slash(&mut self, now: u64) -> Vec<ExitDecision> {
         let mut decisions = Vec::new();
         for id in self.desk.slashable(now) {
@@ -119,7 +112,6 @@ impl ExitService {
         decisions
     }
 
-    // move onto its own thread and drive the loop until stopped
     pub fn spawn(mut self) -> ExitHandle {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -142,7 +134,6 @@ impl ExitService {
     }
 }
 
-// handle to the service thread; stop() signals and joins it
 pub struct ExitHandle {
     stop: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
@@ -157,7 +148,6 @@ impl ExitHandle {
     }
 }
 
-// disabled -> None (no service); enabled but incomplete -> Err (fail closed); configured -> spawn
 pub fn start_exits() -> std::io::Result<Option<ExitHandle>> {
     start_exits_with(load_exit_config())
 }
@@ -183,31 +173,16 @@ pub(crate) fn start_exits_with(
     }
 }
 
-/// The Quantova destination chain the oracle mints against.
 pub const DEST_CHAIN: u32 = 9000;
 
-/// The destination chain's native u64 id, folded into every bridge attestation preimage so a
-/// sibling chain sharing the u32 `DEST_CHAIN` cannot replay a quorum. Zero is the unconfigured
-/// sentinel: a runtime left at zero refuses every operator quorum, so a misconfigured oracle fails
-/// closed rather than minting an attestation another chain could replay. A real deployment supplies
-/// its chain id through [`boot_with`].
 pub const DEST_CHAIN_ID: u64 = 0;
 
-/// The default rolling epoch mint budget the gateway enforces across every corridor.
 pub const DEFAULT_EPOCH_CAP: u128 = 1_000_000_000_000_000_000_000_000;
 
-/// Build a fully seeded bridge state. Every enumerated foreign asset is a live pool and every pool
-/// installs its corridor and per-asset cap on the gateway, so all forty-three chains and every asset
-/// are a live corridor the moment the runtime is up. The operator set is empty, which serves reads
-/// and the proof-backed trustless path out of the box and safely refuses federated mints until an
-/// operator quorum and its independent sources are declared.
 pub fn boot() -> BridgeState {
     boot_with(OperatorSet::new(0), DEST_CHAIN_ID, [0u8; 32], DEFAULT_EPOCH_CAP)
 }
 
-/// Build a seeded bridge state against a configured operator set and epoch budget. The federated
-/// corridors mint once their operators are registered here and their independent sources declared
-/// through [`declare_operator_source`].
 pub fn boot_with(operators: OperatorSet, dest_chain_id: u64, era: [u8; 32], epoch_cap: u128) -> BridgeState {
     let mut gateway = Gateway::new(DEST_CHAIN, dest_chain_id, operators, epoch_cap);
     gateway.set_era(era);
@@ -222,8 +197,6 @@ pub(crate) fn boot_configured() -> BridgeState {
     boot_with(OperatorSet::new(0), CONFIGURED_DEST_CHAIN_ID, [0u8; 32], DEFAULT_EPOCH_CAP)
 }
 
-/// Declare the independent foreign source an operator watches for a corridor. The federated
-/// admission gate reads this registry to refuse a quorum whose signers share a source.
 pub fn declare_operator_source(
     state: &mut BridgeState,
     corridor: u32,
@@ -233,15 +206,11 @@ pub fn declare_operator_source(
     state.sources.declare(corridor, operator_id, endpoint);
 }
 
-/// Wrap a bridge state for sharing across the server's connection threads.
 pub fn shared(state: BridgeState) -> SharedState {
     Arc::new(RwLock::new(state))
 }
 
-/// Bind, boot a fully seeded state, and serve the endpoints, parking the calling thread while the
-/// accept loop runs. The authoritative on-chain mint stays at the trustless deposit seam.
 pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Result<()> {
-    // start exits first so a half configured runtime fails closed before binding a socket
     let _exits = start_exits()?;
     let store = snapshot.map(|path| GuardStore::new(path));
     let state = restore(&store)?;
@@ -263,7 +232,6 @@ pub(crate) fn restore(store: &Option<GuardStore>) -> std::io::Result<BridgeState
     Ok(state)
 }
 
-/// Serve a supplied shared state, for a runtime booted with configured operators and sources.
 pub fn run_with<A: ToSocketAddrs>(
     addr: A,
     state: SharedState,

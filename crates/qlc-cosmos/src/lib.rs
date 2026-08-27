@@ -2,7 +2,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-
 pub mod chain;
 pub mod commit;
 pub mod ed25519;

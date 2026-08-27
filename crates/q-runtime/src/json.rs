@@ -116,7 +116,6 @@ fn write_string(s: &str, out: &mut String) {
 
 const MAX_DEPTH: usize = 64;
 
-// A separate node budget bounds total values, since the depth cap does nothing against width.
 const MAX_NODES: usize = 200_000;
 
 pub fn parse(input: &str) -> Result<Json, String> {

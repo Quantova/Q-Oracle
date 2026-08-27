@@ -40,8 +40,6 @@ pub const MAX_PROOF_PATH: usize = 256;
 
 pub const MAX_PROOF_DEPTH: usize = 8;
 
-/// Every rejection the wire raises before the dispatcher is reached. A transport frame that names no
-/// method is a not-found, everything else the request layer refuses is a bad request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireError {
     UnknownMethod(String),

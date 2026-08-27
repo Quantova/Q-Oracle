@@ -181,7 +181,6 @@ mod tests {
 
     #[test]
     fn an_id_outside_the_registry_resolves_to_nothing() {
-        // Zero is the reserved chain sentinel, so no network may claim it.
         assert_eq!(Network::from_id(0), None);
         assert_eq!(Network::from_id(999), None);
     }

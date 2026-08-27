@@ -2,7 +2,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-
 use q_airlock::{parse, AirlockError, Artifact, ARTIFACT_ATTESTATION, ARTIFACT_STARK};
 
 pub const ATTESTATION_TAG: u8 = ARTIFACT_ATTESTATION;

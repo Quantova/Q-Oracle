@@ -11,7 +11,6 @@ use q_prover_bridge::{prove_statement, verify_statement, CommitmentProof, Corrid
 use crate::signer::AttestationSigner;
 use crate::watcher::{CorridorContext, ObservedLock};
 
-/// Destination block window that bounds a translated deposit's lifetime.
 pub const MESSAGE_TTL_BLOCKS: u64 = 7_200;
 
 fn expiry_deadline(dest_height: u64) -> u64 {
@@ -20,7 +19,6 @@ fn expiry_deadline(dest_height: u64) -> u64 {
         .saturating_mul(MESSAGE_TTL_BLOCKS)
 }
 
-/// Translate a foreign lock into a Quantova bridge fact.
 pub fn translate(lock: &ObservedLock, ctx: &CorridorContext, dest_height: u64) -> BridgeFact {
     let mut nonce_bytes = [0u8; 8];
     nonce_bytes.copy_from_slice(&lock.source_ref[0..8]);

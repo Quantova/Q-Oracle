@@ -55,14 +55,12 @@ pub fn burn_source_from_env(config: &ExitConfig) -> Option<RpcBurnSource> {
     Some(RpcBurnSource::new(host, port))
 }
 
-// a vault and its over-collateral the desk locks against
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultSeed {
     pub vault_id: u32,
     pub collateral: u128,
 }
 
-// pinned bitcoin checkpoint and work floor for a corridor's payout spv (founder launch values)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitcoinCheckpointConfig {
     pub height: u32,
@@ -71,7 +69,6 @@ pub struct BitcoinCheckpointConfig {
     pub confirmations: u32,
 }
 
-// every trust root the exit service needs before it may move custody
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExitTrustConfig {
     pub chain_id: u64,
@@ -91,7 +88,6 @@ pub struct ExitTrustConfig {
 }
 
 impl ExitTrustConfig {
-    // build the committee anchor from the loaded trust roots
     pub fn build_anchor(&self) -> Result<QuantovaAnchor, q_exits::ExitError> {
         QuantovaAnchor::from_config(
             self.chain_id,
@@ -103,12 +99,10 @@ impl ExitTrustConfig {
         )
     }
 
-    // aligned corridor params: 150% collateral, 110% premium, one day window
     pub fn desk_config(&self) -> DeskConfig {
         DeskConfig::aligned(self.corridor, self.dest_chain as u64)
     }
 
-    // the pool vault the feed opens exits against
     pub fn active_vault(&self) -> u32 {
         self.vaults[0].vault_id
     }
@@ -121,7 +115,6 @@ pub enum ExitConfigError {
     Anchor(q_exits::ExitError),
 }
 
-// config source so the loader is testable without the process environment
 pub trait EnvSource {
     fn get(&self, key: &str) -> Option<String>;
 }
@@ -259,7 +252,6 @@ fn parse_bitcoin<E: EnvSource>(env: &E) -> Result<Option<BitcoinCheckpointConfig
     }))
 }
 
-// off -> Ok(None); on but any root unset -> Err (fail closed); fully set -> Ok(Some)
 pub fn parse_exit_config<E: EnvSource>(env: &E) -> Result<Option<ExitTrustConfig>, ExitConfigError> {
     if !parse_enabled(env.get(EXITS_ENABLED_ENV).as_deref()) {
         return Ok(None);
@@ -279,7 +271,6 @@ pub fn parse_exit_config<E: EnvSource>(env: &E) -> Result<Option<ExitTrustConfig
         .map_err(|_| ExitConfigError::Malformed("beacon seed length"))?;
     let members = parse_committee(env)?;
     let vaults = parse_vaults(env)?;
-    // required when the service runs: never silently defaults to loopback
     let rpc_host = req(env, CHAIN_RPC_HOST_ENV, "chain rpc host")?;
     let rpc_port = req(env, CHAIN_RPC_PORT_ENV, "chain rpc port")?
         .parse()
@@ -303,7 +294,6 @@ pub fn parse_exit_config<E: EnvSource>(env: &E) -> Result<Option<ExitTrustConfig
         ledger_path,
         bitcoin,
     };
-    // validate the anchor now so a bad committee refuses to start
     config.build_anchor().map_err(ExitConfigError::Anchor)?;
     Ok(Some(config))
 }

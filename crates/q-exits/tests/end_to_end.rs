@@ -139,8 +139,6 @@ fn desk() -> ExitDesk {
     ExitDesk::new(config(), anchor(&members, &beacon)).unwrap()
 }
 
-// A hash-based Bitcoin release proof the vault presents to prove its foreign payout.
-
 const EASY: NetworkParams = NetworkParams {
     network: BITCOIN.network,
     name: BITCOIN.name,
@@ -430,7 +428,6 @@ const BURN_REF_B: [u8; 32] = [0x22; 32];
 
 #[test]
 fn an_exit_bound_to_one_burn_cannot_settle_against_a_payout_for_another() {
-    // a payout naming burn B cannot settle an exit bound to burn A
     let members = attesters();
     let beacon = Beacon::genesis();
     let mut desk = desk();
@@ -454,7 +451,6 @@ fn an_exit_bound_to_one_burn_cannot_settle_against_a_payout_for_another() {
 
 #[test]
 fn collateral_is_conserved_across_a_settle_and_a_slash() {
-    // one vault backs two exits: free + locked + seized is conserved across a settle and a slash
     const INITIAL: u128 = 5_000;
     let members = attesters();
     let beacon = Beacon::genesis();
@@ -466,13 +462,11 @@ fn collateral_is_conserved_across_a_settle_and_a_slash() {
     assert_eq!(desk.locked_collateral(1), 2 * REQUIRED);
     assert_eq!(desk.free_collateral(1) + desk.locked_collateral(1), INITIAL, "nothing is seized yet");
 
-    // settle A inside the window: its collateral returns to free, custody total unchanged
     let payout_for_a = bitcoin_watcher(release_around(release_tx(&BENEFICIARY, AMOUNT as u64, &BURN_REF)));
     let release = desk.settle(id_a, &payout_for_a, 60).unwrap();
     assert_eq!(release.released, REQUIRED);
     assert_eq!(desk.free_collateral(1) + desk.locked_collateral(1), INITIAL, "a settle conserves custody");
 
-    // slash B after the window: its collateral is seized out of custody and split for the user
     let outcome = desk.slash(id_b, 200).unwrap();
     assert_eq!(outcome.user_payout, USER_PAYOUT);
     assert_eq!(outcome.user_payout + outcome.remainder, REQUIRED, "the slash splits exactly the seized collateral");

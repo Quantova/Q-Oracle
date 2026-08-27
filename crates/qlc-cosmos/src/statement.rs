@@ -57,9 +57,6 @@ pub fn lower(statement: &ProofStatement) -> StarkStatement {
     statement.to_stark_statement(public_input_digest(statement))
 }
 
-/// An IBC-family deposit proven trustless end to end. Every field is read from the value carried at
-/// the proven key under the committed app hash, itself inside a header a validator supermajority
-/// signed. Nothing here is taken on a relayer's word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrustlessDeposit {
     source_ref: [u8; 32],
@@ -170,10 +167,6 @@ pub fn verify_deposit(
     })
 }
 
-/// Prove a complete trustless Cosmos deposit: verify the commit signed by more than two thirds of
-/// the validator set over the header, then read the deposit value at its proven key under the app
-/// hash the header commits. The consensus and content halves are joined here, so the returned
-/// amount, recipient and asset are read from the chain, never asserted by a caller.
 pub fn verify_trustless_deposit(
     cfg: &ChainConfig,
     trusted: &TrustedState,

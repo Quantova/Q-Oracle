@@ -2,7 +2,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-
 pub mod chain;
 pub mod deposit;
 pub mod params;
@@ -163,10 +162,6 @@ pub fn fold_merkle_branch(txid: [u8; 32], branch: &[MerkleStep]) -> Result<[u8; 
     }
     let mut cur = txid;
     for step in branch {
-        // Bitcoin duplicates the last node of an odd width level as its own right sibling, so a
-        // self pair with the sibling on the right is the canonical proof for that node and must
-        // be admitted. A self pair with the sibling on the left never arises in a well formed
-        // tree and is refused as a duplicate-hash malleability attempt.
         if step.hash == cur && step.sibling_on_left {
             return Err(SpvError::MerkleMismatch);
         }
@@ -323,9 +318,6 @@ mod tests {
         top[32..64].copy_from_slice(&h_cc);
         assert_eq!(double_sha256(&top), root);
 
-        // This is the canonical proof for the last tx of an odd width level: c is duplicated as
-        // its own right sibling. It must fold to the root rather than be refused, or the last tx
-        // of every odd level would be un provable and its deposit frozen.
         let branch = [
             MerkleStep {
                 hash: c,
@@ -338,8 +330,6 @@ mod tests {
         ];
         assert_eq!(fold_merkle_branch(c, &branch), Ok(root));
 
-        // A self pair with the sibling on the left never occurs in a well formed tree and stays
-        // refused as a duplicate-hash malleability attempt.
         let forged = [MerkleStep {
             hash: c,
             sibling_on_left: true,

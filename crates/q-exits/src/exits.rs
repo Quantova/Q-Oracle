@@ -159,7 +159,6 @@ impl ExitDesk {
         })
     }
 
-    // replay a durable journal after the vaults are registered to rebuild exits opened before a restart
     pub fn reconstruct(&mut self) -> Result<(), ExitError> {
         for event in self.journal.events().to_vec() {
             match event {
@@ -258,7 +257,6 @@ impl ExitDesk {
         self.exits.len()
     }
 
-    // pending exits past their window, swept into slash decisions
     pub fn slashable(&self, now: u64) -> Vec<ExitId> {
         self.exits
             .iter()

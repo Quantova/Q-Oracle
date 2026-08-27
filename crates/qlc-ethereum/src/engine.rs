@@ -68,9 +68,6 @@ pub struct DepositProof {
     pub receipt_proof: Vec<Vec<u8>>,
 }
 
-/// An Ethereum deposit proven trustless end to end. Every field is read from the bridge deposit log
-/// under a receipt proof that folds to the receipts root of a finalized beacon header, itself signed
-/// by a sync committee supermajority. Nothing here is taken on a relayer's word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrustlessDeposit {
     source_ref: [u8; 32],
@@ -371,11 +368,6 @@ pub fn verify_deposit_update(
     ))
 }
 
-/// Prove a complete trustless Ethereum deposit: verify the sync committee aggregate over the
-/// finalized header, the finality and execution branches, then read the deposit log carried by the
-/// receipt proof against the finalized receipts root. The consensus and content halves are joined
-/// here, so the returned amount, recipient and asset are read from the chain, never asserted by a
-/// caller. The finality depth is the corridor's, matching the light client that proved the header.
 pub fn verify_trustless_deposit(
     store: &LightClientStore,
     update: &LightClientUpdate,
@@ -426,10 +418,6 @@ pub fn apply_sync_committee_update(
     if !store.config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
-    // The update must be signed inside the store's current period so the committee it proves is
-    // the very next one. Admitting a signature from period+1 would let the next committee jump to
-    // period+2, skipping a period and desynchronising the store's period counter from the
-    // committee it tracks.
     if store.config.sync_committee_period(update.attested_header.slot) != store.period {
         return Err(EthError::WrongPeriod);
     }

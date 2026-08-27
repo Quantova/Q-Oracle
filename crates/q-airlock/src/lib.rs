@@ -2,7 +2,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-
 use q_codec::{BridgeFact, CodecError, Reader, Writer, FACT_ENCODED_LEN};
 
 pub const ARTIFACT_ATTESTATION: u8 = 0x01;
