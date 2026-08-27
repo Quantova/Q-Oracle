@@ -88,7 +88,7 @@ fn finalized_certificate(members: &[Attester], block: Block, beacon: &Beacon) ->
     let commitment = committee(members);
     let atts: Vec<_> = members
         .iter()
-        .map(|a| a.attest(CHAIN_ID, HEIGHT, SLOT, 0, block, beacon))
+        .map(|a| a.attest(CHAIN_ID, HEIGHT, SLOT, 0, commitment.digest(), block, beacon))
         .collect();
     aggregate(CHAIN_ID, HEIGHT, SLOT, block, &commitment, beacon, &atts, TAU)
         .expect("a full committee finalizes")
@@ -149,6 +149,7 @@ const EASY: NetworkParams = NetworkParams {
     target_timespan: BITCOIN.target_timespan,
     target_spacing: BITCOIN.target_spacing,
     confirmation_depth: BITCOIN.confirmation_depth,
+    requires_pinned_checkpoint: false,
 };
 
 fn put_varint(value: u64, out: &mut Vec<u8>) {
@@ -494,7 +495,7 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
     let block = Block::new(HEIGHT, header.hash(), Parent::Genesis);
     let commitment = committee(&members);
     let envelope = Envelope::new(HEIGHT, SLOT, block, &commitment);
-    let lone = members[0].attest(CHAIN_ID, HEIGHT, SLOT, 0, block, &beacon);
+    let lone = members[0].attest(CHAIN_ID, HEIGHT, SLOT, 0, commitment.digest(), block, &beacon);
     let thin = Certificate::new(envelope, vec![lone]);
     let proof = ProofOfBurn {
         header_bytes: to_bytes(&header),

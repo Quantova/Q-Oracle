@@ -140,6 +140,13 @@ pub fn heavier<'a>(a: &'a VerifiedChain, b: &'a VerifiedChain) -> &'a VerifiedCh
     }
 }
 
+pub fn pinned_checkpoint(network: crate::params::Network) -> Option<Checkpoint> {
+    match network {
+        crate::params::Network::Bitcoin => None,
+        crate::params::Network::BitcoinCash => None,
+    }
+}
+
 impl VerifiedChain {
     pub fn anchored_to(&self, checkpoint: &Checkpoint) -> Result<(), SpvError> {
         let header = self

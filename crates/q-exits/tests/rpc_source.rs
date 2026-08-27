@@ -92,7 +92,7 @@ fn finalized_certificate(members: &[Attester], height: u64, block: Block, beacon
     let commitment = committee(members);
     let atts: Vec<_> = members
         .iter()
-        .map(|a| a.attest(CHAIN_ID, height, SLOT, 0, block, beacon))
+        .map(|a| a.attest(CHAIN_ID, height, SLOT, 0, commitment.digest(), block, beacon))
         .collect();
     aggregate(CHAIN_ID, height, SLOT, block, &commitment, beacon, &atts, TAU)
         .expect("a full committee finalizes")
@@ -147,6 +147,7 @@ fn encode_attestation(encoder: &mut Encoder, attestation: &Attestation) {
     encoder.put_u64(attestation.height);
     encoder.put_u64(attestation.slot);
     encoder.put_u64(attestation.view);
+    encoder.put_bytes(&attestation.committee);
     encode_block(encoder, &attestation.block);
     encode_credential(encoder, &attestation.membership);
     encoder.put_bytes(&attestation.sig);

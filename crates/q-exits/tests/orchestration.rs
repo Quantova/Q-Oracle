@@ -87,7 +87,7 @@ fn finalized_certificate(members: &[Attester], height: u64, block: Block, beacon
     let commitment = committee(members);
     let atts: Vec<_> = members
         .iter()
-        .map(|a| a.attest(CHAIN_ID, height, SLOT, 0, block, beacon))
+        .map(|a| a.attest(CHAIN_ID, height, SLOT, 0, commitment.digest(), block, beacon))
         .collect();
     aggregate(CHAIN_ID, height, SLOT, block, &commitment, beacon, &atts, TAU)
         .expect("a full committee finalizes")

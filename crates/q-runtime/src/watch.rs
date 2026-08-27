@@ -256,6 +256,7 @@ mod tests {
         target_timespan: 1_209_600,
         target_spacing: 600,
         confirmation_depth: 6,
+        requires_pinned_checkpoint: false,
     };
 
     fn p2pkh(hash160: [u8; 20]) -> Vec<u8> {

@@ -225,6 +225,7 @@ fn decode_attestation(decoder: &mut Decoder<'_>) -> Result<Attestation, BurnWatc
     let height = decoder.get_u64().map_err(codec_err)?;
     let slot = decoder.get_u64().map_err(codec_err)?;
     let view = decoder.get_u64().map_err(codec_err)?;
+    let committee: [u8; 32] = read_array(decoder)?;
     let block = decode_block(decoder)?;
     let membership = decode_credential(decoder)?;
     let sig: Signature = read_array::<SIGNATURE_BYTES>(decoder)?;
@@ -233,6 +234,7 @@ fn decode_attestation(decoder: &mut Decoder<'_>) -> Result<Attestation, BurnWatc
         height,
         slot,
         view,
+        committee,
         block,
         membership,
         sig,

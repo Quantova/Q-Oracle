@@ -479,6 +479,7 @@ mod tests {
         target_timespan: BITCOIN.target_timespan,
         target_spacing: BITCOIN.target_spacing,
         confirmation_depth: BITCOIN.confirmation_depth,
+        requires_pinned_checkpoint: false,
     };
 
     fn statement() -> ExitStatement {

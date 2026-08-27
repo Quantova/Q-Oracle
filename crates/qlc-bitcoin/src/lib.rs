@@ -49,6 +49,7 @@ pub enum SpvError {
     CheckpointNotInChain,
     CheckpointMismatch,
     InsufficientWork,
+    CheckpointNotArmed,
     MalformedTransaction,
     TransactionMismatch,
     MerkleBranchTooLong,

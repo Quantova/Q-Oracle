@@ -29,7 +29,14 @@ pub fn verify_trustless_deposit(
     raw_tx: &[u8],
     deposit_script: &[u8],
 ) -> Result<TrustlessDeposit, SpvError> {
-    chain.anchored_to(checkpoint)?;
+    let pinned;
+    let anchor = if params.requires_pinned_checkpoint {
+        pinned = crate::chain::pinned_checkpoint(params.network).ok_or(SpvError::CheckpointNotArmed)?;
+        &pinned
+    } else {
+        checkpoint
+    };
+    chain.anchored_to(anchor)?;
     let tx = Transaction::parse(raw_tx)?;
     let txid = tx.txid();
     let confirmed =
@@ -61,6 +68,7 @@ mod tests {
         target_timespan: 1_209_600,
         target_spacing: 600,
         confirmation_depth: 1,
+        requires_pinned_checkpoint: false,
     };
 
     fn p2pkh(hash160: [u8; 20]) -> Vec<u8> {
@@ -121,6 +129,22 @@ mod tests {
         assert_eq!(proven.amount, 250_000);
         assert_eq!(proven.recipient, recipient);
         assert_eq!(proven.confirmations, 1);
+    }
+
+    #[test]
+    fn a_mainnet_deposit_is_refused_until_the_checkpoint_is_armed() {
+        let armed = NetworkParams { requires_pinned_checkpoint: true, ..EASY };
+        let bridge = p2pkh([0x11; 20]);
+        let recipient = [0x42u8; 32];
+        let raw = raw_deposit_tx(&[(250_000, bridge.clone()), (0, op_return(recipient))]);
+        let txid = Transaction::parse(&raw).unwrap().txid();
+        let chain = verify_chain(&[mined_block(txid)], 0, &armed).unwrap();
+
+        assert_eq!(
+            verify_trustless_deposit(&chain, &armed, &Checkpoint::accepting(&chain), 0, &[], &raw, &bridge),
+            Err(SpvError::CheckpointNotArmed),
+            "a checkpoint requiring network anchors only to its pinned block, never a caller supplied one"
+        );
     }
 
     #[test]
