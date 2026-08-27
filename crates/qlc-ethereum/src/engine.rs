@@ -426,6 +426,13 @@ pub fn apply_sync_committee_update(
     if !store.config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
+    // The update must be signed inside the store's current period so the committee it proves is
+    // the very next one. Admitting a signature from period+1 would let the next committee jump to
+    // period+2, skipping a period and desynchronising the store's period counter from the
+    // committee it tracks.
+    if store.config.sync_committee_period(update.attested_header.slot) != store.period {
+        return Err(EthError::WrongPeriod);
+    }
     verify_sync_aggregate(
         store,
         &update.attested_header,

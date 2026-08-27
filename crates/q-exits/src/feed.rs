@@ -34,6 +34,10 @@ pub enum FeedError {
     Exit(ExitError),
 }
 
+/// Cap on burn proofs held for retry, so a source that keeps failing to open exits cannot grow
+/// the queue without bound or make each poll re verify an ever longer backlog.
+const MAX_PENDING_BURNS: usize = 1024;
+
 pub struct BurnFeed {
     watcher: BurnWatcher,
     enabled: bool,
@@ -85,6 +89,10 @@ impl BurnFeed {
                 | Err(ExitError::LedgerFull) => still_pending.push(proof),
                 Err(_) => {}
             }
+        }
+        if still_pending.len() > MAX_PENDING_BURNS {
+            let overflow = still_pending.len() - MAX_PENDING_BURNS;
+            still_pending.drain(0..overflow);
         }
         self.pending = still_pending;
         Ok(opened)
