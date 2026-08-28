@@ -73,7 +73,11 @@ impl BurnFeed {
         if !self.enabled {
             return Err(FeedError::Disabled);
         }
-        let proofs = self.watcher.poll(source).map_err(FeedError::Source)?;
+        let proofs = if self.pending.len() >= MAX_PENDING_BURNS {
+            Vec::new()
+        } else {
+            self.watcher.poll(source).map_err(FeedError::Source)?
+        };
         let mut opened = Vec::new();
         let mut still_pending = Vec::new();
         for proof in std::mem::take(&mut self.pending)
@@ -87,9 +91,6 @@ impl BurnFeed {
                 | Err(ExitError::LedgerFull) => still_pending.push(proof),
                 Err(_) => {}
             }
-        }
-        if still_pending.len() > MAX_PENDING_BURNS {
-            still_pending.truncate(MAX_PENDING_BURNS);
         }
         self.pending = still_pending;
         Ok(opened)
