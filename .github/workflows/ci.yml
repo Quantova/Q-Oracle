@@ -1,9 +1,60 @@
 # Copyright 2026 Quantova Inc
 # SPDX-License-Identifier: Apache-2.0 OR MIT
-
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  ci:
-    uses: Quantova/Quantova-Ci/.github/workflows/rust-ci.yml@d749dfc210db85b58033507c1464f08c01cba30e  # main @ 2026-08-01
-
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: Q-Oracle
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Quantova/q-prover
+          ref: 9e4e4edbfaeba2070d22bc071b318701b9ae05ee
+          path: q-prover
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Quantova/Q-Lightclient
+          ref: a7ea1427256630f2ee911fc10c30c4edf24505b8
+          path: Q-Lightclient
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Quantova/QRC-CONSENSUS
+          ref: 70e8c3a77ef3c427f8b8d60150776870d725020f
+          path: QRC-CONSENSUS
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Quantova/Quantova-Chain
+          ref: 75ff886b0965bf0dfbc3c8378b7e6fccebc711ee
+          path: Quantova-Chain
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: fmt
+        working-directory: Q-Oracle
+        run: cargo fmt --all -- --check
+      - name: clippy
+        working-directory: Q-Oracle
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - name: test
+        working-directory: Q-Oracle
+        run: cargo test --all-features --locked
+      - name: supply chain gate
+        working-directory: Q-Oracle
+        run: |
+          cargo install cargo-deny --version 0.19.9 --locked
+          cargo deny --locked check bans licenses sources advisories
