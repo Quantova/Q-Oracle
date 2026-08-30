@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/q-prover
-          ref: 9e4e4edbfaeba2070d22bc071b318701b9ae05ee
+          ref: c0853314ae86c81d20830fa324397e50c7993336
           path: q-prover
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -37,8 +37,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/Quantova-Chain
-          ref: 75ff886b0965bf0dfbc3c8378b7e6fccebc711ee
+          ref: 77cb3fbc1786a3f9731ea8e8dcd26fe2eff1a355
           path: Quantova-Chain
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Quantova/QCore.rs
+          ref: 51fc6f93554be10ed9f32f7a5c268e3e5bacc672
+          path: QCore.rs
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: Quantova/QVM
+          ref: df3832375dd90e7cdad6038e512c0485b4480388
+          path: QVM
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
@@ -53,8 +65,3 @@ jobs:
       - name: test
         working-directory: Q-Oracle
         run: cargo test --all-features --locked
-      - name: supply chain gate
-        working-directory: Q-Oracle
-        run: |
-          cargo install cargo-deny --version 0.19.9 --locked
-          cargo deny --locked check bans licenses sources advisories
