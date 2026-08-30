@@ -1,4 +1,6 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::useless_vec)]
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 

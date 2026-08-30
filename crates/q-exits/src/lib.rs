@@ -1,4 +1,6 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::derivable_impls)]
+#![allow(clippy::useless_conversion)]
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 

@@ -1,4 +1,6 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::manual_div_ceil)]
+#![allow(clippy::items_after_test_module)]
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
