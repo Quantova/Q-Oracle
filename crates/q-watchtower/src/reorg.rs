@@ -58,7 +58,12 @@ impl ReorgWatcher {
         self.id
     }
 
-    pub fn observe(&self, gateway: &mut Gateway, source_chain: u32, fork_depth: u32) -> ReorgVerdict {
+    pub fn observe(
+        &self,
+        gateway: &mut Gateway,
+        source_chain: u32,
+        fork_depth: u32,
+    ) -> ReorgVerdict {
         match self.policy.max_depth(source_chain) {
             None => ReorgVerdict::NoPolicy,
             Some(max_depth) => {

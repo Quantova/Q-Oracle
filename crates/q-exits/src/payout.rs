@@ -162,15 +162,17 @@ impl BitcoinReleaseProof {
         checkpoint: &Checkpoint,
         confirmation_depth: u32,
     ) -> Result<VerifiedPayout, PayoutProofError> {
-        let chain =
-            verify_chain(&self.headers, self.start_height, params).map_err(PayoutProofError::Spv)?;
-        chain.anchored_to(checkpoint).map_err(PayoutProofError::Spv)?;
+        let chain = verify_chain(&self.headers, self.start_height, params)
+            .map_err(PayoutProofError::Spv)?;
+        chain
+            .anchored_to(checkpoint)
+            .map_err(PayoutProofError::Spv)?;
         let txid = double_sha256(&self.raw_tx);
         let confirmed = chain
             .verify_deposit(self.release_height, txid, &self.branch, confirmation_depth)
             .map_err(PayoutProofError::Spv)?;
-        let outputs = parse_bitcoin_outputs(&self.raw_tx)
-            .ok_or(PayoutProofError::MalformedTransaction)?;
+        let outputs =
+            parse_bitcoin_outputs(&self.raw_tx).ok_or(PayoutProofError::MalformedTransaction)?;
         let (beneficiary, value, burn_ref) =
             scan_release_outputs(&outputs).ok_or(PayoutProofError::UnboundPayout)?;
         Ok(VerifiedPayout {
@@ -326,13 +328,14 @@ impl BitcoinPayoutWatcher {
         }
         let mut last = PayoutProofError::MissingReceipt;
         for release in &self.releases {
-            let payout = match release.verify(&self.params, &self.checkpoint, self.confirmation_depth) {
-                Ok(p) => p,
-                Err(e) => {
-                    last = e;
-                    continue;
-                }
-            };
+            let payout =
+                match release.verify(&self.params, &self.checkpoint, self.confirmation_depth) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        last = e;
+                        continue;
+                    }
+                };
             if payout.amount != statement.amount {
                 last = PayoutProofError::AmountMismatch;
                 continue;
@@ -613,14 +616,28 @@ mod tests {
 
     fn bitcoin_watcher(releases: Vec<BitcoinReleaseProof>) -> BitcoinPayoutWatcher {
         let checkpoint = checkpoint_for(&releases[0]);
-        BitcoinPayoutWatcher::new(1, [0xa1; 16], EASY, checkpoint, EASY.confirmation_depth, releases)
+        BitcoinPayoutWatcher::new(
+            1,
+            [0xa1; 16],
+            EASY,
+            checkpoint,
+            EASY.confirmation_depth,
+            releases,
+        )
     }
 
     fn bitcoin_watcher_with(
         release: BitcoinReleaseProof,
         checkpoint: Checkpoint,
     ) -> BitcoinPayoutWatcher {
-        BitcoinPayoutWatcher::new(1, [0xa1; 16], EASY, checkpoint, EASY.confirmation_depth, vec![release])
+        BitcoinPayoutWatcher::new(
+            1,
+            [0xa1; 16],
+            EASY,
+            checkpoint,
+            EASY.confirmation_depth,
+            vec![release],
+        )
     }
 
     fn evm_release_stub() -> EvmReleaseProof {
@@ -686,7 +703,9 @@ mod tests {
     fn a_real_bitcoin_inclusion_proof_that_covers_the_exit_is_confirmed() {
         let s = statement();
         let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 500, &s.burn_ref)]);
-        let attestation = watcher.confirm(&s).expect("the verified payout covers the exit");
+        let attestation = watcher
+            .confirm(&s)
+            .expect("the verified payout covers the exit");
         assert!(attestation.covers(&s));
         assert_eq!(attestation.corridor, s.corridor);
     }
@@ -699,7 +718,10 @@ mod tests {
         );
         let s = statement();
         let watcher = EvmPayoutWatcher::new(1, vec![evm_release_stub()]);
-        assert_eq!(watcher.attest(&s), Err(PayoutProofError::EvmCorridorDisabled));
+        assert_eq!(
+            watcher.attest(&s),
+            Err(PayoutProofError::EvmCorridorDisabled)
+        );
         assert!(watcher.confirm(&s).is_none());
     }
 

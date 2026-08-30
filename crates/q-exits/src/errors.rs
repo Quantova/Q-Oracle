@@ -59,14 +59,29 @@ mod tests {
 
     #[test]
     fn a_thin_vault_reports_have_and_need() {
-        let e = ExitError::ThinVault { have: 140, need: 150 };
-        assert_ne!(e, ExitError::ThinVault { have: 150, need: 150 });
+        let e = ExitError::ThinVault {
+            have: 140,
+            need: 150,
+        };
+        assert_ne!(
+            e,
+            ExitError::ThinVault {
+                have: 150,
+                need: 150
+            }
+        );
     }
 
     #[test]
     fn an_expired_window_differs_from_an_open_window() {
-        let a = ExitError::WindowExpired { now: 20, deadline: 10 };
-        let b = ExitError::WindowOpen { now: 5, deadline: 10 };
+        let a = ExitError::WindowExpired {
+            now: 20,
+            deadline: 10,
+        };
+        let b = ExitError::WindowOpen {
+            now: 5,
+            deadline: 10,
+        };
         assert_ne!(a, b);
     }
 }

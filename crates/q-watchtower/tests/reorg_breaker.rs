@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
+use q_codec::{attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use q_watchtower::{CorridorReorgPolicy, ReorgVerdict, ReorgWatcher, WatchtowerId};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -28,7 +28,13 @@ fn mk_op(id: u32) -> Op {
 }
 
 fn sign(op: &Op, fact: &BridgeFact) -> SignerSig {
-    let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+    let sig = ml_dsa::sign(
+        &op.sk,
+        &fact.attest_preimage(DEST_ID),
+        &attest_context(&[0u8; 32]),
+        &[0u8; 32],
+    )
+    .unwrap();
     SignerSig {
         operator_id: op.id,
         signature: sig.to_vec(),
@@ -90,9 +96,16 @@ fn a_single_watchtower_pauses_a_corridor_and_a_paused_corridor_rejects_mints() {
     let fact = deposit([0x71; 32], 500);
     let env = AttestationEnvelope {
         fact: fact.clone(),
-        signatures: vec![sign(&ops[0], &fact), sign(&ops[1], &fact), sign(&ops[2], &fact)],
+        signatures: vec![
+            sign(&ops[0], &fact),
+            sign(&ops[1], &fact),
+            sign(&ops[2], &fact),
+        ],
     };
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::SourcePaused(SOURCE)));
+    assert_eq!(
+        gw.process_deposit(&env),
+        Err(GatewayError::SourcePaused(SOURCE))
+    );
     assert_eq!(gw.minted_of_asset(&ASSET), 0);
 }
 
@@ -132,7 +145,10 @@ fn an_independent_watchtower_pause_is_honored_when_the_oracle_set_stays_silent()
         fact,
         signatures: Vec::new(),
     };
-    assert_eq!(gw.process_deposit(&silent), Err(GatewayError::SourcePaused(SOURCE)));
+    assert_eq!(
+        gw.process_deposit(&silent),
+        Err(GatewayError::SourcePaused(SOURCE))
+    );
 }
 
 #[test]
@@ -150,14 +166,23 @@ fn a_resume_is_required_to_unpause_and_is_not_automatic() {
     let fact = deposit([0x73; 32], 500);
     let env = AttestationEnvelope {
         fact: fact.clone(),
-        signatures: vec![sign(&ops[0], &fact), sign(&ops[1], &fact), sign(&ops[2], &fact)],
+        signatures: vec![
+            sign(&ops[0], &fact),
+            sign(&ops[1], &fact),
+            sign(&ops[2], &fact),
+        ],
     };
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::SourcePaused(SOURCE)));
+    assert_eq!(
+        gw.process_deposit(&env),
+        Err(GatewayError::SourcePaused(SOURCE))
+    );
 
     gw.unpause_source(SOURCE);
     assert!(!gw.is_source_paused(SOURCE));
 
-    let receipt = gw.process_deposit(&env).expect("resume lets the corridor mint again");
+    let receipt = gw
+        .process_deposit(&env)
+        .expect("resume lets the corridor mint again");
     assert_eq!(receipt.amount, 500);
     assert_eq!(gw.minted_of_asset(&ASSET), 500);
 }
@@ -176,7 +201,14 @@ fn one_honest_watchtower_is_enough_even_if_another_stays_silent() {
     let fact = deposit([0x74; 32], 500);
     let env = AttestationEnvelope {
         fact: fact.clone(),
-        signatures: vec![sign(&ops[0], &fact), sign(&ops[1], &fact), sign(&ops[2], &fact)],
+        signatures: vec![
+            sign(&ops[0], &fact),
+            sign(&ops[1], &fact),
+            sign(&ops[2], &fact),
+        ],
     };
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::SourcePaused(SOURCE)));
+    assert_eq!(
+        gw.process_deposit(&env),
+        Err(GatewayError::SourcePaused(SOURCE))
+    );
 }

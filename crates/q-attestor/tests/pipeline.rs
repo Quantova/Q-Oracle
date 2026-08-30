@@ -74,7 +74,11 @@ fn a_verified_foreign_fact_becomes_two_pq_artifacts_and_nothing_foreign_crosses(
     let signed = message(MESSAGE_ABAB);
     let aggregate = signature(AGGREGATE_ABAB_VALID);
     assert!(verifier.fast_aggregate_verify(&committee, &signed, &aggregate));
-    assert!(!verifier.fast_aggregate_verify(&committee, &signed, &signature(AGGREGATE_ABAB_TAMPERED)));
+    assert!(!verifier.fast_aggregate_verify(
+        &committee,
+        &signed,
+        &signature(AGGREGATE_ABAB_TAMPERED)
+    ));
 
     let signer = SoftSigner::from_seed(0, &[0x09u8; 32]);
     let fact = translate(&lock(), &ctx(), 900_000);
@@ -90,16 +94,23 @@ fn a_verified_foreign_fact_becomes_two_pq_artifacts_and_nothing_foreign_crosses(
     let mut sponge = [0u8; 32];
     shake256(&preimage, &mut sponge);
     assert_eq!(shake256_256(&preimage), sponge);
-    assert_eq!(&shake256_256(&preimage)[..], &absorb_output(SHAKE256_RATE, &preimage)[..32]);
+    assert_eq!(
+        &shake256_256(&preimage)[..],
+        &absorb_output(SHAKE256_RATE, &preimage)[..32]
+    );
     assert_eq!(commitment.digest, sponge);
 
-    let crossings = env.cross().expect("the two pq artifacts admit through the door");
+    let crossings = env
+        .cross()
+        .expect("the two pq artifacts admit through the door");
     assert_eq!(crossings[0].kind, PqArtifact::MlDsaAttestation);
     assert_eq!(crossings[1].kind, PqArtifact::HashStark);
     assert!(matches!(crossings[0].artifact, Artifact::Attestation(_)));
     assert!(matches!(crossings[1].artifact, Artifact::Stark(_)));
 
-    let der = vec![0x30, 0x45, 0x02, 0x21, 0x00, 0xab, 0xcd, 0xef, 0x02, 0x20, 0x11, 0x22, 0x33];
+    let der = vec![
+        0x30, 0x45, 0x02, 0x21, 0x00, 0xab, 0xcd, 0xef, 0x02, 0x20, 0x11, 0x22, 0x33,
+    ];
     assert_eq!(admit(&der), Err(Refused::Foreign));
     let mut g1 = vec![0xa0u8];
     g1.extend_from_slice(&[0x33u8; 47]);

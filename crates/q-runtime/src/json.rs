@@ -95,7 +95,12 @@ impl Json {
 }
 
 pub fn object(fields: Vec<(&str, Json)>) -> Json {
-    Json::Object(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+    Json::Object(
+        fields
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    )
 }
 
 fn write_string(s: &str, out: &mut String) {
@@ -177,7 +182,10 @@ impl Parser {
         }
     }
 
-    fn nested(&mut self, parse_container: fn(&mut Self) -> Result<Json, String>) -> Result<Json, String> {
+    fn nested(
+        &mut self,
+        parse_container: fn(&mut Self) -> Result<Json, String>,
+    ) -> Result<Json, String> {
         if self.depth >= MAX_DEPTH {
             return Err("the JSON nests deeper than the runtime allows".to_string());
         }
@@ -378,7 +386,10 @@ mod tests {
     fn a_body_with_too_many_elements_is_refused() {
         let over = format!("[{}]", vec!["1"; MAX_NODES + 16].join(","));
         let result = parse(&over);
-        assert!(result.is_err(), "an element count past the node budget must be refused");
+        assert!(
+            result.is_err(),
+            "an element count past the node budget must be refused"
+        );
         assert!(
             result.unwrap_err().contains("more elements"),
             "the refusal names the element budget"

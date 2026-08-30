@@ -18,7 +18,9 @@ pub use translator::{
     attest, corridor_stark, corridor_statement, package, translate, verify_corridor_stark,
     OutboundEnvelope, MESSAGE_TTL_BLOCKS,
 };
-pub use watcher::{CorridorContext, FinalityPolicy, ObservedLock, Watcher, WatcherError, WatcherSet};
+pub use watcher::{
+    CorridorContext, FinalityPolicy, ObservedLock, Watcher, WatcherError, WatcherSet,
+};
 
 #[cfg(test)]
 mod exports {

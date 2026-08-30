@@ -42,7 +42,8 @@ pub struct ExitService {
 impl ExitService {
     pub fn build(cfg: &ExitTrustConfig) -> Result<ExitService, ExitError> {
         let anchor = cfg.build_anchor()?;
-        let journal = PersistentJournal::open(ReplayStore::new(cfg.ledger_path.with_extension("journal")))?;
+        let journal =
+            PersistentJournal::open(ReplayStore::new(cfg.ledger_path.with_extension("journal")))?;
         let mut desk = ExitDesk::with_journal(cfg.desk_config(), anchor, Box::new(journal))?;
         for vault in &cfg.vaults {
             desk.register_vault(vault.vault_id, vault.collateral);
@@ -74,7 +75,8 @@ impl ExitService {
     }
 
     pub fn poll_burns(&mut self, now: u64) -> Result<Vec<ExitId>, FeedError> {
-        self.feed.drive(&self.source, &mut self.desk, self.vault_id, now)
+        self.feed
+            .drive(&self.source, &mut self.desk, self.vault_id, now)
     }
 
     pub fn poll_burns_from(
@@ -92,7 +94,12 @@ impl ExitService {
         now: u64,
     ) -> Result<ExitDecision, ExitError> {
         self.desk.settle(id, watcher, now)?;
-        let statement = self.desk.exit(id).ok_or(ExitError::UnknownExit)?.statement.clone();
+        let statement = self
+            .desk
+            .exit(id)
+            .ok_or(ExitError::UnknownExit)?
+            .statement
+            .clone();
         Ok(ExitDecision::settle(&statement, self.dest_chain))
     }
 
@@ -180,10 +187,20 @@ pub const DEST_CHAIN_ID: u64 = 0;
 pub const DEFAULT_EPOCH_CAP: u128 = 1_000_000_000_000_000_000_000_000;
 
 pub fn boot() -> BridgeState {
-    boot_with(OperatorSet::new(0), DEST_CHAIN_ID, [0u8; 32], DEFAULT_EPOCH_CAP)
+    boot_with(
+        OperatorSet::new(0),
+        DEST_CHAIN_ID,
+        [0u8; 32],
+        DEFAULT_EPOCH_CAP,
+    )
 }
 
-pub fn boot_with(operators: OperatorSet, dest_chain_id: u64, era: [u8; 32], epoch_cap: u128) -> BridgeState {
+pub fn boot_with(
+    operators: OperatorSet,
+    dest_chain_id: u64,
+    era: [u8; 32],
+    epoch_cap: u128,
+) -> BridgeState {
     let mut gateway = Gateway::new(DEST_CHAIN, dest_chain_id, operators, epoch_cap);
     gateway.set_era(era);
     BridgeState::seeded(gateway)
@@ -194,7 +211,12 @@ pub(crate) const CONFIGURED_DEST_CHAIN_ID: u64 = 0x5100_0000_0000_9000;
 
 #[cfg(test)]
 pub(crate) fn boot_configured() -> BridgeState {
-    boot_with(OperatorSet::new(0), CONFIGURED_DEST_CHAIN_ID, [0u8; 32], DEFAULT_EPOCH_CAP)
+    boot_with(
+        OperatorSet::new(0),
+        CONFIGURED_DEST_CHAIN_ID,
+        [0u8; 32],
+        DEFAULT_EPOCH_CAP,
+    )
 }
 
 pub fn declare_operator_source(
@@ -250,7 +272,7 @@ mod tests {
     use q_airlock::{AttestationEnvelope, SignerSig};
     use q_assets::Network;
     use q_codec::{
-        AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
+        attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION,
     };
     use q_federated::derive_asset_id;
     use q_qbridge::{
@@ -347,7 +369,11 @@ mod tests {
         };
         (
             material,
-            BitcoinAnchor { checkpoint, params: EASY, bridge_script: bridge.to_vec() },
+            BitcoinAnchor {
+                checkpoint,
+                params: EASY,
+                bridge_script: bridge.to_vec(),
+            },
             txid,
         )
     }
@@ -387,7 +413,10 @@ mod tests {
     #[test]
     fn a_booted_runtime_lists_all_the_seeded_pools() {
         let mut state = boot();
-        match handle(&mut state, Request::ListPools(ListPoolsRequest { network_id: None })) {
+        match handle(
+            &mut state,
+            Request::ListPools(ListPoolsRequest { network_id: None }),
+        ) {
             Response::Pools(pools) => assert_eq!(pools.len(), foreign_asset_count()),
             other => panic!("expected Pools, got {other:?}"),
         }
@@ -408,7 +437,13 @@ mod tests {
     }
 
     fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(TEST_DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(
+            &op.sk,
+            &fact.attest_preimage(TEST_DEST_ID),
+            &attest_context(&[0u8; 32]),
+            &[0u8; 32],
+        )
+        .unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),
@@ -449,7 +484,11 @@ mod tests {
         };
         let env = AttestationEnvelope {
             fact: fact.clone(),
-            signatures: vec![attest(&ops[0], &fact), attest(&ops[1], &fact), attest(&ops[2], &fact)],
+            signatures: vec![
+                attest(&ops[0], &fact),
+                attest(&ops[1], &fact),
+                attest(&ops[2], &fact),
+            ],
         };
         match handle(
             &mut state,
@@ -512,7 +551,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut path = std::env::temp_dir();
-        path.push(format!("q-oracle-boot-{tag}-{}-{nanos}.snap", std::process::id()));
+        path.push(format!(
+            "q-oracle-boot-{tag}-{}-{nanos}.snap",
+            std::process::id()
+        ));
         path
     }
 
@@ -527,7 +569,9 @@ mod tests {
             .gateway
             .admit_trustless(asset, [0x11; 32], 1, Network::Bitcoin.id())
             .expect("a seeded corridor admits the reference");
-        store.save(&state.gateway.encode_guard()).expect("the admission is persisted");
+        store
+            .save(&state.gateway.encode_guard())
+            .expect("the admission is persisted");
         drop(state);
 
         let restored = restore(&Some(store)).expect("a present snapshot rehydrates the guard");
@@ -570,7 +614,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut path = std::env::temp_dir();
-        path.push(format!("q-oracle-exitsvc-{tag}-{}-{nanos}.led", std::process::id()));
+        path.push(format!(
+            "q-oracle-exitsvc-{tag}-{}-{nanos}.led",
+            std::process::id()
+        ));
         path
     }
 
@@ -591,7 +638,10 @@ mod tests {
             dest_chain: 9000,
             corridor: 1,
             start_height: 4_199_999,
-            vaults: vec![VaultSeed { vault_id: 1, collateral: 2_000_000 }],
+            vaults: vec![VaultSeed {
+                vault_id: 1,
+                collateral: 2_000_000,
+            }],
             rpc_host: "127.0.0.1".to_string(),
             rpc_port: 8080,
             ledger_path: ledger,
@@ -618,29 +668,50 @@ mod tests {
         let path = temp_ledger("drive");
         let cfg = full_exit_config(path.clone());
         let mut service = ExitService::build(&cfg).expect("a full config builds a service");
-        assert!(service.feed_enabled(), "the feed is enabled when exits are configured");
+        assert!(
+            service.feed_enabled(),
+            "the feed is enabled when exits are configured"
+        );
         assert_eq!(service.vault(), 1, "the pool vault is the active vault");
-        assert_eq!(service.desk().free_collateral(1), 2_000_000, "the vault collateral is registered");
-        assert_eq!(service.scanned_through(), 4_199_999, "the feed starts at the configured height");
+        assert_eq!(
+            service.desk().free_collateral(1),
+            2_000_000,
+            "the vault collateral is registered"
+        );
+        assert_eq!(
+            service.scanned_through(),
+            4_199_999,
+            "the feed starts at the configured height"
+        );
 
         let opened = service
             .poll_burns_from(&EmptyChain { head: 4_200_004 }, 10)
             .expect("the enabled feed drives");
         assert!(opened.is_empty(), "an empty chain opens no exits");
-        assert_eq!(service.scanned_through(), 4_200_004, "the feed advanced across the empty range");
+        assert_eq!(
+            service.scanned_through(),
+            4_200_004,
+            "the feed advanced across the empty range"
+        );
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn a_disabled_runtime_starts_no_exit_service() {
         let handle = start_exits_with(Ok(None)).expect("a disabled runtime starts cleanly");
-        assert!(handle.is_none(), "a default disabled runtime starts no exit service");
+        assert!(
+            handle.is_none(),
+            "a default disabled runtime starts no exit service"
+        );
     }
 
     #[test]
     fn an_enabled_but_unconfigured_runtime_refuses_to_start() {
         let refused = start_exits_with(Err(ExitConfigError::Missing("chain id")));
-        assert!(refused.is_err(), "an enabled but half configured runtime fails closed");
+        assert!(
+            refused.is_err(),
+            "an enabled but half configured runtime fails closed"
+        );
         assert_eq!(refused.err().unwrap().kind(), ErrorKind::InvalidInput);
     }
 }

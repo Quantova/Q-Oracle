@@ -10,20 +10,21 @@ pub mod trustless;
 pub mod watch;
 
 pub use admission::{admit, install, FederatedError};
-pub use pools::{
-    corridor_for, derive_asset_id, depth_for, grade_for, install_all, install_pool, tier_for,
-    PoolError, PoolRegistry, PoolRequest, PoolSpec,
-};
-pub use trustless::{
-    admit_bitcoin_trustless, admit_cosmos_trustless, admit_ethereum_trustless, match_bitcoin_deposit,
-    match_cosmos_deposit, match_ethereum_deposit, TrustlessError, TrustlessMint,
-};
 pub use corridors::{
     corridors, find, origin_tag, Corridor, Tier, TrustGrade, ALGORAND, APTOS, AVALANCHE, BNB_CHAIN,
     CARDANO, CCTP_USDC, DOGECOIN, HEDERA, LITECOIN, MONERO, NEAR, POLYGON, SOLANA, STELLAR, SUI,
     TON, TRON, XRPL, ZCASH,
 };
+pub use pools::{
+    corridor_for, depth_for, derive_asset_id, grade_for, install_all, install_pool, tier_for,
+    PoolError, PoolRegistry, PoolRequest, PoolSpec,
+};
 pub use sources::{IndependenceReport, SourceEndpoint, SourceRegistry};
+pub use trustless::{
+    admit_bitcoin_trustless, admit_cosmos_trustless, admit_ethereum_trustless,
+    match_bitcoin_deposit, match_cosmos_deposit, match_ethereum_deposit, TrustlessError,
+    TrustlessMint,
+};
 pub use watch::{watch_and_admit, OperatorFeed, WatchError};
 
 #[cfg(test)]

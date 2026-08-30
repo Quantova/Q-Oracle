@@ -31,7 +31,11 @@ const REQUIRED: u128 = 750;
 const VAULT: u32 = 1;
 
 fn attesters() -> [Attester; 3] {
-    [Attester::new(1, 100), Attester::new(2, 100), Attester::new(3, 100)]
+    [
+        Attester::new(1, 100),
+        Attester::new(2, 100),
+        Attester::new(3, 100),
+    ]
 }
 
 fn committee(members: &[Attester]) -> qtv_attest::CommitteeCommitment {
@@ -83,14 +87,38 @@ fn header_at(height: u64, leaves: &[Vec<u8>]) -> Header {
     )
 }
 
-fn finalized_certificate(members: &[Attester], height: u64, block: Block, beacon: &Beacon) -> Certificate {
+fn finalized_certificate(
+    members: &[Attester],
+    height: u64,
+    block: Block,
+    beacon: &Beacon,
+) -> Certificate {
     let commitment = committee(members);
     let atts: Vec<_> = members
         .iter()
-        .map(|a| a.attest(CHAIN_ID, height, SLOT, 0, commitment.digest(), block, beacon))
+        .map(|a| {
+            a.attest(
+                CHAIN_ID,
+                height,
+                SLOT,
+                0,
+                commitment.digest(),
+                block,
+                beacon,
+            )
+        })
         .collect();
-    aggregate(CHAIN_ID, height, SLOT, block, &commitment, beacon, &atts, TAU)
-        .expect("a full committee finalizes")
+    aggregate(
+        CHAIN_ID,
+        height,
+        SLOT,
+        block,
+        &commitment,
+        beacon,
+        &atts,
+        TAU,
+    )
+    .expect("a full committee finalizes")
 }
 
 fn anchor(members: &[Attester], beacon: &Beacon) -> QuantovaAnchor {
@@ -115,7 +143,12 @@ fn config() -> DeskConfig {
     }
 }
 
-fn finalized_block(members: &[Attester], height: u64, beacon: &Beacon, burn: [u8; 32]) -> FinalizedBlock {
+fn finalized_block(
+    members: &[Attester],
+    height: u64,
+    beacon: &Beacon,
+    burn: [u8; 32],
+) -> FinalizedBlock {
     let leaves = vec![
         vec![0xde; 8],
         burn_leaf(AMOUNT, ASSET, BENEFICIARY, burn),
@@ -156,7 +189,10 @@ fn clone_block(block: &FinalizedBlock) -> FinalizedBlock {
 fn node(members: &[Attester], beacon: &Beacon) -> MockNode {
     let mut blocks = BTreeMap::new();
     blocks.insert(HEIGHT, finalized_block(members, HEIGHT, beacon, BURN_REF));
-    MockNode { head: HEIGHT, blocks }
+    MockNode {
+        head: HEIGHT,
+        blocks,
+    }
 }
 
 fn temp_path(tag: &str) -> PathBuf {
@@ -165,7 +201,10 @@ fn temp_path(tag: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     let mut path = std::env::temp_dir();
-    path.push(format!("q-oracle-exit-restart-{tag}-{}-{nanos}.led", std::process::id()));
+    path.push(format!(
+        "q-oracle-exit-restart-{tag}-{}-{nanos}.led",
+        std::process::id()
+    ));
     path
 }
 
@@ -179,7 +218,9 @@ fn the_feed_opens_a_vault_exit_from_a_watched_burn() {
     desk.register_vault(VAULT, 2_000);
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-    let opened = feed.drive(&node, &mut desk, VAULT, 10).expect("the enabled feed drives");
+    let opened = feed
+        .drive(&node, &mut desk, VAULT, 10)
+        .expect("the enabled feed drives");
     assert_eq!(opened.len(), 1, "the watched burn opens one exit");
     assert_eq!(feed.scanned_through(), HEIGHT);
 
@@ -201,14 +242,29 @@ fn a_burn_that_hits_a_thin_vault_is_retried_not_dropped() {
     desk.register_vault(VAULT, REQUIRED - 50);
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-    let opened = feed.drive(&node, &mut desk, VAULT, 10).expect("the enabled feed drives");
+    let opened = feed
+        .drive(&node, &mut desk, VAULT, 10)
+        .expect("the enabled feed drives");
     assert_eq!(opened.len(), 0, "a thin vault opens nothing yet");
-    assert_eq!(feed.pending_len(), 1, "the proven burn is queued, not dropped past the cursor");
-    assert!(!desk.is_consumed(&BURN_REF), "a thin-vault failure does not consume the burn ref");
+    assert_eq!(
+        feed.pending_len(),
+        1,
+        "the proven burn is queued, not dropped past the cursor"
+    );
+    assert!(
+        !desk.is_consumed(&BURN_REF),
+        "a thin-vault failure does not consume the burn ref"
+    );
 
     desk.register_vault(VAULT, 100);
-    let opened = feed.drive(&node, &mut desk, VAULT, 11).expect("the feed drives again");
-    assert_eq!(opened.len(), 1, "the queued burn opens once the vault has collateral");
+    let opened = feed
+        .drive(&node, &mut desk, VAULT, 11)
+        .expect("the feed drives again");
+    assert_eq!(
+        opened.len(),
+        1,
+        "the queued burn opens once the vault has collateral"
+    );
     assert_eq!(feed.pending_len(), 0, "the retry queue drains on success");
     assert!(desk.is_consumed(&BURN_REF));
 }
@@ -225,7 +281,9 @@ fn a_burn_for_another_destination_is_dropped_not_re_queued_forever() {
     desk.register_vault(VAULT, 2_000);
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-    let opened = feed.drive(&node, &mut desk, VAULT, 10).expect("the feed drives");
+    let opened = feed
+        .drive(&node, &mut desk, VAULT, 10)
+        .expect("the feed drives");
     assert_eq!(opened.len(), 0);
     assert_eq!(
         feed.pending_len(),
@@ -246,7 +304,10 @@ fn a_gated_off_feed_opens_nothing() {
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig::default());
     assert!(!feed.is_enabled());
-    assert_eq!(feed.drive(&node, &mut desk, VAULT, 10), Err(FeedError::Disabled));
+    assert_eq!(
+        feed.drive(&node, &mut desk, VAULT, 10),
+        Err(FeedError::Disabled)
+    );
     assert_eq!(desk.locked_collateral(VAULT), 0);
     assert!(!desk.is_consumed(&BURN_REF));
 }
@@ -277,18 +338,36 @@ fn a_pending_exit_survives_a_restart_through_the_journal() {
     desk.register_vault(VAULT, 2_000);
     desk.reconstruct().unwrap();
 
-    assert_eq!(desk.exit_count(), 1, "the pending exit is rebuilt, not lost");
+    assert_eq!(
+        desk.exit_count(),
+        1,
+        "the pending exit is rebuilt, not lost"
+    );
     let exit = desk.exit(ExitId(0)).unwrap();
     assert_eq!(exit.state, ExitState::Pending);
-    assert_eq!(exit.deadline, deadline, "the original deadline survives so a restart cannot reset the slash window");
-    assert_eq!(desk.locked_collateral(VAULT), REQUIRED, "the collateral is re-locked");
+    assert_eq!(
+        exit.deadline, deadline,
+        "the original deadline survives so a restart cannot reset the slash window"
+    );
+    assert_eq!(
+        desk.locked_collateral(VAULT),
+        REQUIRED,
+        "the collateral is re-locked"
+    );
     assert!(desk.is_consumed(&BURN_REF));
-    assert_eq!(desk.slashable(deadline + 1), vec![ExitId(0)], "the rebuilt exit is still slashable on its original schedule");
+    assert_eq!(
+        desk.slashable(deadline + 1),
+        vec![ExitId(0)],
+        "the rebuilt exit is still slashable on its original schedule"
+    );
 
     let node = node(&members, &beacon);
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
     let opened = feed.drive(&node, &mut desk, VAULT, 20).unwrap();
-    assert!(opened.is_empty(), "the rebuilt exit is not opened a second time");
+    assert!(
+        opened.is_empty(),
+        "the rebuilt exit is not opened a second time"
+    );
     assert_eq!(desk.locked_collateral(VAULT), REQUIRED);
 
     std::fs::remove_file(&path).ok();
@@ -315,8 +394,18 @@ fn a_journal_with_a_duplicate_open_is_refused_not_double_paid() {
             issued_at: 10,
             deadline: 110,
         };
-        journal.append(&ExitEvent::Open { index: 0, exit: framed.clone() }).unwrap();
-        journal.append(&ExitEvent::Open { index: 1, exit: framed }).unwrap();
+        journal
+            .append(&ExitEvent::Open {
+                index: 0,
+                exit: framed.clone(),
+            })
+            .unwrap();
+        journal
+            .append(&ExitEvent::Open {
+                index: 1,
+                exit: framed,
+            })
+            .unwrap();
     }
 
     let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
@@ -358,14 +447,24 @@ fn a_slashed_exit_is_not_reopened_after_a_restart() {
     desk.reconstruct().unwrap();
 
     assert_eq!(desk.exit_count(), 1);
-    assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Slashed, "a terminal exit is not resurrected as pending");
+    assert_eq!(
+        desk.exit(ExitId(0)).unwrap().state,
+        ExitState::Slashed,
+        "a terminal exit is not resurrected as pending"
+    );
     assert!(desk.is_consumed(&BURN_REF));
-    assert!(desk.slashable(u64::MAX).is_empty(), "a slashed exit is never paid out a second time after a restart");
+    assert!(
+        desk.slashable(u64::MAX).is_empty(),
+        "a slashed exit is never paid out a second time after a restart"
+    );
 
     let node = node(&members, &beacon);
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
     let opened = feed.drive(&node, &mut desk, VAULT, 20).unwrap();
-    assert!(opened.is_empty(), "the burn of a slashed exit opens no new exit");
+    assert!(
+        opened.is_empty(),
+        "the burn of a slashed exit opens no new exit"
+    );
 
     std::fs::remove_file(&path).ok();
 }

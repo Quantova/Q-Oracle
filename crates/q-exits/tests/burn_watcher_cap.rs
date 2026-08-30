@@ -84,8 +84,14 @@ fn a_block_heavier_than_the_poll_budget_is_assembled_in_full() {
         counts: vec![heavy],
     };
     let mut watcher = BurnWatcher::new(0);
-    let proofs = watcher.poll(&source).expect("the poll assembles the heavy block");
-    assert_eq!(proofs.len(), heavy, "the whole heavy block is assembled, nothing dropped");
+    let proofs = watcher
+        .poll(&source)
+        .expect("the poll assembles the heavy block");
+    assert_eq!(
+        proofs.len(),
+        heavy,
+        "the whole heavy block is assembled, nothing dropped"
+    );
     assert_eq!(watcher.scanned_through(), 1);
 }
 
@@ -101,6 +107,14 @@ fn burns_beyond_the_poll_budget_are_deferred_not_dropped() {
     for _ in 0..3 {
         total += watcher.poll(&source).expect("poll").len();
     }
-    assert_eq!(watcher.scanned_through(), 3, "every block is scanned across the polls");
-    assert_eq!(total, per_block * 3, "every burn is assembled exactly once, none dropped");
+    assert_eq!(
+        watcher.scanned_through(),
+        3,
+        "every block is scanned across the polls"
+    );
+    assert_eq!(
+        total,
+        per_block * 3,
+        "every burn is assembled exactly once, none dropped"
+    );
 }

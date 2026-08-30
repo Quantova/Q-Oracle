@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
+use q_codec::{attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
 use q_gateway::gateway::REORG_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -36,7 +36,11 @@ fn sign_ctx(op: &Op, message: &[u8], context: &[u8]) -> SignerSig {
 }
 
 fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-    sign_ctx(op, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]))
+    sign_ctx(
+        op,
+        &fact.attest_preimage(DEST_ID),
+        &attest_context(&[0u8; 32]),
+    )
 }
 
 fn deposit(source_ref: [u8; 32], amount: u128) -> BridgeFact {
@@ -73,7 +77,11 @@ fn gateway_with(ops: &[Op], threshold: usize, dest_chain_id: u64) -> Gateway {
 }
 
 fn attest_with(op: &Op, fact: &BridgeFact, dest_chain_id: u64) -> SignerSig {
-    sign_ctx(op, &fact.attest_preimage(dest_chain_id), &attest_context(&[0u8; 32]))
+    sign_ctx(
+        op,
+        &fact.attest_preimage(dest_chain_id),
+        &attest_context(&[0u8; 32]),
+    )
 }
 
 #[test]
@@ -81,7 +89,10 @@ fn a_quorum_signed_for_one_chain_id_is_refused_by_a_sibling_gateway() {
     let ops: Vec<Op> = (0..4).map(mk).collect();
     let chain_a = DEST_ID;
     let chain_b = DEST_ID ^ (1u64 << 40);
-    assert_eq!(chain_a as u32, chain_b as u32, "the two siblings share the low 32 bits");
+    assert_eq!(
+        chain_a as u32, chain_b as u32,
+        "the two siblings share the low 32 bits"
+    );
     let f = deposit([0x77; 32], 500);
     let env = AttestationEnvelope {
         fact: f.clone(),
@@ -93,7 +104,10 @@ fn a_quorum_signed_for_one_chain_id_is_refused_by_a_sibling_gateway() {
     };
     let mut matching = gateway_with(&ops, 3, chain_a);
     assert_eq!(
-        matching.process_deposit(&env).expect("the matching destination chain id mints").amount,
+        matching
+            .process_deposit(&env)
+            .expect("the matching destination chain id mints")
+            .amount,
         500
     );
     let mut sibling = gateway_with(&ops, 3, chain_b);
@@ -150,9 +164,18 @@ fn vector_off_by_one_quorum_fails() {
 
     let exact = AttestationEnvelope {
         fact: f.clone(),
-        signatures: vec![attest(&ops[0], &f), attest(&ops[1], &f), attest(&ops[2], &f)],
+        signatures: vec![
+            attest(&ops[0], &f),
+            attest(&ops[1], &f),
+            attest(&ops[2], &f),
+        ],
     };
-    assert_eq!(gw.process_deposit(&exact).expect("exact quorum mints").amount, 500);
+    assert_eq!(
+        gw.process_deposit(&exact)
+            .expect("exact quorum mints")
+            .amount,
+        500
+    );
 }
 
 #[test]
@@ -186,7 +209,10 @@ fn vector_signature_under_a_foreign_context_does_not_count() {
             sign_ctx(&ops[2], &f.attest_preimage(DEST_ID), REORG_DOMAIN),
         ],
     };
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BelowThreshold { got: 2, need: 3 }));
+    assert_eq!(
+        gw.process_deposit(&env),
+        Err(GatewayError::BelowThreshold { got: 2, need: 3 })
+    );
     assert_eq!(gw.minted_of_asset(&ASSET), 0);
 }
 
@@ -204,7 +230,10 @@ fn vector_signature_over_a_reshaped_fact_does_not_count() {
             attest(&ops[2], &reshaped),
         ],
     };
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BelowThreshold { got: 2, need: 3 }));
+    assert_eq!(
+        gw.process_deposit(&env),
+        Err(GatewayError::BelowThreshold { got: 2, need: 3 })
+    );
     assert_eq!(gw.minted_of_asset(&ASSET), 0);
 }
 
@@ -224,6 +253,9 @@ fn vector_reference_is_consumed_before_any_second_mint() {
         fact: reshaped.clone(),
         signatures: (1..4).map(|i| attest(&ops[i], &reshaped)).collect(),
     };
-    assert_eq!(gw.process_deposit(&replay), Err(GatewayError::ReplayedReference));
+    assert_eq!(
+        gw.process_deposit(&replay),
+        Err(GatewayError::ReplayedReference)
+    );
     assert_eq!(gw.minted_of_asset(&ASSET), 500);
 }

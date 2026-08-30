@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
+use q_codec::{attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
 use q_federated::corridors::{origin_tag, Tier, TrustGrade};
 use q_federated::{admit_bitcoin_trustless, install, Corridor, TrustlessError, SOLANA};
 use q_gateway::{Gateway, OperatorSet};
 use qlc_bitcoin::params::Network;
 use qlc_bitcoin::tx::Transaction;
 use qlc_bitcoin::{
-    verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, NetworkParams, TrustlessDeposit,
-    U256,
+    verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, NetworkParams,
+    TrustlessDeposit, U256,
 };
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
@@ -88,7 +88,11 @@ fn bitcoin_corridor() -> Corridor {
     }
 }
 
-fn prove_crafted_deposit(bridge: &[u8], recipient: [u8; 32], amount: u64) -> (TrustlessDeposit, Vec<u8>) {
+fn prove_crafted_deposit(
+    bridge: &[u8],
+    recipient: [u8; 32],
+    amount: u64,
+) -> (TrustlessDeposit, Vec<u8>) {
     let raw = raw_deposit_tx(&[(amount, bridge.to_vec()), (0, op_return(recipient))]);
     let txid = Transaction::parse(&raw).unwrap().txid();
     let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
@@ -135,7 +139,13 @@ fn mk(id: u32) -> Op {
 }
 
 fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+    let sig = ml_dsa::sign(
+        &op.sk,
+        &f.attest_preimage(DEST_ID),
+        &attest_context(&[0u8; 32]),
+        &[0u8; 32],
+    )
+    .unwrap();
     SignerSig {
         operator_id: op.id,
         signature: sig.to_vec(),
@@ -163,7 +173,8 @@ fn a_crafted_bitcoin_deposit_proves_and_clears_the_trustless_gate() {
     let (proven, _raw) = prove_crafted_deposit(&bridge, recipient, 250_000);
     let f = bitcoin_fact(&c, &proven);
 
-    let mint = admit_bitcoin_trustless(&mut gw, &c, &proven, &f).expect("proven deposit clears the gate");
+    let mint =
+        admit_bitcoin_trustless(&mut gw, &c, &proven, &f).expect("proven deposit clears the gate");
     assert_eq!(mint.amount, 250_000);
     assert_eq!(mint.recipient, recipient);
     assert_eq!(mint.source_ref, proven.txid);
@@ -217,9 +228,14 @@ fn a_source_reference_is_bound_per_corridor_and_a_same_corridor_replay_is_still_
     };
     let env = AttestationEnvelope {
         fact: spent.clone(),
-        signatures: vec![attest(&ops[0], &spent), attest(&ops[1], &spent), attest(&ops[2], &spent)],
+        signatures: vec![
+            attest(&ops[0], &spent),
+            attest(&ops[1], &spent),
+            attest(&ops[2], &spent),
+        ],
     };
-    gw.process_deposit(&env).expect("the solana mint consumes the reference on its own corridor");
+    gw.process_deposit(&env)
+        .expect("the solana mint consumes the reference on its own corridor");
     assert!(gw.is_reference_used_on(SOLANA, &proven.txid));
 
     let f = bitcoin_fact(&c, &proven);

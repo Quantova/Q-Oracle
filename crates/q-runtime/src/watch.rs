@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use q_airlock::AttestationEnvelope;
 use q_codec::BridgeFact;
 use q_qbridge::{
-    commit_deposit, verify_deposit, BitcoinProofMaterial, BridgeState, DepositProof, DepositRequest,
-    Response,
+    commit_deposit, verify_deposit, BitcoinProofMaterial, BridgeState, DepositProof,
+    DepositRequest, Response,
 };
 use qlc_cosmos::commit::{Commit, Header};
 use qlc_cosmos::proof::ExistenceProof;
@@ -37,13 +37,20 @@ fn within_bounds(proof: &DepositProof) -> bool {
                 && material.branch.len() <= MAX_BRANCH
                 && material.raw_tx.len() <= MAX_RAW_TX
         }
-        DepositProof::Ethereum { update, deposit, .. } => {
+        DepositProof::Ethereum {
+            update, deposit, ..
+        } => {
             update.sync_aggregate.participation.len() <= MAX_PARTICIPATION
                 && update.finality_branch.len() <= MAX_BRANCH
                 && update.execution.execution_branch.len() <= MAX_BRANCH
                 && deposit.receipt_proof.len() <= MAX_PROOF_NODES
         }
-        DepositProof::Cosmos { commit, validators, proof, .. } => {
+        DepositProof::Cosmos {
+            commit,
+            validators,
+            proof,
+            ..
+        } => {
             commit.signatures.len() <= MAX_VALIDATORS
                 && validators.validators.len() <= MAX_VALIDATORS
                 && proof.path.len() <= MAX_PROOF_PATH
@@ -211,8 +218,8 @@ mod tests {
     use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
     use q_federated::derive_asset_id;
     use q_qbridge::{BitcoinAnchor, DepositOutcome, Response};
-    use qlc_bitcoin::{BlockHeader, Checkpoint, Network as BtcNetwork, NetworkParams, U256};
     use qlc_bitcoin::tx::Transaction;
+    use qlc_bitcoin::{BlockHeader, Checkpoint, Network as BtcNetwork, NetworkParams, U256};
 
     const EASY6: NetworkParams = NetworkParams {
         network: BtcNetwork::Bitcoin,
@@ -349,10 +356,11 @@ mod tests {
         };
 
         let state = shared(boot_configured());
-        state
-            .write()
-            .unwrap()
-            .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6, bridge_script: bridge.clone() });
+        state.write().unwrap().set_bitcoin_anchor(BitcoinAnchor {
+            checkpoint,
+            params: EASY6,
+            bridge_script: bridge.clone(),
+        });
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(BitcoinNode {
             raw_tx: raw,
@@ -489,10 +497,11 @@ mod tests {
             min_work: U256::ONE,
         };
         let state = shared(boot_configured());
-        state
-            .write()
-            .unwrap()
-            .set_bitcoin_anchor(BitcoinAnchor { checkpoint, params: EASY6, bridge_script: bridge.clone() });
+        state.write().unwrap().set_bitcoin_anchor(BitcoinAnchor {
+            checkpoint,
+            params: EASY6,
+            bridge_script: bridge.clone(),
+        });
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(BitcoinNode {
             raw_tx: raw,
@@ -527,7 +536,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut path = std::env::temp_dir();
-        path.push(format!("q-oracle-watch-{}-{nanos}.snap", std::process::id()));
+        path.push(format!(
+            "q-oracle-watch-{}-{nanos}.snap",
+            std::process::id()
+        ));
         let working = GuardStore::new(path.clone());
         let ingested = ingest_once(&state, &pool, Some(&working));
         assert_eq!(ingested.len(), 1);
@@ -578,6 +590,9 @@ mod tests {
         let mut pool = WatcherPool::new();
         pool.attach(Box::new(SilentNode(Network::Bitcoin.id())));
         pool.attach(Box::new(SilentNode(Network::Ethereum.id())));
-        assert_eq!(pool.chains(), vec![Network::Ethereum.id(), Network::Bitcoin.id()]);
+        assert_eq!(
+            pool.chains(),
+            vec![Network::Ethereum.id(), Network::Bitcoin.id()]
+        );
     }
 }

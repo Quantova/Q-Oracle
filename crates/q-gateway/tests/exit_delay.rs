@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, CodecError, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
+use q_codec::{
+    attest_context, AssetId, BridgeFact, CodecError, Direction, Recipient, SourceRef, FACT_VERSION,
+};
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
@@ -51,7 +53,13 @@ fn attest(ops: &[&Op], fact: &BridgeFact) -> AttestationEnvelope {
         signatures: ops
             .iter()
             .map(|op| {
-                let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+                let sig = ml_dsa::sign(
+                    &op.sk,
+                    &fact.attest_preimage(DEST_ID),
+                    &attest_context(&[0u8; 32]),
+                    &[0u8; 32],
+                )
+                .unwrap();
                 SignerSig {
                     operator_id: op.id,
                     signature: sig.to_vec(),
@@ -70,8 +78,11 @@ fn gateway_with_mint(ops: &[Op], exit_delay: u64) -> Gateway {
     gw.register_corridor(SOURCE, 6);
     gw.register_asset_cap(ASSET, 1_000);
     gw.set_exit_delay(exit_delay);
-    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &deposit([0x11; 32], 800)))
-        .expect("seed a minted balance to exit");
+    gw.process_deposit(&attest(
+        &[&ops[0], &ops[1], &ops[2]],
+        &deposit([0x11; 32], 800),
+    ))
+    .expect("seed a minted balance to exit");
     gw
 }
 
@@ -82,24 +93,34 @@ fn an_exit_burns_the_origin_asset_and_waits_out_the_delay() {
     gw.advance_to(1_000);
     assert_eq!(gw.minted_of_asset(&ASSET), 800);
 
-    let ticket = gw.request_exit(ASSET, 300, DEST).expect("exit request burns the bridged units");
+    let ticket = gw
+        .request_exit(ASSET, 300, DEST)
+        .expect("exit request burns the bridged units");
     assert_eq!(ticket.amount, 300);
     assert_eq!(ticket.unlock_height, 1_100);
     assert_eq!(gw.minted_of_asset(&ASSET), 500);
 
     assert_eq!(
         gw.finalize_exit(ticket.exit_id),
-        Err(GatewayError::ExitNotReady { now: 1_000, unlock: 1_100 })
+        Err(GatewayError::ExitNotReady {
+            now: 1_000,
+            unlock: 1_100
+        })
     );
 
     gw.advance_to(1_099);
     assert_eq!(
         gw.finalize_exit(ticket.exit_id),
-        Err(GatewayError::ExitNotReady { now: 1_099, unlock: 1_100 })
+        Err(GatewayError::ExitNotReady {
+            now: 1_099,
+            unlock: 1_100
+        })
     );
 
     gw.advance_to(1_100);
-    let released = gw.finalize_exit(ticket.exit_id).expect("the exit clears once the delay elapses");
+    let released = gw
+        .finalize_exit(ticket.exit_id)
+        .expect("the exit clears once the delay elapses");
     assert_eq!(released.amount, 300);
     assert_eq!(released.destination, DEST);
 }
@@ -110,7 +131,10 @@ fn an_exit_larger_than_the_minted_balance_is_rejected() {
     let mut gw = gateway_with_mint(&ops, 100);
     assert_eq!(
         gw.request_exit(ASSET, 801, DEST),
-        Err(GatewayError::ExitExceedsMinted { minted: 800, amount: 801 })
+        Err(GatewayError::ExitExceedsMinted {
+            minted: 800,
+            amount: 801
+        })
     );
     assert_eq!(gw.minted_of_asset(&ASSET), 800);
 }

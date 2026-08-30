@@ -77,7 +77,12 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    pub fn new(chain_id: u32, dest_chain_id: u64, operators: OperatorSet, epoch_cap: u128) -> Gateway {
+    pub fn new(
+        chain_id: u32,
+        dest_chain_id: u64,
+        operators: OperatorSet,
+        epoch_cap: u128,
+    ) -> Gateway {
         Gateway {
             chain_id,
             dest_chain_id,
@@ -169,12 +174,14 @@ impl Gateway {
     }
 
     pub fn register_corridor(&mut self, source_chain: u32, confirmation_depth: u32) {
-        self.corridors.entry(source_chain).or_insert(CorridorConfig {
-            confirmation_depth,
-            quorum: 0,
-            tier: BASE_TIER,
-            active: true,
-        });
+        self.corridors
+            .entry(source_chain)
+            .or_insert(CorridorConfig {
+                confirmation_depth,
+                quorum: 0,
+                tier: BASE_TIER,
+                active: true,
+            });
     }
 
     pub fn set_corridor_active(&mut self, source_chain: u32, active: bool) {
@@ -224,9 +231,17 @@ impl Gateway {
             let minted = *self.per_asset_epoch_minted.get(asset_id).unwrap_or(&0);
             let after = minted
                 .checked_add(amount)
-                .ok_or(GatewayError::EpochCapExceeded { minted, cap, add: amount })?;
+                .ok_or(GatewayError::EpochCapExceeded {
+                    minted,
+                    cap,
+                    add: amount,
+                })?;
             if after > cap {
-                return Err(GatewayError::EpochCapExceeded { minted, cap, add: amount });
+                return Err(GatewayError::EpochCapExceeded {
+                    minted,
+                    cap,
+                    add: amount,
+                });
             }
         }
         Ok(())
@@ -296,7 +311,9 @@ impl Gateway {
     }
 
     pub fn is_reference_used(&self, source_ref: &[u8; 32]) -> bool {
-        self.used_refs.iter().any(|(_, reference)| reference == source_ref)
+        self.used_refs
+            .iter()
+            .any(|(_, reference)| reference == source_ref)
     }
 
     pub fn is_reference_used_on(&self, source_chain: u32, source_ref: &[u8; 32]) -> bool {
@@ -429,7 +446,9 @@ impl Gateway {
             return Err(GatewayError::CorridorInactive(source_chain));
         }
         let required = if corridor.quorum > 0 {
-            corridor.quorum.max(supermajority_floor(self.operators.size()))
+            corridor
+                .quorum
+                .max(supermajority_floor(self.operators.size()))
         } else {
             self.operators
                 .threshold()
@@ -555,9 +574,17 @@ impl Gateway {
         let outstanding = minted.saturating_add(self.pending_exit_of(&asset_id));
         let after_cap = outstanding
             .checked_add(amount)
-            .ok_or(GatewayError::AssetCapExceeded { minted: outstanding, cap, add: amount })?;
+            .ok_or(GatewayError::AssetCapExceeded {
+                minted: outstanding,
+                cap,
+                add: amount,
+            })?;
         if after_cap > cap {
-            return Err(GatewayError::AssetCapExceeded { minted: outstanding, cap, add: amount });
+            return Err(GatewayError::AssetCapExceeded {
+                minted: outstanding,
+                cap,
+                add: amount,
+            });
         }
         let asset_after = minted.saturating_add(amount);
         let epoch_after =
@@ -648,7 +675,12 @@ impl Gateway {
         }
 
         let message = fact.attest_preimage(self.dest_chain_id);
-        let distinct = verify_quorum(&message, &attest_context(&self.era), &env.signatures, &self.operators);
+        let distinct = verify_quorum(
+            &message,
+            &attest_context(&self.era),
+            &env.signatures,
+            &self.operators,
+        );
         if distinct.len() < required {
             return Err(GatewayError::BelowThreshold {
                 got: distinct.len(),
@@ -662,13 +694,14 @@ impl Gateway {
             .ok_or(GatewayError::AssetNotRegistered)?;
         let minted = *self.per_asset_minted.get(&fact.asset_id.0).unwrap_or(&0);
         let outstanding = minted.saturating_add(self.pending_exit_of(&fact.asset_id.0));
-        let after_cap = outstanding
-            .checked_add(fact.amount)
-            .ok_or(GatewayError::AssetCapExceeded {
-                minted: outstanding,
-                cap,
-                add: fact.amount,
-            })?;
+        let after_cap =
+            outstanding
+                .checked_add(fact.amount)
+                .ok_or(GatewayError::AssetCapExceeded {
+                    minted: outstanding,
+                    cap,
+                    add: fact.amount,
+                })?;
         if after_cap > cap {
             return Err(GatewayError::AssetCapExceeded {
                 minted: outstanding,
@@ -694,12 +727,16 @@ impl Gateway {
             });
         }
 
-        if self.used_refs.contains(&(fact.source_chain, fact.source_ref.0)) {
+        if self
+            .used_refs
+            .contains(&(fact.source_chain, fact.source_ref.0))
+        {
             return Err(GatewayError::ReplayedReference);
         }
 
         self.charge_asset_epoch(&fact.asset_id.0, fact.amount)?;
-        self.used_refs.insert((fact.source_chain, fact.source_ref.0));
+        self.used_refs
+            .insert((fact.source_chain, fact.source_ref.0));
         self.per_asset_minted.insert(fact.asset_id.0, asset_after);
         self.epoch_minted = epoch_after;
         self.record_asset_epoch(fact.asset_id.0, fact.amount);
@@ -999,7 +1036,13 @@ mod tests {
     }
 
     fn sign(sk: &ml_dsa::SecretKey, id: u32, f: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(
+            sk,
+            &f.attest_preimage(DEST_ID),
+            &attest_context(&[0u8; 32]),
+            &[0u8; 32],
+        )
+        .unwrap();
         SignerSig {
             operator_id: id,
             signature: sig.to_vec(),
@@ -1022,7 +1065,9 @@ mod tests {
             fact: f.clone(),
             signatures: s.iter().map(|(id, _, sk)| sign(sk, *id, &f)).collect(),
         };
-        let receipt = gw.process_deposit(&env).expect("quorum over the preimage mints");
+        let receipt = gw
+            .process_deposit(&env)
+            .expect("quorum over the preimage mints");
         assert_eq!(receipt.amount, 500);
     }
 
@@ -1040,7 +1085,13 @@ mod tests {
         let signatures = s
             .iter()
             .map(|(id, _, sk)| {
-                let sig = ml_dsa::sign(sk, &f.attest_preimage(0), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+                let sig = ml_dsa::sign(
+                    sk,
+                    &f.attest_preimage(0),
+                    &attest_context(&[0u8; 32]),
+                    &[0u8; 32],
+                )
+                .unwrap();
                 SignerSig {
                     operator_id: *id,
                     signature: sig.to_vec(),
@@ -1058,7 +1109,9 @@ mod tests {
         );
     }
 
-    fn nine_op_gateway(global: usize) -> (Vec<(u32, ml_dsa::PublicKey, ml_dsa::SecretKey)>, Gateway) {
+    fn nine_op_gateway(
+        global: usize,
+    ) -> (Vec<(u32, ml_dsa::PublicKey, ml_dsa::SecretKey)>, Gateway) {
         let s: Vec<_> = (0..9).map(signer).collect();
         let mut set = OperatorSet::new(global);
         for (id, pk, _) in &s {
@@ -1083,7 +1136,8 @@ mod tests {
     #[test]
     fn corridor_quorum_overrides_the_global_threshold() {
         let (s, mut gw) = nine_op_gateway(3);
-        gw.set_corridor_quorum(1, 6).expect("two thirds is a wide margin");
+        gw.set_corridor_quorum(1, 6)
+            .expect("two thirds is a wide margin");
         assert_eq!(gw.corridor_quorum(1), Some(6));
 
         let f = fact();
@@ -1092,7 +1146,9 @@ mod tests {
             Err(GatewayError::BelowThreshold { got: 5, need: 6 })
         );
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &f)).expect("wide margin mints").amount,
+            gw.process_deposit(&envelope(&s[0..6], &f))
+                .expect("wide margin mints")
+                .amount,
             500
         );
     }
@@ -1109,7 +1165,11 @@ mod tests {
     #[test]
     fn a_corridor_with_no_explicit_quorum_still_requires_a_two_thirds_supermajority() {
         let (s, mut gw) = nine_op_gateway(3);
-        assert_eq!(gw.corridor_quorum(1), Some(6), "the fallback is raised to two thirds of nine");
+        assert_eq!(
+            gw.corridor_quorum(1),
+            Some(6),
+            "the fallback is raised to two thirds of nine"
+        );
         let f = fact();
         assert_eq!(
             gw.process_deposit(&envelope(&s[0..5], &f)),
@@ -1117,7 +1177,9 @@ mod tests {
             "five of nine is not a supermajority on the fallback path"
         );
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &f)).expect("a real supermajority admits").amount,
+            gw.process_deposit(&envelope(&s[0..6], &f))
+                .expect("a real supermajority admits")
+                .amount,
             500
         );
     }
@@ -1156,7 +1218,9 @@ mod tests {
         high.nonce = 9_000;
         high.source_ref = SourceRef([0x21; 32]);
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &high)).expect("the high-nonce deposit mints").amount,
+            gw.process_deposit(&envelope(&s[0..6], &high))
+                .expect("the high-nonce deposit mints")
+                .amount,
             500
         );
 
@@ -1210,7 +1274,9 @@ mod tests {
             .iter()
             .map(|(id, _, sk)| SignerSig {
                 operator_id: *id,
-                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32]).unwrap().to_vec(),
+                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32])
+                    .unwrap()
+                    .to_vec(),
             })
             .collect();
         gw.emergency_freeze(until, &sigs).expect("a quorum freezes");
@@ -1305,7 +1371,9 @@ mod tests {
         gw.register_corridor(1, 6);
         gw.register_asset_cap([0xa1; 16], 500);
         assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 500, 1), Ok(()));
-        let ticket = gw.request_exit([0xa1; 16], 500, [0x99; 32]).expect("the exit request burns");
+        let ticket = gw
+            .request_exit([0xa1; 16], 500, [0x99; 32])
+            .expect("the exit request burns");
         assert!(
             matches!(
                 gw.admit_trustless([0xa1; 16], [0x02; 32], 500, 1),
@@ -1313,7 +1381,8 @@ mod tests {
             ),
             "a pending exit must not free cap headroom for a re-mint"
         );
-        gw.cancel_exit(ticket.exit_id).expect("cancel restores the burned units");
+        gw.cancel_exit(ticket.exit_id)
+            .expect("cancel restores the burned units");
         assert_eq!(
             gw.minted_of_asset(&[0xa1; 16]),
             500,
@@ -1396,13 +1465,16 @@ mod tests {
         gw.register_corridor(1, 6);
         gw.register_asset_cap([0xa1; 16], 500);
         assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 500, 1), Ok(()));
-        gw.request_exit([0xa1; 16], 500, [0xdd; 32]).expect("the exit request burns");
+        gw.request_exit([0xa1; 16], 500, [0xdd; 32])
+            .expect("the exit request burns");
         let snapshot = gw.encode_guard();
 
         let mut restored = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
         restored.register_corridor(1, 6);
         restored.register_asset_cap([0xa1; 16], 500);
-        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+        restored
+            .rehydrate_guard(&snapshot)
+            .expect("a clean snapshot rehydrates");
         assert!(
             matches!(
                 restored.admit_trustless([0xa1; 16], [0x02; 32], 500, 1),
@@ -1422,7 +1494,9 @@ mod tests {
         let mut restored = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
         restored.register_corridor(1, 6);
         restored.register_asset_cap([0xa1; 16], 500);
-        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+        restored
+            .rehydrate_guard(&snapshot)
+            .expect("a clean snapshot rehydrates");
         assert_eq!(
             restored.admit_trustless([0xa1; 16], [0x01; 32], 500, 1),
             Err(GatewayError::CorridorInactive(1)),
@@ -1451,7 +1525,9 @@ mod tests {
             .iter()
             .map(|(id, _, sk)| SignerSig {
                 operator_id: *id,
-                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32]).unwrap().to_vec(),
+                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32])
+                    .unwrap()
+                    .to_vec(),
             })
             .collect();
 
@@ -1489,7 +1565,9 @@ mod tests {
             .iter()
             .map(|(id, _, sk)| SignerSig {
                 operator_id: *id,
-                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32]).unwrap().to_vec(),
+                signature: ml_dsa::sign(sk, &message, FREEZE_DOMAIN, &[0u8; 32])
+                    .unwrap()
+                    .to_vec(),
             })
             .collect();
         gw.emergency_freeze(until, &sigs).expect("a quorum freezes");
@@ -1499,7 +1577,9 @@ mod tests {
             "a freeze halts a finalize even once the unlock height has passed"
         );
 
-        let cancelled = gw.cancel_exit(ticket.exit_id).expect("the pending exit cancels");
+        let cancelled = gw
+            .cancel_exit(ticket.exit_id)
+            .expect("the pending exit cancels");
         assert_eq!(cancelled.amount, 300);
         assert_eq!(
             gw.minted_of_asset(&[0xa1; 16]),
@@ -1530,7 +1610,8 @@ mod tests {
         gw.unpause_all();
 
         let f = fact();
-        gw.process_deposit(&envelope(&s[0..6], &f)).expect("a supermajority admits");
+        gw.process_deposit(&envelope(&s[0..6], &f))
+            .expect("a supermajority admits");
         assert!(
             gw.guard_revision() > after_pause,
             "an admission advances the guard revision so the runtime persists it"
@@ -1549,14 +1630,18 @@ mod tests {
     fn a_restart_from_the_guard_snapshot_still_rejects_the_replay_and_keeps_the_caps() {
         let (s, mut gw) = nine_op_gateway(3);
         let f = fact();
-        let receipt = gw.process_deposit(&envelope(&s[0..6], &f)).expect("a supermajority admits");
+        let receipt = gw
+            .process_deposit(&envelope(&s[0..6], &f))
+            .expect("a supermajority admits");
         assert_eq!(receipt.amount, 500);
 
         let snapshot = gw.encode_guard();
         drop(gw);
 
         let (_s2, mut restored) = nine_op_gateway(3);
-        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+        restored
+            .rehydrate_guard(&snapshot)
+            .expect("a clean snapshot rehydrates");
         assert!(
             restored.is_reference_used(&f.source_ref.0),
             "the reserved reference survives the restart"
@@ -1599,7 +1684,9 @@ mod tests {
         restored.register_corridor(1, 6);
         restored.register_asset_cap([0xa1; 16], 10_000);
         restored.register_asset_epoch_cap([0xa1; 16], 300);
-        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+        restored
+            .rehydrate_guard(&snapshot)
+            .expect("a clean snapshot rehydrates");
 
         assert!(
             matches!(
@@ -1630,11 +1717,17 @@ mod tests {
         let until = 1_500;
         let alarm = SignerSig {
             operator_id: s[0].0,
-            signature: ml_dsa::sign(&s[0].2, &freeze_message(until, DEST_ID), WATCHDOG_DOMAIN, &[0u8; 32])
-                .unwrap()
-                .to_vec(),
+            signature: ml_dsa::sign(
+                &s[0].2,
+                &freeze_message(until, DEST_ID),
+                WATCHDOG_DOMAIN,
+                &[0u8; 32],
+            )
+            .unwrap()
+            .to_vec(),
         };
-        gw.watchdog_freeze(until, &alarm).expect("a watchdog pauses new deposits");
+        gw.watchdog_freeze(until, &alarm)
+            .expect("a watchdog pauses new deposits");
 
         let snapshot = gw.encode_guard();
         drop(gw);
@@ -1648,7 +1741,9 @@ mod tests {
         restored.register_corridor(1, 6);
         restored.register_asset_cap([0xa1; 16], 1_000);
         restored.advance_to(1_000);
-        restored.rehydrate_guard(&snapshot).expect("a clean snapshot rehydrates");
+        restored
+            .rehydrate_guard(&snapshot)
+            .expect("a clean snapshot rehydrates");
 
         assert_eq!(
             restored.admit_trustless([0xa1; 16], [0x01; 32], 100, 1),
@@ -1754,7 +1849,8 @@ mod tests {
     fn a_corrupt_guard_snapshot_is_refused_rather_than_rehydrating_an_empty_guard() {
         let (s, mut gw) = nine_op_gateway(3);
         let f = fact();
-        gw.process_deposit(&envelope(&s[0..6], &f)).expect("seed a reserved reference");
+        gw.process_deposit(&envelope(&s[0..6], &f))
+            .expect("seed a reserved reference");
         let mut snapshot = gw.encode_guard();
         snapshot.truncate(snapshot.len() - 1);
 

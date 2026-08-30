@@ -149,9 +149,8 @@ mod tests {
 
     #[test]
     fn a_tau_below_the_committee_supermajority_is_refused() {
-        let committee: Vec<MemberConfig> = (1..=4)
-            .map(|id| MemberConfig { id, ..member() })
-            .collect();
+        let committee: Vec<MemberConfig> =
+            (1..=4).map(|id| MemberConfig { id, ..member() }).collect();
         assert_eq!(
             QuantovaAnchor::from_config(1, 2, 0, 100, [0u8; 32], committee).err(),
             Some(ExitError::TauBelowQuorum { tau: 2, need: 3 })
@@ -160,7 +159,8 @@ mod tests {
 
     #[test]
     fn a_well_formed_anchor_holds_its_fields() {
-        let anchor = QuantovaAnchor::from_config(9000, 1, 0, 100, [0x5a; 32], vec![member()]).unwrap();
+        let anchor =
+            QuantovaAnchor::from_config(9000, 1, 0, 100, [0x5a; 32], vec![member()]).unwrap();
         assert_eq!(anchor.chain_id(), 9000);
         assert_eq!(anchor.tau(), 1);
         assert_eq!(anchor.commitment().len(), 1);

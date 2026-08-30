@@ -28,7 +28,9 @@ fn mk(id: u32) -> Op {
 fn sign_ctx(op: &Op, message: &[u8], context: &[u8]) -> SignerSig {
     SignerSig {
         operator_id: op.id,
-        signature: ml_dsa::sign(&op.sk, message, context, &[0u8; 32]).unwrap().to_vec(),
+        signature: ml_dsa::sign(&op.sk, message, context, &[0u8; 32])
+            .unwrap()
+            .to_vec(),
     }
 }
 
@@ -130,17 +132,27 @@ fn a_freeze_quorum_bound_to_another_destination_chain_does_not_freeze() {
 fn a_single_operator_cannot_freeze_when_the_threshold_is_left_below_a_supermajority() {
     let ops: Vec<Op> = (0..9).map(mk).collect();
     let mut gw = gateway(0, &ops);
-    let one = vec![sign_ctx(&ops[0], &freeze_msg(u64::MAX, DEST_ID), FREEZE_DOMAIN)];
+    let one = vec![sign_ctx(
+        &ops[0],
+        &freeze_msg(u64::MAX, DEST_ID),
+        FREEZE_DOMAIN,
+    )];
     assert_eq!(
         gw.emergency_freeze(u64::MAX, &one),
         Err(GatewayError::BelowThreshold { got: 1, need: 6 })
     );
-    assert!(!gw.is_frozen(), "one of nine cannot freeze the whole gateway");
+    assert!(
+        !gw.is_frozen(),
+        "one of nine cannot freeze the whole gateway"
+    );
 
     let six: Vec<SignerSig> = ops[0..6]
         .iter()
         .map(|op| sign_ctx(op, &freeze_msg(u64::MAX, DEST_ID), FREEZE_DOMAIN))
         .collect();
     assert_eq!(gw.emergency_freeze(u64::MAX, &six), Ok(()));
-    assert!(gw.is_frozen(), "a two-thirds supermajority of nine freezes the gateway");
+    assert!(
+        gw.is_frozen(),
+        "a two-thirds supermajority of nine freezes the gateway"
+    );
 }

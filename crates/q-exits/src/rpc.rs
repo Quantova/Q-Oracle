@@ -78,7 +78,9 @@ impl RpcBurnSource {
                 Ok(0) => break,
                 Ok(n) => {
                     if raw.len() + n > MAX_RESPONSE {
-                        return Err(BurnWatchError::Rpc("the response exceeds the cap".to_string()));
+                        return Err(BurnWatchError::Rpc(
+                            "the response exceeds the cap".to_string(),
+                        ));
                     }
                     raw.extend_from_slice(&buf[..n]);
                 }
@@ -126,13 +128,15 @@ pub fn decode_heights_after(body: &str) -> Result<Vec<u64>, BurnWatchError> {
     let items = value
         .get("heights")
         .and_then(Json::as_array)
-        .ok_or_else(|| BurnWatchError::Rpc("burn_heights_after has no heights field".to_string()))?;
+        .ok_or_else(|| {
+            BurnWatchError::Rpc("burn_heights_after has no heights field".to_string())
+        })?;
     let mut heights = Vec::with_capacity(items.len());
     for item in items {
-        heights.push(
-            item.as_u64()
-                .ok_or_else(|| BurnWatchError::Rpc("a height is not a whole number".to_string()))?,
-        );
+        heights
+            .push(item.as_u64().ok_or_else(|| {
+                BurnWatchError::Rpc("a height is not a whole number".to_string())
+            })?);
     }
     Ok(heights)
 }
@@ -182,7 +186,11 @@ fn decode_certificate(bytes: &[u8]) -> Result<Certificate, BurnWatchError> {
             }
             Certificate::new(envelope, attestations)
         }
-        stage => return Err(BurnWatchError::Rpc(format!("unknown certificate stage {stage}"))),
+        stage => {
+            return Err(BurnWatchError::Rpc(format!(
+                "unknown certificate stage {stage}"
+            )))
+        }
     };
     decoder.finish().map_err(codec_err)?;
     Ok(certificate)
@@ -378,7 +386,9 @@ fn parse_json(input: &str) -> Result<Json, BurnWatchError> {
     let value = parser.value()?;
     parser.skip_ws();
     if parser.pos != parser.chars.len() {
-        return Err(BurnWatchError::Rpc("trailing bytes after the json value".to_string()));
+        return Err(BurnWatchError::Rpc(
+            "trailing bytes after the json value".to_string(),
+        ));
     }
     Ok(value)
 }
@@ -450,7 +460,9 @@ impl JsonParser {
             let key = self.string()?;
             self.skip_ws();
             if self.next() != Some(':') {
-                return Err(BurnWatchError::Rpc("expected a colon after a key".to_string()));
+                return Err(BurnWatchError::Rpc(
+                    "expected a colon after a key".to_string(),
+                ));
             }
             let value = self.value()?;
             fields.push((key, value));
@@ -458,7 +470,11 @@ impl JsonParser {
             match self.next() {
                 Some(',') => continue,
                 Some('}') => break,
-                _ => return Err(BurnWatchError::Rpc("expected a comma or a brace".to_string())),
+                _ => {
+                    return Err(BurnWatchError::Rpc(
+                        "expected a comma or a brace".to_string(),
+                    ))
+                }
             }
         }
         Ok(Json::Object(fields))
@@ -479,7 +495,11 @@ impl JsonParser {
             match self.next() {
                 Some(',') => continue,
                 Some(']') => break,
-                _ => return Err(BurnWatchError::Rpc("expected a comma or a bracket".to_string())),
+                _ => {
+                    return Err(BurnWatchError::Rpc(
+                        "expected a comma or a bracket".to_string(),
+                    ))
+                }
             }
         }
         Ok(Json::Array(items))
@@ -530,9 +550,9 @@ impl JsonParser {
             self.next();
         }
         let text: String = self.chars[start..self.pos].iter().collect();
-        text.parse::<u64>()
-            .map(Json::Int)
-            .map_err(|_| BurnWatchError::Rpc("a number is not a whole number the wire accepts".to_string()))
+        text.parse::<u64>().map(Json::Int).map_err(|_| {
+            BurnWatchError::Rpc("a number is not a whole number the wire accepts".to_string())
+        })
     }
 
     fn boolean(&mut self) -> Result<Json, BurnWatchError> {

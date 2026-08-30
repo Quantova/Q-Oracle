@@ -17,13 +17,11 @@ pub mod vault;
 pub mod watch;
 
 pub use anchor::{MemberConfig, QuantovaAnchor, ATTEST_PK_BYTES, BEACON_SEED_BYTES};
-pub use burn_proof::{
-    AuthenticatedBurn, ProofOfBurn, EVENT_BRIDGE_BURN, NATIVE_EVENT_SOURCE,
-};
+pub use burn_proof::{AuthenticatedBurn, ProofOfBurn, EVENT_BRIDGE_BURN, NATIVE_EVENT_SOURCE};
 pub use errors::ExitError;
 pub use exits::{
     DeskConfig, Exit, ExitDesk, ExitId, ExitState, ExitStatement, Release, SlashOutcome, BPS_DEN,
-    REDEEM_WINDOW_MS, SECURE_RATIO_BPS, SLASH_PREMIUM_BPS, EXIT_STATEMENT_VERSION,
+    EXIT_STATEMENT_VERSION, REDEEM_WINDOW_MS, SECURE_RATIO_BPS, SLASH_PREMIUM_BPS,
 };
 pub use feed::{BurnFeed, ExitConfig, FeedError};
 pub use journal::{
@@ -43,9 +41,7 @@ pub use payout::{
     PayoutAttestation, PayoutProofError, PayoutWatcher, VerifiedPayout, PAYOUT_DOMAIN,
     PAYOUT_VERSION,
 };
-pub use rpc::{
-    decode_finalized_block, decode_finalized_head, decode_heights_after, RpcBurnSource,
-};
+pub use rpc::{decode_finalized_block, decode_finalized_head, decode_heights_after, RpcBurnSource};
 pub use store::ReplayStore;
 pub use vault::{Vault, VaultBook};
 pub use watch::{

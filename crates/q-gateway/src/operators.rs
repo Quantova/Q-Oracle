@@ -79,7 +79,10 @@ mod tests {
         assert!(set.register(0, key(1)));
         assert!(set.register(1, key(2)));
         assert_eq!(set.size(), 2);
-        assert!(set.register(0, key(3)), "rotating a slot's own key is allowed");
+        assert!(
+            set.register(0, key(3)),
+            "rotating a slot's own key is allowed"
+        );
         assert_eq!(set.size(), 2);
     }
 

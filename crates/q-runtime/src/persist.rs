@@ -57,7 +57,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut path = std::env::temp_dir();
-        path.push(format!("q-oracle-guard-{tag}-{}-{nanos}.snap", std::process::id()));
+        path.push(format!(
+            "q-oracle-guard-{tag}-{}-{nanos}.snap",
+            std::process::id()
+        ));
         path
     }
 
@@ -65,7 +68,10 @@ mod tests {
     fn a_saved_snapshot_loads_back_byte_for_byte() {
         let path = temp_path("roundtrip");
         let store = GuardStore::new(path.clone());
-        assert!(store.load().unwrap().is_none(), "an absent snapshot loads as none");
+        assert!(
+            store.load().unwrap().is_none(),
+            "an absent snapshot loads as none"
+        );
         store.save(&[1, 2, 3, 4, 5]).expect("save");
         assert_eq!(store.load().unwrap().as_deref(), Some(&[1, 2, 3, 4, 5][..]));
         let mut temp = path.clone().into_os_string();

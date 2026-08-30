@@ -79,7 +79,7 @@ mod tests {
     use crate::sources::SourceEndpoint;
     use q_airlock::SignerSig;
     use q_codec::{
-        AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
+        attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION,
     };
     use q_gateway::OperatorSet;
     use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -120,7 +120,13 @@ mod tests {
     }
 
     fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(
+            &op.sk,
+            &f.attest_preimage(DEST_ID),
+            &attest_context(&[0u8; 32]),
+            &[0u8; 32],
+        )
+        .unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),
@@ -152,7 +158,11 @@ mod tests {
         let f = fact([0x11; 32]);
         let env = AttestationEnvelope {
             fact: f.clone(),
-            signatures: vec![attest(&ops[0], &f), attest(&ops[1], &f), attest(&ops[2], &f)],
+            signatures: vec![
+                attest(&ops[0], &f),
+                attest(&ops[1], &f),
+                attest(&ops[2], &f),
+            ],
         };
         let c = find(SOLANA).unwrap();
         let receipt = admit(&mut gw, &c, &sources, &env).expect("independent quorum mints");
@@ -169,7 +179,11 @@ mod tests {
         let f = fact([0x12; 32]);
         let env = AttestationEnvelope {
             fact: f.clone(),
-            signatures: vec![attest(&ops[0], &f), attest(&ops[1], &f), attest(&ops[2], &f)],
+            signatures: vec![
+                attest(&ops[0], &f),
+                attest(&ops[1], &f),
+                attest(&ops[2], &f),
+            ],
         };
         let c = find(SOLANA).unwrap();
         assert_eq!(
@@ -210,7 +224,11 @@ mod tests {
         let f = fact([0x15; 32]);
         let env = AttestationEnvelope {
             fact: f.clone(),
-            signatures: vec![attest(&ops[0], &f), attest(&ops[1], &f), attest(&ops[2], &f)],
+            signatures: vec![
+                attest(&ops[0], &f),
+                attest(&ops[1], &f),
+                attest(&ops[2], &f),
+            ],
         };
         let crossing =
             q_isolation::admit_artifact(&Artifact::Attestation(env)).expect("admits as a crossing");
@@ -235,12 +253,19 @@ mod tests {
         let f = fact([0x51; 32]);
         let env = AttestationEnvelope {
             fact: f.clone(),
-            signatures: vec![attest(&ops[0], &f), attest(&ops[1], &f), attest(&ops[2], &f)],
+            signatures: vec![
+                attest(&ops[0], &f),
+                attest(&ops[1], &f),
+                attest(&ops[2], &f),
+            ],
         };
         let c = find(SOLANA).unwrap();
         assert_eq!(
             admit(&mut gw, &c, &sources, &env),
-            Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 0, need: 3 })),
+            Err(FederatedError::Gateway(GatewayError::BelowThreshold {
+                got: 0,
+                need: 3
+            })),
             "the signed preimage binds the destination chain id so it cannot replay"
         );
         assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
@@ -283,13 +308,20 @@ mod tests {
         let f = fact([0x71; 32]);
         let env = AttestationEnvelope {
             fact: f.clone(),
-            signatures: vec![attest(&ops[0], &f), attest(&ops[1], &f), attest(&ops[2], &f)],
+            signatures: vec![
+                attest(&ops[0], &f),
+                attest(&ops[1], &f),
+                attest(&ops[2], &f),
+            ],
         };
 
         let solana = find(SOLANA).unwrap();
         assert_eq!(
             admit(&mut gw, &solana, &sources, &env),
-            Err(FederatedError::CorrelatedSources { independent: 2, signers: 3 })
+            Err(FederatedError::CorrelatedSources {
+                independent: 2,
+                signers: 3
+            })
         );
         assert_eq!(gw.minted_of_asset(&f.asset_id.0), 0);
 
@@ -314,7 +346,11 @@ mod tests {
         let f = fact([0x14; 32]);
         let env = AttestationEnvelope {
             fact: f.clone(),
-            signatures: vec![attest(&ops[0], &f), attest(&ops[1], &f), attest(&ops[2], &f)],
+            signatures: vec![
+                attest(&ops[0], &f),
+                attest(&ops[1], &f),
+                attest(&ops[2], &f),
+            ],
         };
         let c = find(SOLANA).unwrap();
         assert_eq!(

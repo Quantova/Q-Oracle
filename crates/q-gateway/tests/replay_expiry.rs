@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
+use q_codec::{attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
@@ -37,7 +37,13 @@ fn gateway(ops: &[Op], threshold: usize) -> Gateway {
     gw
 }
 
-fn fact(source_ref: [u8; 32], route_id: u32, nonce: u64, expiry_height: u64, amount: u128) -> BridgeFact {
+fn fact(
+    source_ref: [u8; 32],
+    route_id: u32,
+    nonce: u64,
+    expiry_height: u64,
+    amount: u128,
+) -> BridgeFact {
     BridgeFact {
         version: FACT_VERSION,
         source_chain: SOURCE,
@@ -61,7 +67,13 @@ fn attest(ops: &[&Op], f: &BridgeFact) -> AttestationEnvelope {
         signatures: ops
             .iter()
             .map(|op| {
-                let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+                let sig = ml_dsa::sign(
+                    &op.sk,
+                    &f.attest_preimage(DEST_ID),
+                    &attest_context(&[0u8; 32]),
+                    &[0u8; 32],
+                )
+                .unwrap();
                 SignerSig {
                     operator_id: op.id,
                     signature: sig.to_vec(),
@@ -80,7 +92,10 @@ fn a_deposit_past_its_signed_deadline_is_rejected_and_the_deadline_block_still_a
     let expired = fact([0x41; 32], 1, 10, 1_999, 500);
     assert_eq!(
         gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &expired)),
-        Err(GatewayError::MessageExpired { now: 2_000, expiry: 1_999 })
+        Err(GatewayError::MessageExpired {
+            now: 2_000,
+            expiry: 1_999
+        })
     );
     assert_eq!(gw.minted_of_asset(&ASSET), 0);
 

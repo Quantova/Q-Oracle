@@ -186,30 +186,46 @@ mod tests {
     fn signed_observation_verifies_over_the_attest_preimage() {
         let mut operator = op();
         let pk = SoftSigner::from_seed(0, &[0x09u8; 32]).public_key();
-        let signed = operator.observe_and_sign(&lock(), 900_000).expect("final lock signs");
+        let signed = operator
+            .observe_and_sign(&lock(), 900_000)
+            .expect("final lock signs");
 
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&signed.sig.signature);
         let preimage = signed.fact.attest_preimage(DEST_ID);
-        assert!(ml_dsa::verify(&pk, &preimage, &sig, &attest_context(&[0x11u8; 32])));
+        assert!(ml_dsa::verify(
+            &pk,
+            &preimage,
+            &sig,
+            &attest_context(&[0x11u8; 32])
+        ));
     }
 
     #[test]
     fn signature_is_bound_to_the_attest_context() {
         let mut operator = op();
         let pk = SoftSigner::from_seed(0, &[0x09u8; 32]).public_key();
-        let signed = operator.observe_and_sign(&lock(), 900_000).expect("final lock signs");
+        let signed = operator
+            .observe_and_sign(&lock(), 900_000)
+            .expect("final lock signs");
 
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&signed.sig.signature);
         let preimage = signed.fact.attest_preimage(DEST_ID);
-        assert!(!ml_dsa::verify(&pk, &preimage, &sig, b"QUANTOVA/Q-ORACLE/REORG/v1"));
+        assert!(!ml_dsa::verify(
+            &pk,
+            &preimage,
+            &sig,
+            b"QUANTOVA/Q-ORACLE/REORG/v1"
+        ));
     }
 
     #[test]
     fn re_observing_the_same_finalized_lock_does_not_halt() {
         let mut operator = op();
-        operator.observe_and_sign(&lock(), 900_000).expect("first observation signs");
+        operator
+            .observe_and_sign(&lock(), 900_000)
+            .expect("first observation signs");
         assert_eq!(
             operator.observe_and_sign(&lock(), 900_000),
             Err(OperatorError::AlreadySigned)
@@ -221,7 +237,9 @@ mod tests {
     #[test]
     fn re_observing_with_a_moved_dest_clock_does_not_halt() {
         let mut operator = op();
-        operator.observe_and_sign(&lock(), 900_000).expect("first observation signs");
+        operator
+            .observe_and_sign(&lock(), 900_000)
+            .expect("first observation signs");
         assert_eq!(
             operator.observe_and_sign(&lock(), 900_500),
             Err(OperatorError::AlreadySigned)
@@ -232,7 +250,9 @@ mod tests {
     #[test]
     fn re_observing_with_grown_confirmations_does_not_halt() {
         let mut operator = op();
-        operator.observe_and_sign(&lock(), 900_000).expect("first observation signs");
+        operator
+            .observe_and_sign(&lock(), 900_000)
+            .expect("first observation signs");
         let mut deeper = lock();
         deeper.confirmations = 40;
         assert_eq!(
@@ -267,14 +287,19 @@ mod tests {
     #[test]
     fn a_conflicting_re_observation_of_a_signed_reference_halts_the_operator() {
         let mut operator = op();
-        operator.observe_and_sign(&lock(), 900_000).expect("the first final lock signs");
+        operator
+            .observe_and_sign(&lock(), 900_000)
+            .expect("the first final lock signs");
         let mut conflicting = lock();
         conflicting.amount = 999;
         assert_eq!(
             operator.observe_and_sign(&conflicting, 900_000),
             Err(OperatorError::Halted(HaltReason::Divergence))
         );
-        assert_eq!(operator.state(), OperatorState::Halted(HaltReason::Divergence));
+        assert_eq!(
+            operator.state(),
+            OperatorState::Halted(HaltReason::Divergence)
+        );
         assert!(operator.is_halted());
     }
 }

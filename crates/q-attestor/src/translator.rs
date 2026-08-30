@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{Artifact, AttestationEnvelope, SignerSig, StarkEnvelope};
-use q_codec::{
-    AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
-};
+use q_codec::{attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
 use q_isolation::{admit_artifact, Crossing, Refused};
 use q_prover_bridge::{prove_statement, verify_statement, CommitmentProof, CorridorStatement};
 
@@ -252,7 +250,12 @@ mod tests {
         assert_eq!(env.attestation.signatures[0].operator_id, s.operator_id());
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&env.attestation.signatures[0].signature);
-        assert!(ml_dsa::verify(&pk, &f.attest_preimage(DEST_ID), &sig, &attest_context(&[0u8; 32])));
+        assert!(ml_dsa::verify(
+            &pk,
+            &f.attest_preimage(DEST_ID),
+            &sig,
+            &attest_context(&[0u8; 32])
+        ));
     }
 
     #[test]
@@ -263,7 +266,12 @@ mod tests {
         let env = package(&f, &s, DEST_ID);
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&env.attestation.signatures[0].signature);
-        assert!(!ml_dsa::verify(&pk, &f.attest_preimage(DEST_ID), &sig, b"QUANTOVA/Q-ORACLE/REORG/v1"));
+        assert!(!ml_dsa::verify(
+            &pk,
+            &f.attest_preimage(DEST_ID),
+            &sig,
+            b"QUANTOVA/Q-ORACLE/REORG/v1"
+        ));
     }
 
     #[test]
@@ -274,10 +282,20 @@ mod tests {
         let env = package(&base, &s, DEST_ID);
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&env.attestation.signatures[0].signature);
-        assert!(ml_dsa::verify(&pk, &base.attest_preimage(DEST_ID), &sig, &attest_context(&[0u8; 32])));
+        assert!(ml_dsa::verify(
+            &pk,
+            &base.attest_preimage(DEST_ID),
+            &sig,
+            &attest_context(&[0u8; 32])
+        ));
         for reshaped in reshapes() {
             assert_ne!(reshaped, base);
-            assert!(!ml_dsa::verify(&pk, &reshaped.attest_preimage(DEST_ID), &sig, &attest_context(&[0u8; 32])));
+            assert!(!ml_dsa::verify(
+                &pk,
+                &reshaped.attest_preimage(DEST_ID),
+                &sig,
+                &attest_context(&[0u8; 32])
+            ));
         }
     }
 
@@ -293,7 +311,11 @@ mod tests {
                 corridor_statement(s.operator_id(), &reshaped).digest(),
                 env.stark.statement_digest
             );
-            assert!(!verify_corridor_stark(s.operator_id(), &reshaped, &env.stark));
+            assert!(!verify_corridor_stark(
+                s.operator_id(),
+                &reshaped,
+                &env.stark
+            ));
         }
     }
 
@@ -354,7 +376,11 @@ mod tests {
         let translated = translate(&lock(), &ctx(), 900_000);
         let env = package(&translated, &s, DEST_ID);
 
-        assert!(verify_corridor_stark(s.operator_id(), &translated, &env.stark));
+        assert!(verify_corridor_stark(
+            s.operator_id(),
+            &translated,
+            &env.stark
+        ));
         assert!(matches!(
             q_airlock::parse(&env.attestation.encode()).unwrap(),
             Artifact::Attestation(_)

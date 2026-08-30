@@ -173,7 +173,9 @@ fn req_u32<E: EnvSource>(env: &E, key: &str, what: &'static str) -> Result<u32, 
 
 fn opt_u64<E: EnvSource>(env: &E, key: &str, default: u64) -> Result<u64, ExitConfigError> {
     match env.get(key).filter(|value| !value.is_empty()) {
-        Some(value) => value.parse().map_err(|_| ExitConfigError::Malformed("a numeric field")),
+        Some(value) => value
+            .parse()
+            .map_err(|_| ExitConfigError::Malformed("a numeric field")),
         None => Ok(default),
     }
 }
@@ -186,15 +188,26 @@ fn parse_committee<E: EnvSource>(env: &E) -> Result<Vec<MemberConfig>, ExitConfi
         if fields.len() != 5 {
             return Err(ExitConfigError::Malformed("committee member"));
         }
-        let id = fields[0].trim().parse().map_err(|_| ExitConfigError::Malformed("member id"))?;
-        let weight = fields[1].trim().parse().map_err(|_| ExitConfigError::Malformed("member weight"))?;
-        let digest_bytes = decode_hex(fields[2]).ok_or(ExitConfigError::Malformed("member root digest"))?;
+        let id = fields[0]
+            .trim()
+            .parse()
+            .map_err(|_| ExitConfigError::Malformed("member id"))?;
+        let weight = fields[1]
+            .trim()
+            .parse()
+            .map_err(|_| ExitConfigError::Malformed("member weight"))?;
+        let digest_bytes =
+            decode_hex(fields[2]).ok_or(ExitConfigError::Malformed("member root digest"))?;
         let root_digest: [u8; 32] = digest_bytes
             .as_slice()
             .try_into()
             .map_err(|_| ExitConfigError::Malformed("member root digest"))?;
-        let root_slots = fields[3].trim().parse().map_err(|_| ExitConfigError::Malformed("member root slots"))?;
-        let attest_pk = decode_hex(fields[4]).ok_or(ExitConfigError::Malformed("member attest key"))?;
+        let root_slots = fields[3]
+            .trim()
+            .parse()
+            .map_err(|_| ExitConfigError::Malformed("member root slots"))?;
+        let attest_pk =
+            decode_hex(fields[4]).ok_or(ExitConfigError::Malformed("member attest key"))?;
         if attest_pk.len() != ATTEST_PK_BYTES {
             return Err(ExitConfigError::Malformed("member attest key length"));
         }
@@ -216,10 +229,21 @@ fn parse_vaults<E: EnvSource>(env: &E) -> Result<Vec<VaultSeed>, ExitConfigError
     let raw = req(env, VAULTS_ENV, "vault registry")?;
     let mut vaults = Vec::new();
     for entry in raw.split(',').filter(|e| !e.trim().is_empty()) {
-        let (id, collateral) = entry.split_once(':').ok_or(ExitConfigError::Malformed("vault entry"))?;
-        let vault_id = id.trim().parse().map_err(|_| ExitConfigError::Malformed("vault id"))?;
-        let collateral = collateral.trim().parse().map_err(|_| ExitConfigError::Malformed("vault collateral"))?;
-        vaults.push(VaultSeed { vault_id, collateral });
+        let (id, collateral) = entry
+            .split_once(':')
+            .ok_or(ExitConfigError::Malformed("vault entry"))?;
+        let vault_id = id
+            .trim()
+            .parse()
+            .map_err(|_| ExitConfigError::Malformed("vault id"))?;
+        let collateral = collateral
+            .trim()
+            .parse()
+            .map_err(|_| ExitConfigError::Malformed("vault collateral"))?;
+        vaults.push(VaultSeed {
+            vault_id,
+            collateral,
+        });
     }
     if vaults.is_empty() {
         return Err(ExitConfigError::Missing("vault registry"));
@@ -227,7 +251,9 @@ fn parse_vaults<E: EnvSource>(env: &E) -> Result<Vec<VaultSeed>, ExitConfigError
     Ok(vaults)
 }
 
-fn parse_bitcoin<E: EnvSource>(env: &E) -> Result<Option<BitcoinCheckpointConfig>, ExitConfigError> {
+fn parse_bitcoin<E: EnvSource>(
+    env: &E,
+) -> Result<Option<BitcoinCheckpointConfig>, ExitConfigError> {
     let raw = match env.get(BITCOIN_ENV).filter(|value| !value.is_empty()) {
         Some(raw) => raw,
         None => return Ok(None),
@@ -236,14 +262,23 @@ fn parse_bitcoin<E: EnvSource>(env: &E) -> Result<Option<BitcoinCheckpointConfig
     if fields.len() != 4 {
         return Err(ExitConfigError::Malformed("bitcoin checkpoint"));
     }
-    let height = fields[0].trim().parse().map_err(|_| ExitConfigError::Malformed("bitcoin height"))?;
+    let height = fields[0]
+        .trim()
+        .parse()
+        .map_err(|_| ExitConfigError::Malformed("bitcoin height"))?;
     let hash_bytes = decode_hex(fields[1]).ok_or(ExitConfigError::Malformed("bitcoin hash"))?;
     let hash: [u8; 32] = hash_bytes
         .as_slice()
         .try_into()
         .map_err(|_| ExitConfigError::Malformed("bitcoin hash"))?;
-    let min_work = fields[2].trim().parse().map_err(|_| ExitConfigError::Malformed("bitcoin work floor"))?;
-    let confirmations = fields[3].trim().parse().map_err(|_| ExitConfigError::Malformed("bitcoin confirmations"))?;
+    let min_work = fields[2]
+        .trim()
+        .parse()
+        .map_err(|_| ExitConfigError::Malformed("bitcoin work floor"))?;
+    let confirmations = fields[3]
+        .trim()
+        .parse()
+        .map_err(|_| ExitConfigError::Malformed("bitcoin confirmations"))?;
     Ok(Some(BitcoinCheckpointConfig {
         height,
         hash,
@@ -252,7 +287,9 @@ fn parse_bitcoin<E: EnvSource>(env: &E) -> Result<Option<BitcoinCheckpointConfig
     }))
 }
 
-pub fn parse_exit_config<E: EnvSource>(env: &E) -> Result<Option<ExitTrustConfig>, ExitConfigError> {
+pub fn parse_exit_config<E: EnvSource>(
+    env: &E,
+) -> Result<Option<ExitTrustConfig>, ExitConfigError> {
     if !parse_enabled(env.get(EXITS_ENABLED_ENV).as_deref()) {
         return Ok(None);
     }
@@ -346,7 +383,11 @@ mod tests {
         map.insert(BEACON_SEED_ENV.into(), "5a".repeat(BEACON_SEED_BYTES));
         map.insert(
             COMMITTEE_ENV.into(),
-            format!("1,100,{},64,{}", "11".repeat(32), "00".repeat(ATTEST_PK_BYTES)),
+            format!(
+                "1,100,{},64,{}",
+                "11".repeat(32),
+                "00".repeat(ATTEST_PK_BYTES)
+            ),
         );
         map.insert(VAULTS_ENV.into(), "1:2000000,2:3000000".into());
         map.insert(CHAIN_RPC_HOST_ENV.into(), "127.0.0.1".into());
@@ -365,7 +406,9 @@ mod tests {
 
     #[test]
     fn a_fully_configured_source_loads_a_runnable_config() {
-        let config = parse_exit_config(&full_env()).expect("a full config loads").expect("exits are on");
+        let config = parse_exit_config(&full_env())
+            .expect("a full config loads")
+            .expect("exits are on");
         assert_eq!(config.chain_id, 9000);
         assert_eq!(config.tau, 1);
         assert_eq!(config.dest_chain, 9000);
@@ -375,14 +418,19 @@ mod tests {
         assert_eq!(config.vaults.len(), 2);
         assert_eq!(config.active_vault(), 1);
         assert_eq!(config.desk_config(), DeskConfig::aligned(1, 9000));
-        config.build_anchor().expect("the loaded anchor is well formed");
+        config
+            .build_anchor()
+            .expect("the loaded anchor is well formed");
     }
 
     #[test]
     fn an_enabled_but_unconfigured_source_fails_closed() {
         let mut map = BTreeMap::new();
         map.insert(EXITS_ENABLED_ENV.into(), "1".into());
-        assert_eq!(parse_exit_config(&MapEnv(map)), Err(ExitConfigError::Missing("chain id")));
+        assert_eq!(
+            parse_exit_config(&MapEnv(map)),
+            Err(ExitConfigError::Missing("chain id"))
+        );
     }
 
     #[test]
@@ -396,13 +444,23 @@ mod tests {
             (BEACON_SEED_ENV, ExitConfigError::Missing("beacon seed")),
             (COMMITTEE_ENV, ExitConfigError::Missing("committee")),
             (VAULTS_ENV, ExitConfigError::Missing("vault registry")),
-            (CHAIN_RPC_HOST_ENV, ExitConfigError::Missing("chain rpc host")),
-            (CHAIN_RPC_PORT_ENV, ExitConfigError::Missing("chain rpc port")),
+            (
+                CHAIN_RPC_HOST_ENV,
+                ExitConfigError::Missing("chain rpc host"),
+            ),
+            (
+                CHAIN_RPC_PORT_ENV,
+                ExitConfigError::Missing("chain rpc port"),
+            ),
             (LEDGER_ENV, ExitConfigError::Missing("replay ledger path")),
         ] {
             let mut env = full_env();
             env.0.remove(key);
-            assert_eq!(parse_exit_config(&env), Err(expected), "removing {key} must fail closed");
+            assert_eq!(
+                parse_exit_config(&env),
+                Err(expected),
+                "removing {key} must fail closed"
+            );
         }
     }
 
@@ -411,25 +469,33 @@ mod tests {
         let mut env = full_env();
         env.0.insert(
             COMMITTEE_ENV.into(),
-            format!("1,100,{},64,{}", "11".repeat(32), "00".repeat(ATTEST_PK_BYTES - 1)),
+            format!(
+                "1,100,{},64,{}",
+                "11".repeat(32),
+                "00".repeat(ATTEST_PK_BYTES - 1)
+            ),
         );
-        assert_eq!(parse_exit_config(&env), Err(ExitConfigError::Malformed("member attest key length")));
+        assert_eq!(
+            parse_exit_config(&env),
+            Err(ExitConfigError::Malformed("member attest key length"))
+        );
     }
 
     #[test]
     fn a_tau_above_the_committee_fails_closed() {
         let mut env = full_env();
         env.0.insert(TAU_ENV.into(), "2".into());
-        assert!(matches!(parse_exit_config(&env), Err(ExitConfigError::Anchor(_))));
+        assert!(matches!(
+            parse_exit_config(&env),
+            Err(ExitConfigError::Anchor(_))
+        ));
     }
 
     #[test]
     fn the_optional_bitcoin_checkpoint_loads_when_present() {
         let mut env = full_env();
-        env.0.insert(
-            BITCOIN_ENV.into(),
-            format!("100,{},1,6", "cc".repeat(32)),
-        );
+        env.0
+            .insert(BITCOIN_ENV.into(), format!("100,{},1,6", "cc".repeat(32)));
         let config = parse_exit_config(&env).unwrap().unwrap();
         let checkpoint = config.bitcoin.expect("the checkpoint loads");
         assert_eq!(checkpoint.height, 100);

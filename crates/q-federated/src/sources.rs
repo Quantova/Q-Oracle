@@ -42,7 +42,10 @@ impl SourceRegistry {
     }
 
     pub fn endpoint(&self, corridor: u32, operator_id: u32) -> Option<SourceEndpoint> {
-        self.map.get(&corridor).and_then(|m| m.get(&operator_id)).copied()
+        self.map
+            .get(&corridor)
+            .and_then(|m| m.get(&operator_id))
+            .copied()
     }
 
     pub fn analyze(&self, corridor: u32, operators: &BTreeSet<u32>) -> IndependenceReport {

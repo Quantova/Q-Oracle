@@ -143,14 +143,24 @@ pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardS
                 MAX_ADMITS_PER_IP_PER_WINDOW,
             ) {
                 stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
-                let _ = write_error(&mut stream, 429, "rate_limited", "too many requests, slow down");
+                let _ = write_error(
+                    &mut stream,
+                    429,
+                    "rate_limited",
+                    "too many requests, slow down",
+                );
                 continue;
             }
             match limiter.try_admit(ip, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP) {
                 Admit::Ok => {}
                 Admit::TotalFull => {
                     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
-                    let _ = write_error(&mut stream, 503, "busy", "the oracle is at its connection limit");
+                    let _ = write_error(
+                        &mut stream,
+                        503,
+                        "busy",
+                        "the oracle is at its connection limit",
+                    );
                     continue;
                 }
                 Admit::IpFull => {
@@ -226,10 +236,20 @@ fn handle_connection(
         return write_response(&mut stream, 204, "");
     }
     if !verb.eq_ignore_ascii_case("POST") {
-        return write_error(&mut stream, 405, "method_not_allowed", "the RPC accepts POST");
+        return write_error(
+            &mut stream,
+            405,
+            "method_not_allowed",
+            "the RPC accepts POST",
+        );
     }
     if content_length > MAX_BODY {
-        return write_error(&mut stream, 413, "too_large", "the request body is too large");
+        return write_error(
+            &mut stream,
+            413,
+            "too_large",
+            "the request body is too large",
+        );
     }
 
     let mut body = Vec::with_capacity(content_length.min(64 * 1024));
@@ -237,7 +257,12 @@ fn handle_connection(
     while body.len() < content_length {
         let now = Instant::now();
         if now >= deadline {
-            return write_error(&mut stream, 408, "timeout", "the request exceeded its time budget");
+            return write_error(
+                &mut stream,
+                408,
+                "timeout",
+                "the request exceeded its time budget",
+            );
         }
         let remaining = deadline
             .saturating_duration_since(now)
@@ -249,17 +274,32 @@ fn handle_connection(
             Ok(0) => return Ok(()),
             Ok(n) => body.extend_from_slice(&chunk[..n]),
             Err(ref e) if is_timeout(e) => {
-                return write_error(&mut stream, 408, "timeout", "the request exceeded its time budget")
+                return write_error(
+                    &mut stream,
+                    408,
+                    "timeout",
+                    "the request exceeded its time budget",
+                )
             }
             Err(e) => return Err(e),
         }
     }
     let Ok(body_text) = std::str::from_utf8(&body) else {
-        return write_error(&mut stream, 400, "bad_request", "the request body is not valid UTF-8");
+        return write_error(
+            &mut stream,
+            400,
+            "bad_request",
+            "the request body is not valid UTF-8",
+        );
     };
 
     let Some(method) = path.strip_prefix("/v1/") else {
-        return write_error(&mut stream, 404, "unknown_method", "methods live under /v1/");
+        return write_error(
+            &mut stream,
+            404,
+            "unknown_method",
+            "methods live under /v1/",
+        );
     };
 
     if method == "health" {
@@ -290,7 +330,12 @@ fn handle_connection(
         match json::parse(body_text) {
             Ok(value) => value,
             Err(e) => {
-                return write_error(&mut stream, 400, "bad_request", &format!("the body is not JSON, {e}"))
+                return write_error(
+                    &mut stream,
+                    400,
+                    "bad_request",
+                    &format!("the body is not JSON, {e}"),
+                )
             }
         }
     };
@@ -306,7 +351,12 @@ fn handle_connection(
     let response = match route(&state, store.as_deref(), request) {
         Ok(response) => response,
         Err(RouteFail::Panicked) => {
-            return write_error(&mut stream, 500, "internal_error", "the request handler failed")
+            return write_error(
+                &mut stream,
+                500,
+                "internal_error",
+                "the request handler failed",
+            )
         }
         Err(RouteFail::PersistFailed) => {
             return write_error(
@@ -372,10 +422,12 @@ fn route(
             }))
             .map_err(|_| RouteFail::Panicked)?;
             match committed {
-                Ok(outcome) => match persist_or_rollback(&mut guard, store, rev_before, &snapshot) {
-                    Durability::PersistFailed => Err(RouteFail::PersistFailed),
-                    _ => Ok(Response::DepositAdmitted(outcome)),
-                },
+                Ok(outcome) => {
+                    match persist_or_rollback(&mut guard, store, rev_before, &snapshot) {
+                        Durability::PersistFailed => Err(RouteFail::PersistFailed),
+                        _ => Ok(Response::DepositAdmitted(outcome)),
+                    }
+                }
                 Err(err) => Ok(Response::Error(err)),
             }
         }
@@ -401,9 +453,19 @@ fn is_timeout(e: &std::io::Error) -> bool {
 
 fn head_read_error(stream: &mut TcpStream, e: &std::io::Error) -> IoResult<()> {
     if is_timeout(e) {
-        write_error(stream, 408, "timeout", "the request exceeded its time budget")
+        write_error(
+            stream,
+            408,
+            "timeout",
+            "the request exceeded its time budget",
+        )
     } else {
-        write_error(stream, 431, "head_too_large", "the request head is too large")
+        write_error(
+            stream,
+            431,
+            "head_too_large",
+            "the request head is too large",
+        )
     }
 }
 
@@ -582,9 +644,15 @@ mod tests {
         let mut reader = Cursor::new(raw);
         let mut budget = MAX_HEAD;
         let far = Instant::now() + Duration::from_secs(3600);
-        let line = read_capped_line(&mut reader, &mut budget, far).unwrap().unwrap();
+        let line = read_capped_line(&mut reader, &mut budget, far)
+            .unwrap()
+            .unwrap();
         assert_eq!(line, "POST /v1/list_pools HTTP/1.1\r");
-        assert_eq!(budget, MAX_HEAD - spent, "every byte read draws down the budget");
+        assert_eq!(
+            budget,
+            MAX_HEAD - spent,
+            "every byte read draws down the budget"
+        );
     }
 
     #[test]
@@ -665,14 +733,20 @@ mod tests {
             ),
         );
         assert!(response.starts_with("HTTP/1.1 403"), "{response}");
-        assert!(response.contains("\"error\":\"not_permitted\""), "{response}");
+        assert!(
+            response.contains("\"error\":\"not_permitted\""),
+            "{response}"
+        );
     }
 
     #[test]
     fn an_oversized_head_is_refused_over_the_socket() {
         let port = serve_seeded();
         let giant = "x".repeat(MAX_HEAD + 1024);
-        let response = round_trip(port, &format!("POST /v1/list_pools HTTP/1.1\r\nBig: {giant}\r\n\r\n"));
+        let response = round_trip(
+            port,
+            &format!("POST /v1/list_pools HTTP/1.1\r\nBig: {giant}\r\n\r\n"),
+        );
         assert!(response.starts_with("HTTP/1.1 431"), "{response}");
     }
 
@@ -681,7 +755,10 @@ mod tests {
         let port = serve_seeded();
         let response = round_trip(
             port,
-            &format!("POST /v1/list_pools HTTP/1.1\r\nContent-Length: {}\r\n\r\n", MAX_BODY + 1),
+            &format!(
+                "POST /v1/list_pools HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
+                MAX_BODY + 1
+            ),
         );
         assert!(response.starts_with("HTTP/1.1 413"), "{response}");
     }
@@ -689,7 +766,10 @@ mod tests {
     #[test]
     fn an_unknown_method_path_is_a_not_found_over_the_socket() {
         let port = serve_seeded();
-        let response = round_trip(port, "POST /v1/does_not_exist HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}");
+        let response = round_trip(
+            port,
+            "POST /v1/does_not_exist HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}",
+        );
         assert!(response.starts_with("HTTP/1.1 404"), "{response}");
     }
 
@@ -732,7 +812,10 @@ mod tests {
         assert!(matches!(limiter.try_admit(peer, 100, 1), Admit::Ok));
         let held = limiter.clone();
         let _ = thread::spawn(move || {
-            let _slot = SlotGuard { limiter: held, ip: peer };
+            let _slot = SlotGuard {
+                limiter: held,
+                ip: peer,
+            };
             panic!("the connection handler unwound");
         })
         .join();

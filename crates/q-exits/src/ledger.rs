@@ -113,7 +113,9 @@ impl PersistentLedger {
         let (released, torn) = match store.load().map_err(|_| ExitError::PersistFailed)? {
             Some(bytes) => load_frames(&bytes)?,
             None => {
-                store.save(&header()).map_err(|_| ExitError::PersistFailed)?;
+                store
+                    .save(&header())
+                    .map_err(|_| ExitError::PersistFailed)?;
                 (BTreeSet::new(), false)
             }
         };
@@ -181,7 +183,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut path = std::env::temp_dir();
-        path.push(format!("q-oracle-ledger-{tag}-{}-{nanos}.led", std::process::id()));
+        path.push(format!(
+            "q-oracle-ledger-{tag}-{}-{nanos}.led",
+            std::process::id()
+        ));
         path
     }
 
@@ -230,7 +235,10 @@ mod tests {
             ledger.record([0x5a; 32]).unwrap();
             assert!(ledger.is_released(&[0x5a; 32]));
             ledger.forget(&[0x5a; 32]);
-            assert!(!ledger.is_released(&[0x5a; 32]), "forget clears the in-memory set");
+            assert!(
+                !ledger.is_released(&[0x5a; 32]),
+                "forget clears the in-memory set"
+            );
         }
         let reopened = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
         assert!(
@@ -279,14 +287,32 @@ mod tests {
         std::fs::write(&path, &raw).unwrap();
 
         let reopened = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
-        assert!(reopened.is_released(&[0x01; 32]), "a committed frame before the torn tail survives");
-        assert!(reopened.is_released(&[0x02; 32]), "a committed frame before the torn tail survives");
-        assert_eq!(reopened.len(), 2, "the torn partial frame is dropped, not counted");
+        assert!(
+            reopened.is_released(&[0x01; 32]),
+            "a committed frame before the torn tail survives"
+        );
+        assert!(
+            reopened.is_released(&[0x02; 32]),
+            "a committed frame before the torn tail survives"
+        );
+        assert_eq!(
+            reopened.len(),
+            2,
+            "the torn partial frame is dropped, not counted"
+        );
 
         let compacted = std::fs::read(&path).unwrap();
-        assert_eq!(compacted.len(), HEADER_LEN + 2 * FRAME_LEN, "open compacts the torn tail away");
+        assert_eq!(
+            compacted.len(),
+            HEADER_LEN + 2 * FRAME_LEN,
+            "open compacts the torn tail away"
+        );
         let again = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
-        assert_eq!(again.len(), 2, "the compacted file reopens with exactly the committed set");
+        assert_eq!(
+            again.len(),
+            2,
+            "the compacted file reopens with exactly the committed set"
+        );
         std::fs::remove_file(&path).ok();
     }
 
@@ -324,8 +350,14 @@ mod tests {
             ledger.record([0x02; 32]).unwrap();
         }
         let reopened = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
-        assert!(reopened.is_released(&[0x01; 32]), "the pre-crash record survives");
-        assert!(reopened.is_released(&[0x02; 32]), "the post-crash record is readable, not stranded behind orphan bytes");
+        assert!(
+            reopened.is_released(&[0x01; 32]),
+            "the pre-crash record survives"
+        );
+        assert!(
+            reopened.is_released(&[0x02; 32]),
+            "the post-crash record is readable, not stranded behind orphan bytes"
+        );
         assert_eq!(reopened.len(), 2);
         std::fs::remove_file(&path).ok();
     }

@@ -47,7 +47,10 @@ impl ReplayStore {
     }
 
     pub fn append(&self, bytes: &[u8]) -> io::Result<()> {
-        let mut file = fs::OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         Ok(())
@@ -64,7 +67,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut path = std::env::temp_dir();
-        path.push(format!("q-oracle-replay-{tag}-{}-{nanos}.led", std::process::id()));
+        path.push(format!(
+            "q-oracle-replay-{tag}-{}-{nanos}.led",
+            std::process::id()
+        ));
         path
     }
 

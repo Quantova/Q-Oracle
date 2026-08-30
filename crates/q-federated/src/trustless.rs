@@ -99,7 +99,12 @@ fn apply_replay_and_cap(
         return Err(TrustlessError::Gateway(GatewayError::WrongDestination));
     }
     gateway
-        .admit_trustless(mint.asset_id, mint.source_ref, mint.amount, mint.source_chain)
+        .admit_trustless(
+            mint.asset_id,
+            mint.source_ref,
+            mint.amount,
+            mint.source_chain,
+        )
         .map_err(|e| match e {
             GatewayError::ReplayedReference => TrustlessError::ReplayedReference,
             GatewayError::AssetNotRegistered => TrustlessError::AssetNotRegistered,

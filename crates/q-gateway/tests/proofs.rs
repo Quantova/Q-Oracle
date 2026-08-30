@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::{AttestationEnvelope, SignerSig};
-use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, Writer, attest_context, FACT_VERSION};
+use q_codec::{
+    attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, Writer, FACT_VERSION,
+};
 use q_gateway::gateway::REORG_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -38,7 +40,11 @@ fn sign_over(op: &TestOp, message: &[u8], context: &[u8]) -> SignerSig {
 }
 
 fn sign_fact(op: &TestOp, fact: &BridgeFact) -> SignerSig {
-    sign_over(op, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]))
+    sign_over(
+        op,
+        &fact.attest_preimage(DEST_ID),
+        &attest_context(&[0u8; 32]),
+    )
 }
 
 fn deposit_fact(source_ref: [u8; 32], asset: [u8; 16], amount: u128) -> BridgeFact {
@@ -156,7 +162,10 @@ fn unknown_operator_is_rejected() {
     let outsider = mk_op(99);
     let fact = deposit_fact([0x14; 32], ASSET_A, 500);
     let env = attest(&[&ops[0], &ops[1], &outsider], &fact);
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BelowThreshold { got: 2, need: 3 }));
+    assert_eq!(
+        gw.process_deposit(&env),
+        Err(GatewayError::BelowThreshold { got: 2, need: 3 })
+    );
 }
 
 #[test]
@@ -167,7 +176,10 @@ fn tampered_signature_is_rejected() {
     let mut env = attest(&[&ops[0], &ops[1], &ops[2]], &fact);
     let last = env.signatures[2].signature.len() - 1;
     env.signatures[2].signature[last] ^= 0x01;
-    assert_eq!(gw.process_deposit(&env), Err(GatewayError::BelowThreshold { got: 2, need: 3 }));
+    assert_eq!(
+        gw.process_deposit(&env),
+        Err(GatewayError::BelowThreshold { got: 2, need: 3 })
+    );
 }
 
 #[test]
@@ -181,7 +193,10 @@ fn replay_of_used_reference_is_rejected_even_with_a_fresh_quorum() {
         .expect("first mint");
 
     let replay = attest(&[&ops[1], &ops[2], &ops[3]], &fact);
-    assert_eq!(gw.process_deposit(&replay), Err(GatewayError::ReplayedReference));
+    assert_eq!(
+        gw.process_deposit(&replay),
+        Err(GatewayError::ReplayedReference)
+    );
 }
 
 #[test]
@@ -189,8 +204,11 @@ fn per_asset_cap_blocks_over_limit_mint() {
     let ops: Vec<TestOp> = (0..4).map(mk_op).collect();
     let mut gw = build_gateway(&ops, 3, 1_000_000);
 
-    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &deposit_fact([0x21; 32], ASSET_A, 600)))
-        .expect("first mint under cap");
+    gw.process_deposit(&attest(
+        &[&ops[0], &ops[1], &ops[2]],
+        &deposit_fact([0x21; 32], ASSET_A, 600),
+    ))
+    .expect("first mint under cap");
 
     let over = gw.process_deposit(&attest(
         &[&ops[0], &ops[1], &ops[2]],
@@ -212,8 +230,11 @@ fn per_epoch_cap_blocks_over_limit_mint_and_resets_next_epoch() {
     let ops: Vec<TestOp> = (0..4).map(mk_op).collect();
     let mut gw = build_gateway(&ops, 3, 1_000);
 
-    gw.process_deposit(&attest(&[&ops[0], &ops[1], &ops[2]], &deposit_fact([0x31; 32], ASSET_A, 600)))
-        .expect("first mint within epoch cap");
+    gw.process_deposit(&attest(
+        &[&ops[0], &ops[1], &ops[2]],
+        &deposit_fact([0x31; 32], ASSET_A, 600),
+    ))
+    .expect("first mint within epoch cap");
 
     let over = gw.process_deposit(&attest(
         &[&ops[0], &ops[1], &ops[2]],
@@ -263,7 +284,8 @@ fn source_reorg_auto_pauses_the_route() {
         .iter()
         .map(|op| sign_over(op, &reorg_msg, REORG_DOMAIN))
         .collect();
-    gw.report_reorg(SOURCE_BTC, 3, &sigs).expect("reorg pauses source");
+    gw.report_reorg(SOURCE_BTC, 3, &sigs)
+        .expect("reorg pauses source");
     assert!(gw.is_source_paused(SOURCE_BTC));
 
     let after = gw.process_deposit(&attest(
@@ -278,6 +300,9 @@ fn global_pause_reaches_every_route() {
     let ops: Vec<TestOp> = (0..4).map(mk_op).collect();
     let mut gw = build_gateway(&ops, 3, 1_000_000);
     gw.pause_all();
-    let env = attest(&[&ops[0], &ops[1], &ops[2]], &deposit_fact([0x61; 32], ASSET_A, 500));
+    let env = attest(
+        &[&ops[0], &ops[1], &ops[2]],
+        &deposit_fact([0x61; 32], ASSET_A, 500),
+    );
     assert_eq!(gw.process_deposit(&env), Err(GatewayError::GlobalPause));
 }

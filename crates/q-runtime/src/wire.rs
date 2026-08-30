@@ -48,7 +48,11 @@ pub enum WireError {
     BadType(&'static str),
     BadField(&'static str),
     BadHex(&'static str),
-    BadLen { field: &'static str, expected: usize, got: usize },
+    BadLen {
+        field: &'static str,
+        expected: usize,
+        got: usize,
+    },
     BadNumber(&'static str),
     BadProofKind(String),
     BadEnvelope,
@@ -245,7 +249,13 @@ fn encode_proof(proof: &DepositProof) -> Json {
             ("kind", Json::str("bitcoin")),
             (
                 "headers",
-                Json::Array(material.headers.iter().map(|h| hexs(&h.serialize())).collect()),
+                Json::Array(
+                    material
+                        .headers
+                        .iter()
+                        .map(|h| hexs(&h.serialize()))
+                        .collect(),
+                ),
             ),
             ("start_height", u32j(material.start_height)),
             ("deposit_height", u32j(material.deposit_height)),
@@ -291,7 +301,10 @@ fn encode_proof(proof: &DepositProof) -> Json {
             ("signature_slot", Json::Int(update.signature_slot)),
             ("receipts_root", hexs(&update.execution.receipts_root)),
             ("block_number", Json::Int(update.execution.block_number)),
-            ("execution_branch", roots_json(&update.execution.execution_branch)),
+            (
+                "execution_branch",
+                roots_json(&update.execution.execution_branch),
+            ),
             ("receipt_index", Json::Int(deposit.receipt_index)),
             (
                 "receipt_proof",
@@ -376,7 +389,8 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
             let mut headers = Vec::with_capacity(headers_json.len());
             for h in headers_json {
                 let bytes = as_hex(h, "headers")?;
-                headers.push(BlockHeader::parse(&bytes).map_err(|_| WireError::BadField("headers"))?);
+                headers
+                    .push(BlockHeader::parse(&bytes).map_err(|_| WireError::BadField("headers"))?);
             }
             let branch_json = field(j, "branch")?
                 .as_array()
@@ -426,7 +440,11 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
             let update = LightClientUpdate {
                 attested_header: header_from(field(j, "attested_header")?)?,
                 finalized_header: header_from(field(j, "finalized_header")?)?,
-                finality_branch: roots_from(field(j, "finality_branch")?, "finality_branch", MAX_BRANCH)?,
+                finality_branch: roots_from(
+                    field(j, "finality_branch")?,
+                    "finality_branch",
+                    MAX_BRANCH,
+                )?,
                 sync_aggregate: SyncAggregate {
                     participation,
                     signature: BlsSignature(hex_array::<96>(field(j, "signature")?, "signature")?),
@@ -783,7 +801,10 @@ pub fn encode_response(resp: &Response) -> Json {
         ]),
         Response::Pools(vs) => object(vec![
             ("result", Json::str("pools")),
-            ("pools", Json::Array(vs.iter().map(pool_view_json).collect())),
+            (
+                "pools",
+                Json::Array(vs.iter().map(pool_view_json).collect()),
+            ),
         ]),
         Response::Pool(v) => object(vec![
             ("result", Json::str("pool")),
@@ -828,7 +849,9 @@ pub fn decode_response(j: &Json) -> Result<Response, WireError> {
             }
             Ok(Response::Pools(views))
         }
-        "deposit_admitted" => Ok(Response::DepositAdmitted(outcome_from(field(j, "outcome")?)?)),
+        "deposit_admitted" => Ok(Response::DepositAdmitted(outcome_from(field(
+            j, "outcome",
+        )?)?)),
         "status" => Ok(Response::Status(DepositStatusView {
             source_ref: hex_array::<32>(field(j, "source_ref")?, "source_ref")?,
             asset_id: hex_array::<16>(field(j, "asset_id")?, "asset_id")?,
@@ -883,9 +906,11 @@ fn api_json(api: &ApiError) -> Json {
         ApiError::EthereumVerify(e) => {
             tagged("api", "ethereum_verify", vec![("eth", eth_err_json(e))])
         }
-        ApiError::CosmosVerify(e) => {
-            tagged("api", "cosmos_verify", vec![("cosmos", corridor_err_json(e))])
-        }
+        ApiError::CosmosVerify(e) => tagged(
+            "api",
+            "cosmos_verify",
+            vec![("cosmos", corridor_err_json(e))],
+        ),
         ApiError::Pool(e) => pool_err_json(e),
         ApiError::Federated(e) => federated_err_json(e),
         ApiError::Trustless(e) => trustless_err_json(e),
@@ -904,9 +929,11 @@ fn spv_err_json(e: &SpvError) -> Json {
         }
         SpvError::EmptyChain => tagged("spv", "empty_chain", vec![]),
         SpvError::MerkleMismatch => tagged("spv", "merkle_mismatch", vec![]),
-        SpvError::RetargetOnANonBoundary { index } => {
-            tagged("spv", "retarget_on_a_non_boundary", vec![("index", usizej(*index))])
-        }
+        SpvError::RetargetOnANonBoundary { index } => tagged(
+            "spv",
+            "retarget_on_a_non_boundary",
+            vec![("index", usizej(*index))],
+        ),
         SpvError::RetargetMismatch { index } => {
             tagged("spv", "retarget_mismatch", vec![("index", usizej(*index))])
         }
@@ -1095,7 +1122,9 @@ fn corridor_err_from(j: &Json) -> Result<CorridorError, WireError> {
     match code_of(j)? {
         "chain_mismatch" => Ok(CorridorError::ChainMismatch),
         "malformed_app_hash" => Ok(CorridorError::MalformedAppHash),
-        "unanchored" => Ok(CorridorError::Unanchored(light_err_from(field(j, "light")?)?)),
+        "unanchored" => Ok(CorridorError::Unanchored(light_err_from(field(
+            j, "light",
+        )?)?)),
         "commit" => Ok(CorridorError::Commit(commit_err_from(field(j, "commit")?)?)),
         "proof" => Ok(CorridorError::Proof(proof_err_from(field(j, "proof")?)?)),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
@@ -1144,9 +1173,7 @@ fn light_err_json(e: &LightError) -> Json {
         LightError::HeaderTimeInFuture => tagged("light", "header_time_in_future", vec![]),
         LightError::NotAdjacent => tagged("light", "not_adjacent", vec![]),
         LightError::NextValidatorMismatch => tagged("light", "next_validator_mismatch", vec![]),
-        LightError::Commit(c) => {
-            tagged("light", "commit", vec![("commit", commit_err_json(c))])
-        }
+        LightError::Commit(c) => tagged("light", "commit", vec![("commit", commit_err_json(c))]),
     }
 }
 
@@ -1165,7 +1192,10 @@ fn light_err_from(j: &Json) -> Result<LightError, WireError> {
         }),
         "trusted_state_expired" => Ok(LightError::TrustedStateExpired {
             elapsed_secs: as_i64(field(j, "elapsed_secs")?, "elapsed_secs")?,
-            trusting_period_secs: as_u64(field(j, "trusting_period_secs")?, "trusting_period_secs")?,
+            trusting_period_secs: as_u64(
+                field(j, "trusting_period_secs")?,
+                "trusting_period_secs",
+            )?,
         }),
         "non_monotonic_header_time" => Ok(LightError::NonMonotonicHeaderTime),
         "header_time_in_future" => Ok(LightError::HeaderTimeInFuture),
@@ -1248,9 +1278,9 @@ fn api_from(j: &Json) -> Result<ApiError, WireError> {
             )?)),
             "bitcoin_spv" => Ok(ApiError::BitcoinSpv(spv_err_from(field(j, "spv")?)?)),
             "ethereum_verify" => Ok(ApiError::EthereumVerify(eth_err_from(field(j, "eth")?)?)),
-            "cosmos_verify" => {
-                Ok(ApiError::CosmosVerify(corridor_err_from(field(j, "cosmos")?)?))
-            }
+            "cosmos_verify" => Ok(ApiError::CosmosVerify(corridor_err_from(field(
+                j, "cosmos",
+            )?)?)),
             other => Err(WireError::UnknownErrorCode(other.to_string())),
         },
         "pool" => Ok(ApiError::Pool(pool_err_from(j)?)),
@@ -1356,9 +1386,11 @@ fn trustless_err_json(e: &TrustlessError) -> Json {
                 ("add", u128s(*add)),
             ],
         ),
-        TrustlessError::Gateway(g) => {
-            tagged("trustless", "gateway", vec![("gateway", gateway_err_json(g))])
-        }
+        TrustlessError::Gateway(g) => tagged(
+            "trustless",
+            "gateway",
+            vec![("gateway", gateway_err_json(g))],
+        ),
     }
 }
 
@@ -1387,7 +1419,9 @@ fn trustless_err_from(j: &Json) -> Result<TrustlessError, WireError> {
             cap: as_u128(field(j, "cap")?, "cap")?,
             add: as_u128(field(j, "add")?, "add")?,
         }),
-        "gateway" => Ok(TrustlessError::Gateway(gateway_err_from(field(j, "gateway")?)?)),
+        "gateway" => Ok(TrustlessError::Gateway(gateway_err_from(field(
+            j, "gateway",
+        )?)?)),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }
@@ -1457,9 +1491,11 @@ fn codec_err_json(e: &CodecError) -> Json {
         CodecError::UnknownTag(t) => {
             tagged("codec", "unknown_tag", vec![("tag", Json::Int(*t as u64))])
         }
-        CodecError::BadVersion(v) => {
-            tagged("codec", "bad_version", vec![("version", Json::Int(*v as u64))])
-        }
+        CodecError::BadVersion(v) => tagged(
+            "codec",
+            "bad_version",
+            vec![("version", Json::Int(*v as u64))],
+        ),
         CodecError::ZeroAmount => tagged("codec", "zero_amount", vec![]),
         CodecError::ZeroAsset => tagged("codec", "zero_asset", vec![]),
         CodecError::ZeroRecipient => tagged("codec", "zero_recipient", vec![]),
@@ -1474,7 +1510,10 @@ fn codec_err_from(j: &Json) -> Result<CodecError, WireError> {
         "short_input" => Ok(CodecError::ShortInput),
         "trailing_bytes" => Ok(CodecError::TrailingBytes),
         "unknown_tag" => Ok(CodecError::UnknownTag(as_u8(field(j, "tag")?, "tag")?)),
-        "bad_version" => Ok(CodecError::BadVersion(as_u8(field(j, "version")?, "version")?)),
+        "bad_version" => Ok(CodecError::BadVersion(as_u8(
+            field(j, "version")?,
+            "version",
+        )?)),
         "zero_amount" => Ok(CodecError::ZeroAmount),
         "zero_asset" => Ok(CodecError::ZeroAsset),
         "zero_recipient" => Ok(CodecError::ZeroRecipient),
@@ -1547,9 +1586,11 @@ fn gateway_err_json(e: &GatewayError) -> Json {
             vec![("quorum", usizej(*quorum)), ("size", usizej(*size))],
         ),
         GatewayError::ProveNothing => tagged("gateway", "prove_nothing", vec![]),
-        GatewayError::InvalidFact(c) => {
-            tagged("gateway", "invalid_fact", vec![("codec", codec_err_json(c))])
-        }
+        GatewayError::InvalidFact(c) => tagged(
+            "gateway",
+            "invalid_fact",
+            vec![("codec", codec_err_json(c))],
+        ),
         GatewayError::Unauthorized => tagged("gateway", "unauthorized", vec![]),
         GatewayError::NoGovernanceSet => tagged("gateway", "no_governance_set", vec![]),
         GatewayError::TierDowngrade { from, to } => tagged(
@@ -1703,7 +1744,7 @@ mod tests {
     const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use crate::json::parse;
     use q_airlock::{AttestationEnvelope, SignerSig};
-    use q_codec::{AssetId, Direction, Recipient, SourceRef, attest_context, FACT_VERSION};
+    use q_codec::{attest_context, AssetId, Direction, Recipient, SourceRef, FACT_VERSION};
     use qtv_crypto::ml_dsa;
 
     fn round_request(req: Request) {
@@ -1753,9 +1794,13 @@ mod tests {
 
     #[test]
     fn list_and_get_pool_round_trip() {
-        round_request(Request::ListPools(ListPoolsRequest { network_id: Some(22) }));
+        round_request(Request::ListPools(ListPoolsRequest {
+            network_id: Some(22),
+        }));
         round_request(Request::ListPools(ListPoolsRequest { network_id: None }));
-        round_request(Request::GetPool(GetPoolRequest { asset_id: [0xab; 16] }));
+        round_request(Request::GetPool(GetPoolRequest {
+            asset_id: [0xab; 16],
+        }));
     }
 
     #[test]
@@ -1772,7 +1817,13 @@ mod tests {
         seed[0] = 1;
         let (_pk, sk) = ml_dsa::keygen(&seed);
         let fact = sample_fact();
-        let sig = ml_dsa::sign(&sk, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(
+            &sk,
+            &fact.attest_preimage(DEST_ID),
+            &attest_context(&[0u8; 32]),
+            &[0u8; 32],
+        )
+        .unwrap();
         let env = AttestationEnvelope {
             fact,
             signatures: vec![SignerSig {
@@ -2015,13 +2066,15 @@ mod tests {
 
     #[test]
     fn both_deposit_outcomes_round_trip() {
-        round_response(Response::DepositAdmitted(DepositOutcome::Minted(MintReceipt {
-            asset_id: [0x9a; 16],
-            recipient: [0x42; 32],
-            amount: 500,
-            source_ref: [0x11; 32],
-            source_chain: 1,
-        })));
+        round_response(Response::DepositAdmitted(DepositOutcome::Minted(
+            MintReceipt {
+                asset_id: [0x9a; 16],
+                recipient: [0x42; 32],
+                amount: 500,
+                source_ref: [0x11; 32],
+                source_chain: 1,
+            },
+        )));
         round_response(Response::DepositAdmitted(
             DepositOutcome::AdmittedPendingChainMint(TrustlessMint {
                 asset_id: [0x9a; 16],
@@ -2067,10 +2120,7 @@ mod tests {
             max: 8,
         })));
         round_response(Response::Error(ApiError::Trustless(
-            TrustlessError::AmountMismatch {
-                proven: 1,
-                fact: 2,
-            },
+            TrustlessError::AmountMismatch { proven: 1, fact: 2 },
         )));
         round_response(Response::Error(ApiError::Federated(
             FederatedError::CorrelatedSources {
@@ -2078,22 +2128,30 @@ mod tests {
                 signers: 3,
             },
         )));
-        round_response(Response::Error(ApiError::Federated(FederatedError::Gateway(
-            GatewayError::BelowThreshold { got: 2, need: 3 },
-        ))));
-        round_response(Response::Error(ApiError::Federated(FederatedError::Gateway(
-            GatewayError::InvalidFact(CodecError::ZeroAmount),
-        ))));
-        round_response(Response::Error(ApiError::EthereumVerify(EthError::BadSignature)));
-        round_response(Response::Error(ApiError::EthereumVerify(
-            EthError::InsufficientParticipation { got: 300, needed: 342 },
+        round_response(Response::Error(ApiError::Federated(
+            FederatedError::Gateway(GatewayError::BelowThreshold { got: 2, need: 3 }),
+        )));
+        round_response(Response::Error(ApiError::Federated(
+            FederatedError::Gateway(GatewayError::InvalidFact(CodecError::ZeroAmount)),
         )));
         round_response(Response::Error(ApiError::EthereumVerify(
-            EthError::InconsistentSlots { signature_slot: 60, attested_slot: 100 },
+            EthError::BadSignature,
         )));
-        round_response(Response::Error(ApiError::EthereumVerify(EthError::Receipt(
-            ReceiptError::NoDeposit,
-        ))));
+        round_response(Response::Error(ApiError::EthereumVerify(
+            EthError::InsufficientParticipation {
+                got: 300,
+                needed: 342,
+            },
+        )));
+        round_response(Response::Error(ApiError::EthereumVerify(
+            EthError::InconsistentSlots {
+                signature_slot: 60,
+                attested_slot: 100,
+            },
+        )));
+        round_response(Response::Error(ApiError::EthereumVerify(
+            EthError::Receipt(ReceiptError::NoDeposit),
+        )));
         round_response(Response::Error(ApiError::EthereumVerify(EthError::Mpt(
             MptError::HashMismatch,
         ))));
@@ -2106,27 +2164,27 @@ mod tests {
                 trusted_total: 100,
             }),
         )));
-        round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Commit(
-            CommitError::NotEnoughVotingPower {
+        round_response(Response::Error(ApiError::CosmosVerify(
+            CorridorError::Commit(CommitError::NotEnoughVotingPower {
                 signed: 50,
                 total: 100,
-            },
-        ))));
+            }),
+        )));
         round_response(Response::Error(ApiError::CosmosVerify(
             CorridorError::Unanchored(LightError::InsufficientTrustedSignatures {
                 signed: 0,
                 trusted_total: 100,
             }),
         )));
-        round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Proof(
-            ProofError::RootMismatch,
-        ))));
-        round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Proof(
-            ProofError::ForeignStoreKey,
-        ))));
-        round_response(Response::Error(ApiError::CosmosVerify(CorridorError::Proof(
-            ProofError::MalformedProofOp,
-        ))));
+        round_response(Response::Error(ApiError::CosmosVerify(
+            CorridorError::Proof(ProofError::RootMismatch),
+        )));
+        round_response(Response::Error(ApiError::CosmosVerify(
+            CorridorError::Proof(ProofError::ForeignStoreKey),
+        )));
+        round_response(Response::Error(ApiError::CosmosVerify(
+            CorridorError::Proof(ProofError::MalformedProofOp),
+        )));
     }
 
     #[test]
@@ -2200,19 +2258,14 @@ mod tests {
     #[test]
     fn a_garbage_body_is_refused_at_each_typed_field() {
         assert!(decode_request("get_pool", &object(vec![])).is_err());
-        assert!(decode_request(
-            "get_pool",
-            &object(vec![("asset_id", Json::str("zz"))])
-        )
-        .is_err());
-        assert!(decode_request(
-            "get_pool",
-            &object(vec![("asset_id", Json::str("ab"))])
-        )
-        .is_err());
+        assert!(decode_request("get_pool", &object(vec![("asset_id", Json::str("zz"))])).is_err());
+        assert!(decode_request("get_pool", &object(vec![("asset_id", Json::str("ab"))])).is_err());
         assert!(decode_request(
             "submit_deposit",
-            &object(vec![("proof", object(vec![("kind", Json::str("dogecoin"))]))])
+            &object(vec![(
+                "proof",
+                object(vec![("kind", Json::str("dogecoin"))])
+            )])
         )
         .is_err());
         assert!(decode_request(

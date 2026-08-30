@@ -117,7 +117,12 @@ pub struct ExitDesk {
 
 impl ExitDesk {
     pub fn new(cfg: DeskConfig, anchor: QuantovaAnchor) -> Result<ExitDesk, ExitError> {
-        ExitDesk::assemble(cfg, anchor, Box::new(MemoryLedger::new()), Box::new(NullJournal::new()))
+        ExitDesk::assemble(
+            cfg,
+            anchor,
+            Box::new(MemoryLedger::new()),
+            Box::new(NullJournal::new()),
+        )
     }
 
     pub fn with_ledger(
@@ -192,7 +197,10 @@ impl ExitDesk {
                     if self.consumed.is_released(&foreign_ref) {
                         return Err(ExitError::PersistFailed);
                     }
-                    let exit = self.exits.get_mut(index as usize).ok_or(ExitError::PersistFailed)?;
+                    let exit = self
+                        .exits
+                        .get_mut(index as usize)
+                        .ok_or(ExitError::PersistFailed)?;
                     if exit.state != ExitState::Pending {
                         return Err(ExitError::PersistFailed);
                     }
@@ -202,7 +210,10 @@ impl ExitDesk {
                     self.vaults.release(vault_id, locked)?;
                 }
                 ExitEvent::Slash { index } => {
-                    let exit = self.exits.get_mut(index as usize).ok_or(ExitError::PersistFailed)?;
+                    let exit = self
+                        .exits
+                        .get_mut(index as usize)
+                        .ok_or(ExitError::PersistFailed)?;
                     if exit.state != ExitState::Pending {
                         return Err(ExitError::PersistFailed);
                     }
@@ -353,7 +364,9 @@ impl ExitDesk {
             return Err(ExitError::PayoutMismatch);
         }
         let statement = exit.statement.clone();
-        let attestation = watcher.confirm(&statement).ok_or(ExitError::PayoutUnproven)?;
+        let attestation = watcher
+            .confirm(&statement)
+            .ok_or(ExitError::PayoutUnproven)?;
         attestation.validate()?;
         if !attestation.covers(&statement) {
             return Err(ExitError::PayoutMismatch);
@@ -391,7 +404,8 @@ impl ExitDesk {
         let amount = exit.statement.amount;
         let user_payout = self.user_premium(amount)?;
         let remainder = locked.checked_sub(user_payout).ok_or(ExitError::Overflow)?;
-        self.journal.append(&ExitEvent::Slash { index: id.0 as u32 })?;
+        self.journal
+            .append(&ExitEvent::Slash { index: id.0 as u32 })?;
         self.exits[id.0].state = ExitState::Slashed;
         self.vaults.seize(vault_id, locked)?;
         Ok(SlashOutcome {
@@ -465,28 +479,40 @@ mod tests {
     fn an_undercollateralized_config_is_refused() {
         let mut c = cfg();
         c.secure_bps = 10_000;
-        assert_eq!(ExitDesk::new(c, anchor()).err(), Some(ExitError::UnsafeParams));
+        assert_eq!(
+            ExitDesk::new(c, anchor()).err(),
+            Some(ExitError::UnsafeParams)
+        );
     }
 
     #[test]
     fn a_premium_above_the_secure_ratio_is_refused() {
         let mut c = cfg();
         c.premium_bps = 16_000;
-        assert_eq!(ExitDesk::new(c, anchor()).err(), Some(ExitError::UnsafeParams));
+        assert_eq!(
+            ExitDesk::new(c, anchor()).err(),
+            Some(ExitError::UnsafeParams)
+        );
     }
 
     #[test]
     fn a_premium_below_par_is_refused() {
         let mut c = cfg();
         c.premium_bps = 9_000;
-        assert_eq!(ExitDesk::new(c, anchor()).err(), Some(ExitError::UnsafeParams));
+        assert_eq!(
+            ExitDesk::new(c, anchor()).err(),
+            Some(ExitError::UnsafeParams)
+        );
     }
 
     #[test]
     fn a_zero_corridor_config_is_refused() {
         let mut c = cfg();
         c.corridor = 0;
-        assert_eq!(ExitDesk::new(c, anchor()).err(), Some(ExitError::UnsafeParams));
+        assert_eq!(
+            ExitDesk::new(c, anchor()).err(),
+            Some(ExitError::UnsafeParams)
+        );
     }
 
     #[test]
@@ -525,7 +551,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut path = std::env::temp_dir();
-        path.push(format!("q-oracle-reconstruct-{tag}-{}-{nanos}.jrn", std::process::id()));
+        path.push(format!(
+            "q-oracle-reconstruct-{tag}-{}-{nanos}.jrn",
+            std::process::id()
+        ));
         path
     }
 
@@ -553,16 +582,23 @@ mod tests {
         {
             let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
             journal
-                .append(&ExitEvent::Open { index: 0, exit: journaled(1, 1_500, burn) })
+                .append(&ExitEvent::Open {
+                    index: 0,
+                    exit: journaled(1, 1_500, burn),
+                })
                 .unwrap();
             journal
-                .append(&ExitEvent::Settle { index: 0, foreign_ref: foreign })
+                .append(&ExitEvent::Settle {
+                    index: 0,
+                    foreign_ref: foreign,
+                })
                 .unwrap();
         }
         let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
         let mut desk = ExitDesk::with_journal(cfg(), anchor(), Box::new(journal)).unwrap();
         desk.register_vault(1, 2_000);
-        desk.reconstruct().expect("a clean open+settle journal rebuilds");
+        desk.reconstruct()
+            .expect("a clean open+settle journal rebuilds");
 
         assert_eq!(desk.exit_count(), 1);
         assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Settled);
@@ -573,7 +609,10 @@ mod tests {
         );
         assert_eq!(desk.locked_collateral(1), 0);
         assert!(desk.is_consumed(&burn), "the burn ref survives the rebuild");
-        assert!(desk.is_consumed(&foreign), "the payout ref survives the rebuild");
+        assert!(
+            desk.is_consumed(&foreign),
+            "the payout ref survives the rebuild"
+        );
         std::fs::remove_file(&path).ok();
     }
 
@@ -584,17 +623,25 @@ mod tests {
         {
             let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
             journal
-                .append(&ExitEvent::Open { index: 0, exit: journaled(1, 1_500, burn) })
+                .append(&ExitEvent::Open {
+                    index: 0,
+                    exit: journaled(1, 1_500, burn),
+                })
                 .unwrap();
             journal.append(&ExitEvent::Slash { index: 0 }).unwrap();
         }
         let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
         let mut desk = ExitDesk::with_journal(cfg(), anchor(), Box::new(journal)).unwrap();
         desk.register_vault(1, 2_000);
-        desk.reconstruct().expect("a clean open+slash journal rebuilds");
+        desk.reconstruct()
+            .expect("a clean open+slash journal rebuilds");
 
         assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Slashed);
-        assert_eq!(desk.free_collateral(1), 500, "the seizure is applied exactly once");
+        assert_eq!(
+            desk.free_collateral(1),
+            500,
+            "the seizure is applied exactly once"
+        );
         assert_eq!(desk.locked_collateral(1), 0);
         std::fs::remove_file(&path).ok();
     }
@@ -605,7 +652,10 @@ mod tests {
         {
             let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
             journal
-                .append(&ExitEvent::Settle { index: 5, foreign_ref: [0x88; 32] })
+                .append(&ExitEvent::Settle {
+                    index: 5,
+                    foreign_ref: [0x88; 32],
+                })
                 .unwrap();
         }
         let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();

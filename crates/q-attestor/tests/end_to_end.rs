@@ -71,8 +71,11 @@ fn full_pipeline_from_watcher_to_mint() {
 
     let mut agg = Aggregator::new(3);
     for op in operators.iter_mut() {
-        let signed = op.observe_and_sign(&observed, 900_000).expect("operator signs a final lock");
-        agg.add(&signed.fact, signed.sig).expect("bundle matching facts");
+        let signed = op
+            .observe_and_sign(&observed, 900_000)
+            .expect("operator signs a final lock");
+        agg.add(&signed.fact, signed.sig)
+            .expect("bundle matching facts");
     }
     assert!(agg.ready());
 
@@ -94,10 +97,14 @@ fn full_pipeline_from_watcher_to_mint() {
 fn node_divergence_halts_the_operator_and_stops_further_signing() {
     let mut op = make_operator(0);
     let source_ref = [0x22; 32];
-    op.observe_and_sign(&lock(source_ref, 500, 6), 900_000).expect("first view signs");
+    op.observe_and_sign(&lock(source_ref, 500, 6), 900_000)
+        .expect("first view signs");
 
     let conflicting = op.observe_and_sign(&lock(source_ref, 999, 6), 900_000);
-    assert_eq!(conflicting, Err(OperatorError::Halted(HaltReason::Divergence)));
+    assert_eq!(
+        conflicting,
+        Err(OperatorError::Halted(HaltReason::Divergence))
+    );
     assert!(op.is_halted());
     assert_eq!(op.state(), OperatorState::Halted(HaltReason::Divergence));
 
@@ -118,7 +125,10 @@ fn dos_overload_degrades_to_safe_halt() {
 fn below_finality_is_not_signed() {
     let mut op = make_operator(0);
     let attempt = op.observe_and_sign(&lock([0x25; 32], 500, 5), 900_000);
-    assert_eq!(attempt, Err(OperatorError::BelowFinality { got: 5, need: 6 }));
+    assert_eq!(
+        attempt,
+        Err(OperatorError::BelowFinality { got: 5, need: 6 })
+    );
     assert!(!op.is_halted());
 }
 
@@ -126,7 +136,8 @@ fn below_finality_is_not_signed() {
 fn one_source_event_is_not_signed_twice_by_an_operator() {
     let mut op = make_operator(0);
     let source_ref = [0x26; 32];
-    op.observe_and_sign(&lock(source_ref, 500, 6), 900_000).expect("first sign");
+    op.observe_and_sign(&lock(source_ref, 500, 6), 900_000)
+        .expect("first sign");
     let again = op.observe_and_sign(&lock(source_ref, 500, 6), 900_000);
     assert_eq!(again, Err(OperatorError::AlreadySigned));
 }
@@ -174,14 +185,16 @@ fn a_forged_lock_on_a_minority_of_nodes_never_reaches_quorum() {
     for id in [0u32, 1] {
         let compromised = own_node(vec![forged.clone()]);
         for signed in sign_own_view(id, &compromised) {
-            agg.add(&signed.fact, signed.sig).expect("compromised node signs the forgery");
+            agg.add(&signed.fact, signed.sig)
+                .expect("compromised node signs the forgery");
         }
     }
 
     for id in [2u32, 3, 4] {
         let honest = own_node(vec![]);
         for signed in sign_own_view(id, &honest) {
-            agg.add(&signed.fact, signed.sig).expect("honest node sees nothing to sign");
+            agg.add(&signed.fact, signed.sig)
+                .expect("honest node sees nothing to sign");
         }
     }
 

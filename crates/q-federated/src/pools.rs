@@ -243,8 +243,8 @@ impl PoolRegistry {
     }
 
     pub fn create_pool(&mut self, request: &PoolRequest) -> Result<PoolSpec, PoolError> {
-        let network =
-            Network::from_id(request.network_id).ok_or(PoolError::UnknownNetwork(request.network_id))?;
+        let network = Network::from_id(request.network_id)
+            .ok_or(PoolError::UnknownNetwork(request.network_id))?;
         let spec = PoolSpec::derive(
             network,
             &request.identifier,
@@ -390,9 +390,10 @@ mod tests {
 
         let other = PoolSpec::derive(Network::Ethereum, "WBTC", 8, 1_000_000, 500_000);
         registry.by_asset.insert(gho.asset_id.0, other.clone());
-        registry
-            .by_key
-            .insert((other.network.id(), other.identifier.clone()), gho.asset_id.0);
+        registry.by_key.insert(
+            (other.network.id(), other.identifier.clone()),
+            gho.asset_id.0,
+        );
 
         assert!(!registry
             .by_key
@@ -550,19 +551,31 @@ mod tests {
             assert_eq!(spec.tier, tier_for(spec.network));
         }
         assert_eq!(
-            registry.get_by_identifier(Network::Bitcoin, "BTC").unwrap().tier,
+            registry
+                .get_by_identifier(Network::Bitcoin, "BTC")
+                .unwrap()
+                .tier,
             Tier::ProofBacked
         );
         assert_eq!(
-            registry.get_by_identifier(Network::Ethereum, "ETH").unwrap().tier,
+            registry
+                .get_by_identifier(Network::Ethereum, "ETH")
+                .unwrap()
+                .tier,
             Tier::ProofBacked
         );
         assert_eq!(
-            registry.get_by_identifier(Network::Cosmos, "ATOM").unwrap().tier,
+            registry
+                .get_by_identifier(Network::Cosmos, "ATOM")
+                .unwrap()
+                .tier,
             Tier::ProofBacked
         );
         assert_eq!(
-            registry.get_by_identifier(Network::Solana, "SOL").unwrap().tier,
+            registry
+                .get_by_identifier(Network::Solana, "SOL")
+                .unwrap()
+                .tier,
             Tier::Federated
         );
     }
@@ -590,7 +603,10 @@ mod tests {
             .expect("bitcoin pool lists");
         let mut gateway = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
         install_pool(&mut gateway, &spec);
-        assert_eq!(gateway.asset_cap(&spec.asset_id.0), Some(spec.per_asset_cap));
+        assert_eq!(
+            gateway.asset_cap(&spec.asset_id.0),
+            Some(spec.per_asset_cap)
+        );
         assert!(gateway.corridor_tier(Network::Bitcoin.id()).is_some());
     }
 

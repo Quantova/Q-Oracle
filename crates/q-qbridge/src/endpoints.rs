@@ -19,7 +19,9 @@ use qlc_cosmos::light::TrustedState;
 use qlc_cosmos::proof::ExistenceProof;
 use qlc_cosmos::validator::ValidatorSet;
 use qlc_cosmos::{ChainConfig, CorridorError};
-use qlc_ethereum::{DepositProof as EthDepositProof, EthError, LightClientStore, LightClientUpdate};
+use qlc_ethereum::{
+    DepositProof as EthDepositProof, EthError, LightClientStore, LightClientUpdate,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BitcoinProofMaterial {
@@ -62,7 +64,10 @@ pub struct DepositRequest {
 #[allow(clippy::large_enum_variant)]
 pub enum DepositProof {
     Federated(AttestationEnvelope),
-    Bitcoin { material: BitcoinProofMaterial, fact: BridgeFact },
+    Bitcoin {
+        material: BitcoinProofMaterial,
+        fact: BridgeFact,
+    },
     Ethereum {
         update: LightClientUpdate,
         deposit: EthDepositProof,
@@ -153,7 +158,10 @@ pub enum ApiError {
     Trustless(TrustlessError),
     UnknownNetwork(u32),
     PoolNotRegistered([u8; 16]),
-    AssetNetworkMismatch { fact_network: u32, pool_network: u32 },
+    AssetNetworkMismatch {
+        fact_network: u32,
+        pool_network: u32,
+    },
     CorridorConfigLocked,
     ProofTierMismatch,
     NoAnchor(u32),
@@ -267,9 +275,18 @@ pub struct DepositPlan {
 
 enum PlanKind {
     Federated(AttestationEnvelope),
-    Bitcoin { proven: qlc_bitcoin::TrustlessDeposit, fact: BridgeFact },
-    Ethereum { proven: qlc_ethereum::TrustlessDeposit, fact: BridgeFact },
-    Cosmos { proven: qlc_cosmos::TrustlessDeposit, fact: BridgeFact },
+    Bitcoin {
+        proven: qlc_bitcoin::TrustlessDeposit,
+        fact: BridgeFact,
+    },
+    Ethereum {
+        proven: qlc_ethereum::TrustlessDeposit,
+        fact: BridgeFact,
+    },
+    Cosmos {
+        proven: qlc_cosmos::TrustlessDeposit,
+        fact: BridgeFact,
+    },
 }
 
 fn resolve_corridor(
@@ -305,7 +322,10 @@ fn cosmos_wall_now() -> qlc_cosmos::proto::Timestamp {
     }
 }
 
-pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<DepositPlan, ApiError> {
+pub fn verify_deposit(
+    state: &BridgeState,
+    request: &DepositRequest,
+) -> Result<DepositPlan, ApiError> {
     let (tier, network, corridor) = resolve_corridor(state, &request.proof)?;
     let kind = match (tier, network, &request.proof) {
         (Tier::Federated, _, DepositProof::Federated(env)) => PlanKind::Federated(env.clone()),
@@ -318,7 +338,11 @@ pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<D
                 if anchor.checkpoint.min_work.is_zero() || anchor.bridge_script.is_empty() {
                     return Err(ApiError::NoAnchor(Network::Bitcoin.id()));
                 }
-                (anchor.params, anchor.checkpoint.clone(), anchor.bridge_script.clone())
+                (
+                    anchor.params,
+                    anchor.checkpoint.clone(),
+                    anchor.bridge_script.clone(),
+                )
             };
             let chain = verify_chain(&material.headers, material.start_height, &params)
                 .map_err(ApiError::BitcoinSpv)?;
@@ -332,9 +356,20 @@ pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<D
                 &bridge_script,
             )
             .map_err(ApiError::BitcoinSpv)?;
-            PlanKind::Bitcoin { proven, fact: fact.clone() }
+            PlanKind::Bitcoin {
+                proven,
+                fact: fact.clone(),
+            }
         }
-        (Tier::ProofBacked, Network::Ethereum, DepositProof::Ethereum { update, deposit, fact }) => {
+        (
+            Tier::ProofBacked,
+            Network::Ethereum,
+            DepositProof::Ethereum {
+                update,
+                deposit,
+                fact,
+            },
+        ) => {
             let store = state
                 .ethereum_store
                 .as_ref()
@@ -342,7 +377,10 @@ pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<D
             let verifier = q_bls::Bls12381AggregateVerifier::new();
             let proven = qlc_ethereum::verify_trustless_deposit(store, update, deposit, &verifier)
                 .map_err(ApiError::EthereumVerify)?;
-            PlanKind::Ethereum { proven, fact: fact.clone() }
+            PlanKind::Ethereum {
+                proven,
+                fact: fact.clone(),
+            }
         }
         (
             Tier::ProofBacked,
@@ -369,7 +407,10 @@ pub fn verify_deposit(state: &BridgeState, request: &DepositRequest) -> Result<D
                 cosmos_wall_now(),
             )
             .map_err(ApiError::CosmosVerify)?;
-            PlanKind::Cosmos { proven, fact: fact.clone() }
+            PlanKind::Cosmos {
+                proven,
+                fact: fact.clone(),
+            }
         }
         _ => return Err(ApiError::ProofTierMismatch),
     };
@@ -455,9 +496,7 @@ mod tests {
 
     const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use q_airlock::SignerSig;
-    use q_codec::{
-        AssetId, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
-    };
+    use q_codec::{attest_context, AssetId, Direction, Recipient, SourceRef, FACT_VERSION};
     use q_federated::{derive_asset_id, SourceEndpoint};
     use q_gateway::OperatorSet;
     use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -475,7 +514,12 @@ mod tests {
     }
 
     fn empty_state(threshold: usize) -> BridgeState {
-        BridgeState::new(Gateway::new(DEST, DEST_ID, OperatorSet::new(threshold), 1_000_000_000_000))
+        BridgeState::new(Gateway::new(
+            DEST,
+            DEST_ID,
+            OperatorSet::new(threshold),
+            1_000_000_000_000,
+        ))
     }
 
     struct Op {
@@ -493,7 +537,13 @@ mod tests {
     }
 
     fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
-        let sig = ml_dsa::sign(&op.sk, &fact.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+        let sig = ml_dsa::sign(
+            &op.sk,
+            &fact.attest_preimage(DEST_ID),
+            &attest_context(&[0u8; 32]),
+            &[0u8; 32],
+        )
+        .unwrap();
         SignerSig {
             operator_id: op.id,
             signature: sig.to_vec(),
@@ -605,12 +655,21 @@ mod tests {
         };
         (
             material,
-            BitcoinAnchor { checkpoint, params: EASY, bridge_script: bridge.to_vec() },
+            BitcoinAnchor {
+                checkpoint,
+                params: EASY,
+                bridge_script: bridge.to_vec(),
+            },
             txid,
         )
     }
 
-    fn bitcoin_fact(asset: [u8; 16], txid: [u8; 32], recipient: [u8; 32], amount: u128) -> BridgeFact {
+    fn bitcoin_fact(
+        asset: [u8; 16],
+        txid: [u8; 32],
+        recipient: [u8; 32],
+        amount: u128,
+    ) -> BridgeFact {
         BridgeFact {
             version: FACT_VERSION,
             source_chain: Network::Bitcoin.id(),
@@ -731,18 +790,31 @@ mod tests {
             &mut state,
             Request::CreatePool(pool_request(Network::Polygon.id(), "GHO")),
         );
-        assert_eq!(again, Response::Error(ApiError::Pool(PoolError::DuplicatePool)));
+        assert_eq!(
+            again,
+            Response::Error(ApiError::Pool(PoolError::DuplicatePool))
+        );
     }
 
     #[test]
     fn listing_by_an_unknown_network_is_an_error_and_listing_all_returns_the_seed_set() {
-        let mut state = BridgeState::seeded(Gateway::new(DEST, DEST_ID, OperatorSet::new(0), 1_000_000_000_000));
+        let mut state = BridgeState::seeded(Gateway::new(
+            DEST,
+            DEST_ID,
+            OperatorSet::new(0),
+            1_000_000_000_000,
+        ));
         let bad = handle(
             &mut state,
-            Request::ListPools(ListPoolsRequest { network_id: Some(44) }),
+            Request::ListPools(ListPoolsRequest {
+                network_id: Some(44),
+            }),
         );
         assert_eq!(bad, Response::Error(ApiError::UnknownNetwork(44)));
-        match handle(&mut state, Request::ListPools(ListPoolsRequest { network_id: None })) {
+        match handle(
+            &mut state,
+            Request::ListPools(ListPoolsRequest { network_id: None }),
+        ) {
             Response::Pools(pools) => assert_eq!(pools.len(), state.pools.len()),
             other => panic!("expected Pools, got {:?}", other),
         }
@@ -764,14 +836,20 @@ mod tests {
             other => panic!("expected PoolCreated, got {:?}", other),
         };
         for op in &ops {
-            state
-                .sources
-                .declare(Network::Solana.id(), op.id, SourceEndpoint([0x10 + op.id as u8; 32]));
+            state.sources.declare(
+                Network::Solana.id(),
+                op.id,
+                SourceEndpoint([0x10 + op.id as u8; 32]),
+            );
         }
         let fact = federated_fact(view.asset_id, [0x11; 32]);
         let env = AttestationEnvelope {
             fact: fact.clone(),
-            signatures: vec![attest(&ops[0], &fact), attest(&ops[1], &fact), attest(&ops[2], &fact)],
+            signatures: vec![
+                attest(&ops[0], &fact),
+                attest(&ops[1], &fact),
+                attest(&ops[2], &fact),
+            ],
         };
         let response = handle(
             &mut state,
@@ -807,11 +885,21 @@ mod tests {
 
     #[test]
     fn every_seeded_asset_routes_through_deposit_admission_without_a_routing_error() {
-        let mut state = BridgeState::seeded(Gateway::new(DEST, DEST_ID, OperatorSet::new(1), 1_000_000_000_000));
+        let mut state = BridgeState::seeded(Gateway::new(
+            DEST,
+            DEST_ID,
+            OperatorSet::new(1),
+            1_000_000_000_000,
+        ));
         let mut checked = 0usize;
         for record in q_assets::ASSETS {
-            let Some(network) = record.id.origin() else { continue };
-            let identifier = record.id.identifier().expect("a foreign asset carries an identifier");
+            let Some(network) = record.id.origin() else {
+                continue;
+            };
+            let identifier = record
+                .id
+                .identifier()
+                .expect("a foreign asset carries an identifier");
             let asset_id = derive_asset_id(network, identifier).0;
             let fact = BridgeFact {
                 version: FACT_VERSION,
@@ -828,7 +916,10 @@ mod tests {
                 observed_height: 900_000,
                 expiry_height: 1_800_000,
             };
-            let env = AttestationEnvelope { fact, signatures: vec![] };
+            let env = AttestationEnvelope {
+                fact,
+                signatures: vec![],
+            };
             let response = handle(
                 &mut state,
                 Request::SubmitDeposit(DepositRequest {
@@ -849,7 +940,11 @@ mod tests {
             );
             checked += 1;
         }
-        assert!(checked >= 150, "expected every seeded foreign asset to route, checked {}", checked);
+        assert!(
+            checked >= 150,
+            "expected every seeded foreign asset to route, checked {}",
+            checked
+        );
     }
 
     #[test]
@@ -884,7 +979,10 @@ mod tests {
         );
         match status {
             Response::Status(view) => {
-                assert!(view.minted, "the server-verified admission binds the reference");
+                assert!(
+                    view.minted,
+                    "the server-verified admission binds the reference"
+                );
                 assert_eq!(view.asset_minted_total, 250_000);
             }
             other => panic!("expected Status, got {:?}", other),
@@ -1156,7 +1254,11 @@ mod tests {
         p
     }
 
-    fn eth_aggregate(secrets: &[BlsSecretKey], participation: &[bool], root: &[u8; 32]) -> BlsSignature {
+    fn eth_aggregate(
+        secrets: &[BlsSecretKey],
+        participation: &[bool],
+        root: &[u8; 32],
+    ) -> BlsSignature {
         let mut sigs = Vec::new();
         for (i, present) in participation.iter().enumerate() {
             if *present {
@@ -1208,8 +1310,8 @@ mod tests {
     ) -> (LightClientStore, LightClientUpdate, EthDepositProof) {
         let mut cfg = eth_config::ethereum();
         cfg.deposit_contract = [
-            0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x71, 0x82, 0x93, 0xa4,
-            0xb5, 0xc6, 0xd7, 0xe8, 0xf9, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e,
+            0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x71, 0x82, 0x93, 0xa4, 0xb5, 0xc6, 0xd7, 0xe8,
+            0xf9, 0x0a, 0x1b, 0x2c, 0x3d, 0x4e,
         ];
         let (committee, secrets) = eth_committee(0x11);
 
@@ -1244,8 +1346,11 @@ mod tests {
         let execution_branch: Vec<[u8; 32]> = (0..EXECUTION_RECEIPTS_DEPTH)
             .map(|i| [0xe0 + i as u8; 32])
             .collect();
-        let body_root =
-            ssz::merkle_root_from_branch(&receipts_root, &execution_branch, EXECUTION_RECEIPTS_INDEX);
+        let body_root = ssz::merkle_root_from_branch(
+            &receipts_root,
+            &execution_branch,
+            EXECUTION_RECEIPTS_INDEX,
+        );
 
         let finalized_header = BeaconBlockHeader {
             slot: ETH_PERIOD * ETH_PERIOD_SLOTS + 40,
@@ -1281,8 +1386,11 @@ mod tests {
 
         let participation = eth_full_participation();
         let fork_version = cfg.fork_version_at_slot(ETH_SIG_SLOT);
-        let domain =
-            compute_domain(DOMAIN_SYNC_COMMITTEE, fork_version.0, &cfg.genesis_validators_root);
+        let domain = compute_domain(
+            DOMAIN_SYNC_COMMITTEE,
+            fork_version.0,
+            &cfg.genesis_validators_root,
+        );
         let signing_root = compute_signing_root(&attested_header.hash_tree_root(), &domain);
         let signature = eth_aggregate(&secrets, &participation, &signing_root);
 
@@ -1355,7 +1463,12 @@ mod tests {
         )
         .expect("the anchored material verifies");
         state.set_ethereum_anchor(store);
-        let fact = ethereum_fact(view.asset_id, proven.source_ref(), proven.amount(), recipient);
+        let fact = ethereum_fact(
+            view.asset_id,
+            proven.source_ref(),
+            proven.amount(),
+            recipient,
+        );
         let response = handle(
             &mut state,
             Request::SubmitDeposit(DepositRequest {
@@ -1481,8 +1594,10 @@ mod tests {
             cosmos_keyed(4, 25),
         ];
         let set = ValidatorSet::new(vs.iter().map(|k| k.info).collect());
-        let (app_hash, proof) =
-            qlc_cosmos::proof::wrap_store_layer(cosmos_deposit_proof(recipient, asset, amount), b"bridge");
+        let (app_hash, proof) = qlc_cosmos::proof::wrap_store_layer(
+            cosmos_deposit_proof(recipient, asset, amount),
+            b"bridge",
+        );
         let header = Header {
             version_block: 11,
             version_app: 0,
@@ -1606,7 +1721,12 @@ mod tests {
         )
         .expect("the anchored material verifies");
         state.set_cosmos_anchor(anchor);
-        let fact = cosmos_fact(view.asset_id, proven.source_ref(), proven.amount(), recipient);
+        let fact = cosmos_fact(
+            view.asset_id,
+            proven.source_ref(),
+            proven.amount(),
+            recipient,
+        );
         let response = handle(
             &mut state,
             Request::SubmitDeposit(DepositRequest {

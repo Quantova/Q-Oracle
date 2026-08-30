@@ -135,7 +135,10 @@ mod tests {
     fn the_two_kinds_carry_the_two_tags() {
         assert_eq!(PqArtifact::MlDsaAttestation.tag(), 0x01);
         assert_eq!(PqArtifact::HashStark.tag(), 0x02);
-        assert_ne!(PqArtifact::MlDsaAttestation.tag(), PqArtifact::HashStark.tag());
+        assert_ne!(
+            PqArtifact::MlDsaAttestation.tag(),
+            PqArtifact::HashStark.tag()
+        );
     }
 
     #[test]

@@ -135,7 +135,10 @@ fn decode_frame(frame: &[u8]) -> Result<ExitEvent, ExitError> {
                 deadline: u64_at(b, 137),
             },
         }),
-        KIND_SETTLE => Ok(ExitEvent::Settle { index, foreign_ref: arr32(b, 0) }),
+        KIND_SETTLE => Ok(ExitEvent::Settle {
+            index,
+            foreign_ref: arr32(b, 0),
+        }),
         KIND_SLASH => Ok(ExitEvent::Slash { index }),
         _ => Err(ExitError::PersistFailed),
     }
@@ -199,7 +202,9 @@ impl PersistentJournal {
         let (events, torn) = match store.load().map_err(|_| ExitError::PersistFailed)? {
             Some(bytes) => load_frames(&bytes)?,
             None => {
-                store.save(&header()).map_err(|_| ExitError::PersistFailed)?;
+                store
+                    .save(&header())
+                    .map_err(|_| ExitError::PersistFailed)?;
                 (Vec::new(), false)
             }
         };
@@ -250,7 +255,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         let mut path = std::env::temp_dir();
-        path.push(format!("q-oracle-journal-{tag}-{}-{nanos}.jrn", std::process::id()));
+        path.push(format!(
+            "q-oracle-journal-{tag}-{}-{nanos}.jrn",
+            std::process::id()
+        ));
         path
     }
 
@@ -273,8 +281,14 @@ mod tests {
     #[test]
     fn every_event_round_trips_through_a_frame() {
         for event in [
-            ExitEvent::Open { index: 0, exit: an_exit() },
-            ExitEvent::Settle { index: 4, foreign_ref: [0x77; 32] },
+            ExitEvent::Open {
+                index: 0,
+                exit: an_exit(),
+            },
+            ExitEvent::Settle {
+                index: 4,
+                foreign_ref: [0x77; 32],
+            },
             ExitEvent::Slash { index: 9 },
         ] {
             let frame = frame_of(&event);
@@ -287,13 +301,31 @@ mod tests {
         let path = temp_path("reopen");
         {
             let mut j = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
-            j.append(&ExitEvent::Open { index: 0, exit: an_exit() }).unwrap();
-            j.append(&ExitEvent::Open { index: 1, exit: an_exit() }).unwrap();
-            j.append(&ExitEvent::Settle { index: 0, foreign_ref: [0x77; 32] }).unwrap();
+            j.append(&ExitEvent::Open {
+                index: 0,
+                exit: an_exit(),
+            })
+            .unwrap();
+            j.append(&ExitEvent::Open {
+                index: 1,
+                exit: an_exit(),
+            })
+            .unwrap();
+            j.append(&ExitEvent::Settle {
+                index: 0,
+                foreign_ref: [0x77; 32],
+            })
+            .unwrap();
         }
         let reopened = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
         assert_eq!(reopened.len(), 3);
-        assert_eq!(reopened.events()[2], ExitEvent::Settle { index: 0, foreign_ref: [0x77; 32] });
+        assert_eq!(
+            reopened.events()[2],
+            ExitEvent::Settle {
+                index: 0,
+                foreign_ref: [0x77; 32]
+            }
+        );
         std::fs::remove_file(&path).ok();
     }
 
@@ -302,7 +334,11 @@ mod tests {
         let path = temp_path("torn");
         {
             let mut j = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
-            j.append(&ExitEvent::Open { index: 0, exit: an_exit() }).unwrap();
+            j.append(&ExitEvent::Open {
+                index: 0,
+                exit: an_exit(),
+            })
+            .unwrap();
             j.append(&ExitEvent::Slash { index: 0 }).unwrap();
         }
         let mut raw = std::fs::read(&path).unwrap();
@@ -310,9 +346,17 @@ mod tests {
         std::fs::write(&path, &raw).unwrap();
 
         let reopened = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
-        assert_eq!(reopened.len(), 2, "the torn partial frame is dropped, not counted");
+        assert_eq!(
+            reopened.len(),
+            2,
+            "the torn partial frame is dropped, not counted"
+        );
         let compacted = std::fs::read(&path).unwrap();
-        assert_eq!(compacted.len(), HEADER_LEN + 2 * FRAME_LEN, "open compacts the torn tail away");
+        assert_eq!(
+            compacted.len(),
+            HEADER_LEN + 2 * FRAME_LEN,
+            "open compacts the torn tail away"
+        );
         std::fs::remove_file(&path).ok();
     }
 
@@ -321,7 +365,11 @@ mod tests {
         let path = temp_path("badtag");
         {
             let mut j = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
-            j.append(&ExitEvent::Open { index: 0, exit: an_exit() }).unwrap();
+            j.append(&ExitEvent::Open {
+                index: 0,
+                exit: an_exit(),
+            })
+            .unwrap();
         }
         let mut raw = std::fs::read(&path).unwrap();
         let last = raw.len() - 1;

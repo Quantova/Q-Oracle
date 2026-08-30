@@ -288,9 +288,12 @@ impl Pkcs11Module for SoftwareHsm {
         }
         let handle = self.next_session.get();
         self.next_session.set(handle + 1);
-        self.sessions
-            .borrow_mut()
-            .insert(handle, TokenSession { authenticated: false });
+        self.sessions.borrow_mut().insert(
+            handle,
+            TokenSession {
+                authenticated: false,
+            },
+        );
         Ok(handle)
     }
 
@@ -522,7 +525,12 @@ mod tests {
 
         assert_eq!(signer.backend.module.sign_calls.get(), 0);
         let sig = signer.sign(b"observed lock on the source chain", CTX);
-        assert!(ml_dsa::verify(&pk, b"observed lock on the source chain", &sig, CTX));
+        assert!(ml_dsa::verify(
+            &pk,
+            b"observed lock on the source chain",
+            &sig,
+            CTX
+        ));
         assert_eq!(signer.backend.module.sign_calls.get(), 1);
     }
 

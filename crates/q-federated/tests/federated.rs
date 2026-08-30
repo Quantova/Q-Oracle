@@ -4,9 +4,7 @@
 use std::collections::BTreeSet;
 
 use q_airlock::{parse, Artifact, AttestationEnvelope, SignerSig};
-use q_codec::{
-    AssetId, BridgeFact, Direction, Recipient, SourceRef, attest_context, FACT_VERSION,
-};
+use q_codec::{attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
 use q_federated::{
     admit, corridors, find, install, Corridor, FederatedError, SourceEndpoint, SourceRegistry,
     Tier, TrustGrade, AVALANCHE, BNB_CHAIN, LITECOIN, POLYGON, SOLANA, TRON, ZCASH,
@@ -62,7 +60,13 @@ fn deposit(c: &Corridor, source_ref: [u8; 32], amount: u128) -> BridgeFact {
 }
 
 fn attest(op: &Op, f: &BridgeFact) -> SignerSig {
-    let sig = ml_dsa::sign(&op.sk, &f.attest_preimage(DEST_ID), &attest_context(&[0u8; 32]), &[0u8; 32]).unwrap();
+    let sig = ml_dsa::sign(
+        &op.sk,
+        &f.attest_preimage(DEST_ID),
+        &attest_context(&[0u8; 32]),
+        &[0u8; 32],
+    )
+    .unwrap();
     SignerSig {
         operator_id: op.id,
         signature: sig.to_vec(),
@@ -111,7 +115,8 @@ fn a_distinct_signer_quorum_over_the_canonical_fact_mints() {
 fn a_wide_two_thirds_corridor_quorum_holds() {
     let ops: Vec<Op> = (0..9).map(mk).collect();
     let mut gw = gateway(&ops, 3);
-    gw.set_corridor_quorum(SOLANA, 6).expect("two thirds is a wide margin");
+    gw.set_corridor_quorum(SOLANA, 6)
+        .expect("two thirds is a wide margin");
     let sources = independent_sources(SOLANA, &ops);
     let c = find(SOLANA).unwrap();
     let f = deposit(&c, [0x12; 32], 500);
@@ -119,12 +124,17 @@ fn a_wide_two_thirds_corridor_quorum_holds() {
     let five: Vec<&Op> = ops[0..5].iter().collect();
     assert_eq!(
         admit(&mut gw, &c, &sources, &envelope(&five, &f)),
-        Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 5, need: 6 }))
+        Err(FederatedError::Gateway(GatewayError::BelowThreshold {
+            got: 5,
+            need: 6
+        }))
     );
 
     let six: Vec<&Op> = ops[0..6].iter().collect();
     assert_eq!(
-        admit(&mut gw, &c, &sources, &envelope(&six, &f)).expect("wide margin mints").amount,
+        admit(&mut gw, &c, &sources, &envelope(&six, &f))
+            .expect("wide margin mints")
+            .amount,
         500
     );
 }
@@ -140,7 +150,10 @@ fn a_sub_quorum_does_not_mint() {
 
     assert_eq!(
         admit(&mut gw, &c, &sources, &env),
-        Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 2, need: 3 }))
+        Err(FederatedError::Gateway(GatewayError::BelowThreshold {
+            got: 2,
+            need: 3
+        }))
     );
     assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
 }
@@ -236,7 +249,10 @@ fn an_operator_on_a_shared_source_is_distinguishable_from_independent_sources() 
     let mut gw_shared = gateway(&ops, 3);
     assert_eq!(
         admit(&mut gw_shared, &c, &shared, &env),
-        Err(FederatedError::CorrelatedSources { independent: 2, signers: 3 })
+        Err(FederatedError::CorrelatedSources {
+            independent: 2,
+            signers: 3
+        })
     );
     assert_eq!(gw_shared.minted_of_asset(&c.origin_asset.0), 0);
 }
@@ -266,7 +282,10 @@ fn only_an_ml_dsa_attestation_over_the_canonical_preimage_counts() {
 
     assert_eq!(
         admit(&mut gw, &c, &sources, &env),
-        Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 2, need: 3 }))
+        Err(FederatedError::Gateway(GatewayError::BelowThreshold {
+            got: 2,
+            need: 3
+        }))
     );
     assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
     assert!(!c.tier.is_proof_backed_tier());
@@ -295,14 +314,24 @@ fn assets_are_origin_tagged_per_corridor() {
     let ltc = find(LITECOIN).unwrap();
     let ltc_sources = independent_sources(LITECOIN, &ops);
     let ltc_fact = deposit(&ltc, [0x18; 32], 500);
-    let ltc_receipt = admit(&mut gw, &ltc, &ltc_sources, &envelope(&[&ops[0], &ops[1], &ops[2]], &ltc_fact))
-        .expect("litecoin mints");
+    let ltc_receipt = admit(
+        &mut gw,
+        &ltc,
+        &ltc_sources,
+        &envelope(&[&ops[0], &ops[1], &ops[2]], &ltc_fact),
+    )
+    .expect("litecoin mints");
 
     let zec = find(ZCASH).unwrap();
     let zec_sources = independent_sources(ZCASH, &ops);
     let zec_fact = deposit(&zec, [0x19; 32], 700);
-    let zec_receipt = admit(&mut gw, &zec, &zec_sources, &envelope(&[&ops[0], &ops[1], &ops[2]], &zec_fact))
-        .expect("zcash mints");
+    let zec_receipt = admit(
+        &mut gw,
+        &zec,
+        &zec_sources,
+        &envelope(&[&ops[0], &ops[1], &ops[2]], &zec_fact),
+    )
+    .expect("zcash mints");
 
     assert_eq!(&ltc_receipt.asset_id[0..4], &LITECOIN.to_le_bytes());
     assert_eq!(&zec_receipt.asset_id[0..4], &ZCASH.to_le_bytes());
@@ -318,13 +347,23 @@ fn caps_are_enforced_in_base_units_never_usd() {
     let sources = independent_sources(SOLANA, &ops);
 
     let first = deposit(&c, [0x1a; 32], 600);
-    admit(&mut gw, &c, &sources, &envelope(&[&ops[0], &ops[1], &ops[2]], &first))
-        .expect("first mint under the base-unit cap");
+    admit(
+        &mut gw,
+        &c,
+        &sources,
+        &envelope(&[&ops[0], &ops[1], &ops[2]], &first),
+    )
+    .expect("first mint under the base-unit cap");
     assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 600);
 
     let over = deposit(&c, [0x1b; 32], 600);
     assert_eq!(
-        admit(&mut gw, &c, &sources, &envelope(&[&ops[0], &ops[1], &ops[2]], &over)),
+        admit(
+            &mut gw,
+            &c,
+            &sources,
+            &envelope(&[&ops[0], &ops[1], &ops[2]], &over)
+        ),
         Err(FederatedError::Gateway(GatewayError::AssetCapExceeded {
             minted: 600,
             cap: 1_000,
@@ -352,10 +391,20 @@ fn each_corridor_watches_its_own_independent_source() {
     let sol_fact = deposit(&sol, [0x1c; 32], 500);
     let trx_fact = deposit(&trx, [0x1d; 32], 400);
 
-    admit(&mut gw, &sol, &sol_sources, &envelope(&[&ops[0], &ops[1], &ops[2]], &sol_fact))
-        .expect("solana corridor mints from its own source");
-    admit(&mut gw, &trx, &trx_sources, &envelope(&[&ops[0], &ops[1], &ops[2]], &trx_fact))
-        .expect("tron corridor mints from its own source");
+    admit(
+        &mut gw,
+        &sol,
+        &sol_sources,
+        &envelope(&[&ops[0], &ops[1], &ops[2]], &sol_fact),
+    )
+    .expect("solana corridor mints from its own source");
+    admit(
+        &mut gw,
+        &trx,
+        &trx_sources,
+        &envelope(&[&ops[0], &ops[1], &ops[2]], &trx_fact),
+    )
+    .expect("tron corridor mints from its own source");
 
     assert_eq!(gw.minted_of_asset(&sol.origin_asset.0), 500);
     assert_eq!(gw.minted_of_asset(&trx.origin_asset.0), 400);
@@ -407,7 +456,10 @@ fn a_sub_quorum_does_not_mint_for_bnb_chain_polygon_and_avalanche() {
 
         assert_eq!(
             admit(&mut gw, &c, &sources, &env),
-            Err(FederatedError::Gateway(GatewayError::BelowThreshold { got: 2, need: 3 })),
+            Err(FederatedError::Gateway(GatewayError::BelowThreshold {
+                got: 2,
+                need: 3
+            })),
             "{} must refuse a sub quorum",
             c.name
         );
@@ -430,7 +482,10 @@ fn a_correlated_source_quorum_is_refused_for_bnb_chain_polygon_and_avalanche() {
 
         assert_eq!(
             admit(&mut gw, &c, &sources, &env),
-            Err(FederatedError::CorrelatedSources { independent: 2, signers: 3 }),
+            Err(FederatedError::CorrelatedSources {
+                independent: 2,
+                signers: 3
+            }),
             "{} must refuse a correlated quorum before any mint",
             c.name
         );

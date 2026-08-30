@@ -272,6 +272,9 @@ mod tests {
             fact: fact(),
             signatures: vec![],
         };
-        assert!(matches!(parse(&empty.encode()), Err(AirlockError::NonCanonical)));
+        assert!(matches!(
+            parse(&empty.encode()),
+            Err(AirlockError::NonCanonical)
+        ));
     }
 }

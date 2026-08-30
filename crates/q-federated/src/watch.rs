@@ -99,7 +99,10 @@ mod tests {
 
     fn own_node(chain: u32, lock: ObservedLock) -> WatcherSet {
         let mut set = WatcherSet::new();
-        set.attach(Box::new(NodeView { chain, locks: vec![lock] }));
+        set.attach(Box::new(NodeView {
+            chain,
+            locks: vec![lock],
+        }));
         set
     }
 
@@ -115,7 +118,12 @@ mod tests {
         }
     }
 
-    fn feed_for(id: u32, c: &Corridor, source_ref: [u8; 32], amount: u128) -> OperatorFeed<SoftSigner> {
+    fn feed_for(
+        id: u32,
+        c: &Corridor,
+        source_ref: [u8; 32],
+        amount: u128,
+    ) -> OperatorFeed<SoftSigner> {
         let signer = SoftSigner::from_seed(id, &seed_for(id));
         let mut operator = Operator::new(signer);
         operator.configure_corridor(CorridorContext {
@@ -126,7 +134,10 @@ mod tests {
             required_confirmations: c.confirmation_depth,
             era: [0x11u8; 32],
         });
-        OperatorFeed::new(operator, own_node(c.chain_id, lock_for(c, source_ref, amount)))
+        OperatorFeed::new(
+            operator,
+            own_node(c.chain_id, lock_for(c, source_ref, amount)),
+        )
     }
 
     fn gateway(ids: &[u32], threshold: usize) -> Gateway {
@@ -182,7 +193,10 @@ mod tests {
 
         assert_eq!(
             watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds),
-            Err(WatchError::NoQuorumObserved { distinct: 2, threshold: 3 })
+            Err(WatchError::NoQuorumObserved {
+                distinct: 2,
+                threshold: 3
+            })
         );
         assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 0);
     }

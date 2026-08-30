@@ -35,7 +35,13 @@ fn tier_message(source: u32, proposed: u8) -> Vec<u8> {
 }
 
 fn sign_tier(op: &Signer, source: u32, proposed: u8) -> SignerSig {
-    let sig = ml_dsa::sign(&op.sk, &tier_message(source, proposed), TIER_DOMAIN, &[0u8; 32]).unwrap();
+    let sig = ml_dsa::sign(
+        &op.sk,
+        &tier_message(source, proposed),
+        TIER_DOMAIN,
+        &[0u8; 32],
+    )
+    .unwrap();
     SignerSig {
         operator_id: op.id,
         signature: sig.to_vec(),
@@ -65,12 +71,20 @@ fn governance_quorum_upgrades_the_tier_step_by_step() {
 
     assert_eq!(gw.corridor_tier(SOURCE), Some(1));
 
-    let up_two: Vec<SignerSig> = governance[0..3].iter().map(|g| sign_tier(g, SOURCE, 2)).collect();
-    gw.set_corridor_tier(SOURCE, 2, &up_two).expect("governance upgrade to two is accepted");
+    let up_two: Vec<SignerSig> = governance[0..3]
+        .iter()
+        .map(|g| sign_tier(g, SOURCE, 2))
+        .collect();
+    gw.set_corridor_tier(SOURCE, 2, &up_two)
+        .expect("governance upgrade to two is accepted");
     assert_eq!(gw.corridor_tier(SOURCE), Some(2));
 
-    let up_three: Vec<SignerSig> = governance[0..3].iter().map(|g| sign_tier(g, SOURCE, 3)).collect();
-    gw.set_corridor_tier(SOURCE, 3, &up_three).expect("governance upgrade to three is accepted");
+    let up_three: Vec<SignerSig> = governance[0..3]
+        .iter()
+        .map(|g| sign_tier(g, SOURCE, 3))
+        .collect();
+    gw.set_corridor_tier(SOURCE, 3, &up_three)
+        .expect("governance upgrade to three is accepted");
     assert_eq!(gw.corridor_tier(SOURCE), Some(3));
 }
 
@@ -80,10 +94,17 @@ fn a_tier_downgrade_is_rejected() {
     let governance: Vec<Signer> = (10..14).map(|i| mk(i, 0x6E)).collect();
     let mut gw = build(&operators, &governance, 3);
 
-    let up_three: Vec<SignerSig> = governance[0..3].iter().map(|g| sign_tier(g, SOURCE, 3)).collect();
-    gw.set_corridor_tier(SOURCE, 3, &up_three).expect("first raise to three");
+    let up_three: Vec<SignerSig> = governance[0..3]
+        .iter()
+        .map(|g| sign_tier(g, SOURCE, 3))
+        .collect();
+    gw.set_corridor_tier(SOURCE, 3, &up_three)
+        .expect("first raise to three");
 
-    let down: Vec<SignerSig> = governance[0..3].iter().map(|g| sign_tier(g, SOURCE, 2)).collect();
+    let down: Vec<SignerSig> = governance[0..3]
+        .iter()
+        .map(|g| sign_tier(g, SOURCE, 2))
+        .collect();
     assert_eq!(
         gw.set_corridor_tier(SOURCE, 2, &down),
         Err(GatewayError::TierDowngrade { from: 3, to: 2 })
@@ -97,10 +118,17 @@ fn a_sideways_reassert_of_the_same_tier_is_rejected() {
     let governance: Vec<Signer> = (10..14).map(|i| mk(i, 0x6E)).collect();
     let mut gw = build(&operators, &governance, 3);
 
-    let up_two: Vec<SignerSig> = governance[0..3].iter().map(|g| sign_tier(g, SOURCE, 2)).collect();
-    gw.set_corridor_tier(SOURCE, 2, &up_two).expect("raise to two");
+    let up_two: Vec<SignerSig> = governance[0..3]
+        .iter()
+        .map(|g| sign_tier(g, SOURCE, 2))
+        .collect();
+    gw.set_corridor_tier(SOURCE, 2, &up_two)
+        .expect("raise to two");
 
-    let same: Vec<SignerSig> = governance[0..3].iter().map(|g| sign_tier(g, SOURCE, 2)).collect();
+    let same: Vec<SignerSig> = governance[0..3]
+        .iter()
+        .map(|g| sign_tier(g, SOURCE, 2))
+        .collect();
     assert_eq!(
         gw.set_corridor_tier(SOURCE, 2, &same),
         Err(GatewayError::TierDowngrade { from: 2, to: 2 })
@@ -130,7 +158,10 @@ fn a_short_governance_quorum_cannot_move_the_tier() {
     let governance: Vec<Signer> = (10..14).map(|i| mk(i, 0x6E)).collect();
     let mut gw = build(&operators, &governance, 3);
 
-    let two_of_three: Vec<SignerSig> = governance[0..2].iter().map(|g| sign_tier(g, SOURCE, 2)).collect();
+    let two_of_three: Vec<SignerSig> = governance[0..2]
+        .iter()
+        .map(|g| sign_tier(g, SOURCE, 2))
+        .collect();
     assert_eq!(
         gw.set_corridor_tier(SOURCE, 2, &two_of_three),
         Err(GatewayError::BelowThreshold { got: 2, need: 3 })
@@ -148,7 +179,10 @@ fn a_gateway_with_no_governance_set_upgrades_nothing() {
     gw.register_corridor(SOURCE, 6);
 
     let governance: Vec<Signer> = (10..14).map(|i| mk(i, 0x6E)).collect();
-    let sigs: Vec<SignerSig> = governance[0..3].iter().map(|g| sign_tier(g, SOURCE, 2)).collect();
+    let sigs: Vec<SignerSig> = governance[0..3]
+        .iter()
+        .map(|g| sign_tier(g, SOURCE, 2))
+        .collect();
     assert_eq!(
         gw.set_corridor_tier(SOURCE, 2, &sigs),
         Err(GatewayError::NoGovernanceSet)

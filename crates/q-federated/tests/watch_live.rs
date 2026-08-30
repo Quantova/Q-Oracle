@@ -1,7 +1,9 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use q_attestor::{CorridorContext, ObservedLock, Operator, SoftSigner, Watcher, WatcherError, WatcherSet};
+use q_attestor::{
+    CorridorContext, ObservedLock, Operator, SoftSigner, Watcher, WatcherError, WatcherSet,
+};
 use q_federated::{
     find, install, watch_and_admit, Corridor, FederatedError, OperatorFeed, SourceEndpoint,
     SourceRegistry, WatchError, AVALANCHE, BNB_CHAIN, POLYGON,
@@ -42,7 +44,10 @@ impl Watcher for NodeView {
 
 fn own_node(chain: u32, lock: ObservedLock) -> WatcherSet {
     let mut set = WatcherSet::new();
-    set.attach(Box::new(NodeView { chain, locks: vec![lock] }));
+    set.attach(Box::new(NodeView {
+        chain,
+        locks: vec![lock],
+    }));
     set
 }
 
@@ -69,7 +74,10 @@ fn feed_for(id: u32, c: &Corridor, source_ref: [u8; 32], amount: u128) -> Operat
         required_confirmations: c.confirmation_depth,
         era: [0x11u8; 32],
     });
-    OperatorFeed::new(operator, own_node(c.chain_id, lock_for(c, source_ref, amount)))
+    OperatorFeed::new(
+        operator,
+        own_node(c.chain_id, lock_for(c, source_ref, amount)),
+    )
 }
 
 fn gateway(ids: &[u32], threshold: usize) -> Gateway {
@@ -136,7 +144,10 @@ fn a_sub_quorum_of_watchers_never_mints_for_each_new_corridor() {
 
         assert_eq!(
             watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds),
-            Err(WatchError::NoQuorumObserved { distinct: 2, threshold: 3 }),
+            Err(WatchError::NoQuorumObserved {
+                distinct: 2,
+                threshold: 3
+            }),
             "{} must not mint on a sub quorum of watchers",
             c.name
         );

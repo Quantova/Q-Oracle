@@ -16,7 +16,9 @@ fn secp256k1_der_signature() -> Vec<u8> {
 }
 
 fn ed25519_signature() -> Vec<u8> {
-    (0..64).map(|i| (i as u8).wrapping_mul(7).wrapping_add(1)).collect()
+    (0..64)
+        .map(|i| (i as u8).wrapping_mul(7).wrapping_add(1))
+        .collect()
 }
 
 fn secp256k1_uncompressed_public_key() -> Vec<u8> {
@@ -38,7 +40,9 @@ fn secp256k1_compressed_odd_public_key() -> Vec<u8> {
 }
 
 fn ed25519_public_key() -> Vec<u8> {
-    (0..32).map(|i| (i as u8).wrapping_mul(11).wrapping_add(0x40)).collect()
+    (0..32)
+        .map(|i| (i as u8).wrapping_mul(11).wrapping_add(0x40))
+        .collect()
 }
 
 fn bls12_381_g1_compressed() -> Vec<u8> {
@@ -66,11 +70,15 @@ fn tendermint_protobuf_header() -> Vec<u8> {
 }
 
 fn keccak256_root() -> Vec<u8> {
-    (0..32).map(|i| (i as u8).wrapping_mul(13).wrapping_add(0x91)).collect()
+    (0..32)
+        .map(|i| (i as u8).wrapping_mul(13).wrapping_add(0x91))
+        .collect()
 }
 
 fn blake2b_hash() -> Vec<u8> {
-    (0..64).map(|i| (i as u8).wrapping_mul(17).wrapping_add(0x2c)).collect()
+    (0..64)
+        .map(|i| (i as u8).wrapping_mul(17).wrapping_add(0x2c))
+        .collect()
 }
 
 fn merkle_root_leading_attestation_tag() -> Vec<u8> {
@@ -100,7 +108,10 @@ fn a_foreign_public_key_is_refused() {
     refused(&ed25519_public_key());
     refused(&bls12_381_g1_compressed());
     refused(&bls12_381_g2_compressed());
-    assert_eq!(admit(&secp256k1_uncompressed_public_key()), Err(Refused::Foreign));
+    assert_eq!(
+        admit(&secp256k1_uncompressed_public_key()),
+        Err(Refused::Foreign)
+    );
 }
 
 #[test]

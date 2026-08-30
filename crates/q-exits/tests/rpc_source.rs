@@ -32,7 +32,11 @@ const PARENT_GENESIS: u8 = 0;
 const PARENT_VALUE: u8 = 1;
 
 fn attesters() -> [Attester; 3] {
-    [Attester::new(1, 100), Attester::new(2, 100), Attester::new(3, 100)]
+    [
+        Attester::new(1, 100),
+        Attester::new(2, 100),
+        Attester::new(3, 100),
+    ]
 }
 
 fn committee(members: &[Attester]) -> qtv_attest::CommitteeCommitment {
@@ -88,19 +92,50 @@ fn header_at(height: u64, leaves: &[Vec<u8>]) -> Header {
     )
 }
 
-fn finalized_certificate(members: &[Attester], height: u64, block: Block, beacon: &Beacon) -> Certificate {
+fn finalized_certificate(
+    members: &[Attester],
+    height: u64,
+    block: Block,
+    beacon: &Beacon,
+) -> Certificate {
     let commitment = committee(members);
     let atts: Vec<_> = members
         .iter()
-        .map(|a| a.attest(CHAIN_ID, height, SLOT, 0, commitment.digest(), block, beacon))
+        .map(|a| {
+            a.attest(
+                CHAIN_ID,
+                height,
+                SLOT,
+                0,
+                commitment.digest(),
+                block,
+                beacon,
+            )
+        })
         .collect();
-    aggregate(CHAIN_ID, height, SLOT, block, &commitment, beacon, &atts, TAU)
-        .expect("a full committee finalizes")
+    aggregate(
+        CHAIN_ID,
+        height,
+        SLOT,
+        block,
+        &commitment,
+        beacon,
+        &atts,
+        TAU,
+    )
+    .expect("a full committee finalizes")
 }
 
 fn anchor(members: &[Attester], beacon: &Beacon) -> QuantovaAnchor {
-    QuantovaAnchor::from_config(CHAIN_ID, TAU, SLOT, BUDGET, *beacon.seed(), member_configs(members))
-        .expect("the pinned anchor is well formed")
+    QuantovaAnchor::from_config(
+        CHAIN_ID,
+        TAU,
+        SLOT,
+        BUDGET,
+        *beacon.seed(),
+        member_configs(members),
+    )
+    .expect("the pinned anchor is well formed")
 }
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -171,8 +206,16 @@ fn certificate_to_bytes(certificate: &Certificate) -> Vec<u8> {
     encoder.into_bytes()
 }
 
-fn burn_block_json(height: u64, header_bytes: &[u8], cert_bytes: &[u8], leaves: &[Vec<u8>]) -> String {
-    let events: Vec<String> = leaves.iter().map(|leaf| format!("\"{}\"", to_hex(leaf))).collect();
+fn burn_block_json(
+    height: u64,
+    header_bytes: &[u8],
+    cert_bytes: &[u8],
+    leaves: &[Vec<u8>],
+) -> String {
+    let events: Vec<String> = leaves
+        .iter()
+        .map(|leaf| format!("\"{}\"", to_hex(leaf)))
+        .collect();
     format!(
         "{{\"height\":{height},\"header_bytes\":\"{}\",\"certificate\":\"{}\",\"events\":[{}]}}",
         to_hex(header_bytes),
@@ -188,7 +231,13 @@ fn material() -> (Vec<u8>, Vec<u8>, Vec<Vec<u8>>, [Attester; 3], Beacon) {
     let header = header_at(HEIGHT, &leaves);
     let block = Block::new(HEIGHT, header.hash(), Parent::Genesis);
     let certificate = finalized_certificate(&members, HEIGHT, block, &beacon);
-    (to_bytes(&header), certificate_to_bytes(&certificate), leaves, members, beacon)
+    (
+        to_bytes(&header),
+        certificate_to_bytes(&certificate),
+        leaves,
+        members,
+        beacon,
+    )
 }
 
 fn clone_block(block: &FinalizedBlock) -> FinalizedBlock {
@@ -227,13 +276,22 @@ fn a_decoded_burn_block_reproduces_the_event_root_and_verifies() {
     assert_eq!(decoded.header_bytes, header_bytes);
     assert_eq!(decoded.events, leaves);
 
-    let source = OneBlock { head: HEIGHT, block: decoded };
+    let source = OneBlock {
+        head: HEIGHT,
+        block: decoded,
+    };
     let mut watcher = BurnWatcher::new(HEIGHT - 1);
     let proofs = watcher.poll(&source).expect("the poll assembles the burn");
-    assert_eq!(proofs.len(), 1, "the decoded block surfaces exactly one burn");
+    assert_eq!(
+        proofs.len(),
+        1,
+        "the decoded block surfaces exactly one burn"
+    );
 
     let anchor = anchor(&members, &beacon);
-    let burn = proofs[0].verify(&anchor).expect("the decoded proof verifies");
+    let burn = proofs[0]
+        .verify(&anchor)
+        .expect("the decoded proof verifies");
     assert_eq!(burn.burn_ref, BURN_REF);
     assert_eq!(burn.amount, AMOUNT);
     assert_eq!(burn.beneficiary, BENEFICIARY);
@@ -244,7 +302,11 @@ fn read_request(stream: &mut TcpStream) -> (String, String) {
     let mut reader = BufReader::new(stream.try_clone().expect("clone"));
     let mut request_line = String::new();
     reader.read_line(&mut request_line).ok();
-    let path = request_line.split_whitespace().nth(1).unwrap_or("").to_string();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("")
+        .to_string();
     let mut content_length = 0usize;
     loop {
         let mut line = String::new();
@@ -316,7 +378,12 @@ fn serve(block_json: String) -> u16 {
                     );
                 }
             } else {
-                respond(&mut stream, 404, "Not Found", "{\"error\":\"unknown_method\"}");
+                respond(
+                    &mut stream,
+                    404,
+                    "Not Found",
+                    "{\"error\":\"unknown_method\"}",
+                );
             }
         }
     });
@@ -333,16 +400,23 @@ fn the_rpc_source_polls_the_gateway_and_verifies_end_to_end() {
     assert_eq!(source.finalized_height().expect("head"), HEIGHT);
     assert_eq!(source.burn_heights_after(0).expect("heights"), vec![HEIGHT]);
     assert!(
-        source.finalized_block(HEIGHT - 1).expect("absent").is_none(),
+        source
+            .finalized_block(HEIGHT - 1)
+            .expect("absent")
+            .is_none(),
         "a non-burn height comes back as a not found"
     );
 
     let mut watcher = BurnWatcher::new(HEIGHT - 1);
-    let proofs = watcher.poll(&source).expect("the poll over the socket succeeds");
+    let proofs = watcher
+        .poll(&source)
+        .expect("the poll over the socket succeeds");
     assert_eq!(proofs.len(), 1);
 
     let anchor = anchor(&members, &beacon);
-    let burn = proofs[0].verify(&anchor).expect("the served proof verifies");
+    let burn = proofs[0]
+        .verify(&anchor)
+        .expect("the served proof verifies");
     assert_eq!(burn.burn_ref, BURN_REF);
     assert_eq!(burn.amount, AMOUNT);
     assert_eq!(burn.finalized_height, HEIGHT);

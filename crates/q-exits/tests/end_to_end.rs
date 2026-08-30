@@ -6,7 +6,9 @@ use q_exits::{
     MemberConfig, ProofOfBurn, QuantovaAnchor,
 };
 
-use qlc_bitcoin::{double_sha256, BlockHeader, Checkpoint, MerkleStep, NetworkParams, BITCOIN, U256};
+use qlc_bitcoin::{
+    double_sha256, BlockHeader, Checkpoint, MerkleStep, NetworkParams, BITCOIN, U256,
+};
 
 use qtv_attest::aggregate::aggregate;
 use qtv_attest::{Attester, Block, Certificate, Envelope, Parent};
@@ -32,7 +34,11 @@ const REQUIRED: u128 = 750;
 const USER_PAYOUT: u128 = 550;
 
 fn attesters() -> [Attester; 3] {
-    [Attester::new(1, 100), Attester::new(2, 100), Attester::new(3, 100)]
+    [
+        Attester::new(1, 100),
+        Attester::new(2, 100),
+        Attester::new(3, 100),
+    ]
 }
 
 fn committee(members: &[Attester]) -> qtv_attest::CommitteeCommitment {
@@ -88,10 +94,29 @@ fn finalized_certificate(members: &[Attester], block: Block, beacon: &Beacon) ->
     let commitment = committee(members);
     let atts: Vec<_> = members
         .iter()
-        .map(|a| a.attest(CHAIN_ID, HEIGHT, SLOT, 0, commitment.digest(), block, beacon))
+        .map(|a| {
+            a.attest(
+                CHAIN_ID,
+                HEIGHT,
+                SLOT,
+                0,
+                commitment.digest(),
+                block,
+                beacon,
+            )
+        })
         .collect();
-    aggregate(CHAIN_ID, HEIGHT, SLOT, block, &commitment, beacon, &atts, TAU)
-        .expect("a full committee finalizes")
+    aggregate(
+        CHAIN_ID,
+        HEIGHT,
+        SLOT,
+        block,
+        &commitment,
+        beacon,
+        &atts,
+        TAU,
+    )
+    .expect("a full committee finalizes")
 }
 
 fn anchor(members: &[Attester], beacon: &Beacon) -> QuantovaAnchor {
@@ -245,7 +270,14 @@ fn bitcoin_watcher(release: BitcoinReleaseProof) -> BitcoinPayoutWatcher {
         hash: release.headers[0].block_hash(),
         min_work: U256::ZERO,
     };
-    BitcoinPayoutWatcher::new(CORRIDOR, ASSET, EASY, checkpoint, EASY.confirmation_depth, vec![release])
+    BitcoinPayoutWatcher::new(
+        CORRIDOR,
+        ASSET,
+        EASY,
+        checkpoint,
+        EASY.confirmation_depth,
+        vec![release],
+    )
 }
 
 #[test]
@@ -254,7 +286,9 @@ fn opening_an_exit_locks_the_required_collateral() {
     let beacon = Beacon::genesis();
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
     assert_eq!(desk.locked_collateral(1), REQUIRED);
     assert_eq!(desk.free_collateral(1), 2_000 - REQUIRED);
     assert_eq!(desk.exit(id).unwrap().state, ExitState::Pending);
@@ -297,9 +331,15 @@ fn settling_within_the_window_against_a_bitcoin_payout_releases_the_collateral()
     let beacon = Beacon::genesis();
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
 
-    let watcher = bitcoin_watcher(release_around(release_tx(&BENEFICIARY, AMOUNT as u64, &BURN_REF)));
+    let watcher = bitcoin_watcher(release_around(release_tx(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
     let release = desk.settle(id, &watcher, 60).unwrap();
     assert_eq!(release.released, REQUIRED);
     assert_eq!(desk.locked_collateral(1), 0);
@@ -313,8 +353,14 @@ fn settling_after_the_window_is_refused() {
     let beacon = Beacon::genesis();
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
-    let watcher = bitcoin_watcher(release_around(release_tx(&BENEFICIARY, AMOUNT as u64, &BURN_REF)));
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
+    let watcher = bitcoin_watcher(release_around(release_tx(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
     assert_eq!(
         desk.settle(id, &watcher, 200),
         Err(ExitError::WindowExpired {
@@ -330,10 +376,19 @@ fn settle_refuses_when_the_watcher_cannot_prove_a_covering_payout() {
     let beacon = Beacon::genesis();
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
 
-    let watcher = bitcoin_watcher(release_around(release_tx(&[0x66; 32], AMOUNT as u64, &BURN_REF)));
-    assert_eq!(desk.settle(id, &watcher, 60), Err(ExitError::PayoutUnproven));
+    let watcher = bitcoin_watcher(release_around(release_tx(
+        &[0x66; 32],
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
+    assert_eq!(
+        desk.settle(id, &watcher, 60),
+        Err(ExitError::PayoutUnproven)
+    );
     assert_eq!(
         desk.locked_collateral(1),
         REQUIRED,
@@ -367,11 +422,16 @@ fn the_window_elapsing_then_slash_pays_the_user_the_premium() {
     let beacon = Beacon::genesis();
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
 
     let outcome = desk.slash(id, 200).unwrap();
     assert_eq!(outcome.user_payout, USER_PAYOUT);
-    assert!(outcome.user_payout > AMOUNT, "the user is made whole above the value burned");
+    assert!(
+        outcome.user_payout > AMOUNT,
+        "the user is made whole above the value burned"
+    );
     assert_eq!(outcome.remainder, REQUIRED - USER_PAYOUT);
     assert_eq!(outcome.beneficiary, BENEFICIARY);
     assert_eq!(desk.locked_collateral(1), 0);
@@ -385,7 +445,9 @@ fn slashing_before_the_deadline_is_refused() {
     let beacon = Beacon::genesis();
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    let id = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
     assert_eq!(
         desk.slash(id, 100),
         Err(ExitError::WindowOpen {
@@ -432,18 +494,32 @@ fn an_exit_bound_to_one_burn_cannot_settle_against_a_payout_for_another() {
     let beacon = Beacon::genesis();
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    let id_a = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
+    let id_a = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
 
-    let payout_for_b = bitcoin_watcher(release_around(release_tx(&BENEFICIARY, AMOUNT as u64, &BURN_REF_B)));
+    let payout_for_b = bitcoin_watcher(release_around(release_tx(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF_B,
+    )));
     assert_eq!(
         desk.settle(id_a, &payout_for_b, 60),
         Err(ExitError::PayoutUnproven),
         "a payout naming burn B cannot settle an exit bound to burn A"
     );
-    assert_eq!(desk.locked_collateral(1), REQUIRED, "the custody stays locked when the burn does not match");
+    assert_eq!(
+        desk.locked_collateral(1),
+        REQUIRED,
+        "the custody stays locked when the burn does not match"
+    );
     assert_eq!(desk.exit(id_a).unwrap().state, ExitState::Pending);
 
-    let payout_for_a = bitcoin_watcher(release_around(release_tx(&BENEFICIARY, AMOUNT as u64, &BURN_REF)));
+    let payout_for_a = bitcoin_watcher(release_around(release_tx(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
     let release = desk.settle(id_a, &payout_for_a, 60).unwrap();
     assert_eq!(release.released, REQUIRED);
     assert_eq!(desk.exit(id_a).unwrap().state, ExitState::Settled);
@@ -457,25 +533,56 @@ fn collateral_is_conserved_across_a_settle_and_a_slash() {
     let mut desk = desk();
     desk.register_vault(1, INITIAL);
 
-    let id_a = desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10).unwrap();
-    let id_b = desk.open_exit(&proof_of(&members, &beacon, BURN_REF_B), 1, 10).unwrap();
+    let id_a = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
+    let id_b = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF_B), 1, 10)
+        .unwrap();
     assert_eq!(desk.locked_collateral(1), 2 * REQUIRED);
-    assert_eq!(desk.free_collateral(1) + desk.locked_collateral(1), INITIAL, "nothing is seized yet");
+    assert_eq!(
+        desk.free_collateral(1) + desk.locked_collateral(1),
+        INITIAL,
+        "nothing is seized yet"
+    );
 
-    let payout_for_a = bitcoin_watcher(release_around(release_tx(&BENEFICIARY, AMOUNT as u64, &BURN_REF)));
+    let payout_for_a = bitcoin_watcher(release_around(release_tx(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
     let release = desk.settle(id_a, &payout_for_a, 60).unwrap();
     assert_eq!(release.released, REQUIRED);
-    assert_eq!(desk.free_collateral(1) + desk.locked_collateral(1), INITIAL, "a settle conserves custody");
+    assert_eq!(
+        desk.free_collateral(1) + desk.locked_collateral(1),
+        INITIAL,
+        "a settle conserves custody"
+    );
 
     let outcome = desk.slash(id_b, 200).unwrap();
     assert_eq!(outcome.user_payout, USER_PAYOUT);
-    assert_eq!(outcome.user_payout + outcome.remainder, REQUIRED, "the slash splits exactly the seized collateral");
+    assert_eq!(
+        outcome.user_payout + outcome.remainder,
+        REQUIRED,
+        "the slash splits exactly the seized collateral"
+    );
 
     let remaining = desk.free_collateral(1) + desk.locked_collateral(1);
     let seized = INITIAL - remaining;
-    assert_eq!(seized, REQUIRED, "only the slashed exit's collateral leaves custody");
-    assert_eq!(desk.locked_collateral(1), 0, "no collateral is left locked once both exits close");
-    assert_eq!(remaining + seized, INITIAL, "free + locked + seized is conserved across both lifecycles");
+    assert_eq!(
+        seized, REQUIRED,
+        "only the slashed exit's collateral leaves custody"
+    );
+    assert_eq!(
+        desk.locked_collateral(1),
+        0,
+        "no collateral is left locked once both exits close"
+    );
+    assert_eq!(
+        remaining + seized,
+        INITIAL,
+        "free + locked + seized is conserved across both lifecycles"
+    );
     assert_eq!(desk.exit(id_a).unwrap().state, ExitState::Settled);
     assert_eq!(desk.exit(id_b).unwrap().state, ExitState::Slashed);
 }
@@ -489,7 +596,15 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
     let block = Block::new(HEIGHT, header.hash(), Parent::Genesis);
     let commitment = committee(&members);
     let envelope = Envelope::new(HEIGHT, SLOT, block, &commitment);
-    let lone = members[0].attest(CHAIN_ID, HEIGHT, SLOT, 0, commitment.digest(), block, &beacon);
+    let lone = members[0].attest(
+        CHAIN_ID,
+        HEIGHT,
+        SLOT,
+        0,
+        commitment.digest(),
+        block,
+        &beacon,
+    );
     let thin = Certificate::new(envelope, vec![lone]);
     let proof = ProofOfBurn {
         header_bytes: to_bytes(&header),
