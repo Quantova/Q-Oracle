@@ -16,7 +16,7 @@ pub fn exit_ack_context(era: &[u8; 32]) -> Vec<u8> {
     ctx
 }
 pub const EXIT_FACT_VERSION: u8 = 1;
-pub const EXIT_FACT_ENCODED_LEN: usize = 106;
+pub const EXIT_FACT_ENCODED_LEN: usize = 138;
 pub const ARTIFACT_EXIT_ACK: u8 = 0x03;
 pub const ENVELOPE_VERSION: u8 = 1;
 
@@ -50,7 +50,8 @@ pub struct ExitDecision {
     pub dest_chain: u32,
     pub asset_id: [u8; 16],
     pub amount: u128,
-    pub beneficiary: [u8; 32],
+    pub holder: [u8; 32],
+    pub destination: [u8; 32],
     pub burn_ref: [u8; 32],
     pub outcome: ExitOutcome,
 }
@@ -63,20 +64,22 @@ impl ExitDecision {
             dest_chain,
             asset_id: statement.asset_id,
             amount: statement.amount,
-            beneficiary: statement.beneficiary,
+            holder: statement.holder,
+            destination: statement.destination,
             burn_ref: statement.burn_ref,
             outcome: ExitOutcome::Settle,
         }
     }
 
-    pub fn slash(statement: &ExitStatement, payout: u128, dest_chain: u32) -> ExitDecision {
+    pub fn slash(statement: &ExitStatement, dest_chain: u32) -> ExitDecision {
         ExitDecision {
             version: EXIT_FACT_VERSION,
             corridor: statement.corridor,
             dest_chain,
             asset_id: statement.asset_id,
-            amount: payout,
-            beneficiary: statement.beneficiary,
+            amount: statement.amount,
+            holder: statement.holder,
+            destination: statement.destination,
             burn_ref: statement.burn_ref,
             outcome: ExitOutcome::Slash,
         }
@@ -89,7 +92,8 @@ impl ExitDecision {
         out.extend_from_slice(&self.dest_chain.to_le_bytes());
         out.extend_from_slice(&self.asset_id);
         out.extend_from_slice(&self.amount.to_le_bytes());
-        out.extend_from_slice(&self.beneficiary);
+        out.extend_from_slice(&self.holder);
+        out.extend_from_slice(&self.destination);
         out.extend_from_slice(&self.burn_ref);
         out.push(self.outcome.tag());
         out
@@ -109,7 +113,8 @@ impl ExitDecision {
             && self.dest_chain != 0
             && self.amount != 0
             && self.asset_id != [0u8; 16]
-            && self.beneficiary != [0u8; 32]
+            && self.holder != [0u8; 32]
+            && self.destination != [0u8; 32]
             && self.burn_ref != [0u8; 32]
     }
 }
@@ -230,7 +235,8 @@ mod tests {
             corridor: 1,
             asset_id: [0xa1; 16],
             amount: 500,
-            beneficiary: [0x55; 32],
+            holder: [0x33; 32],
+            destination: [0x55; 32],
             burn_ref: [0x11; 32],
             finalized_height: 4_200_000,
         }
@@ -247,13 +253,16 @@ mod tests {
     }
 
     #[test]
-    fn a_slash_decision_carries_the_premium_payout() {
-        let d = ExitDecision::slash(&statement(), 550, 9000);
+    fn a_slash_decision_re_mints_the_original_burn_one_to_one() {
+        let d = ExitDecision::slash(&statement(), 9000);
         assert_eq!(d.outcome, ExitOutcome::Slash);
         assert_eq!(
-            d.amount, 550,
-            "the slash decision pays the premium above the burned value"
+            d.amount,
+            statement().amount,
+            "the slash re-mint equals the burned value with no premium"
         );
+        assert_eq!(d.holder, statement().holder);
+        assert_eq!(d.destination, statement().destination);
         assert!(d.well_formed());
     }
 
@@ -268,7 +277,7 @@ mod tests {
     #[test]
     fn the_outcome_tag_moves_the_encoding() {
         let settle = ExitDecision::settle(&statement(), 9000).encode();
-        let slash = ExitDecision::slash(&statement(), 500, 9000).encode();
+        let slash = ExitDecision::slash(&statement(), 9000).encode();
         assert_ne!(
             settle, slash,
             "the settle and slash outcomes encode to distinct bytes"
@@ -285,7 +294,8 @@ mod tests {
             dest_chain: 9000,
             asset_id: [0x3; 16],
             amount: 1_100_000,
-            beneficiary: [0x5; 32],
+            holder: [0x4; 32],
+            destination: [0x5; 32],
             burn_ref: [0x9; 32],
             outcome: ExitOutcome::Slash,
         };
@@ -310,7 +320,7 @@ mod tests {
         let mut seed = [0u8; 32];
         seed[0] = 7;
         let (pk, sk) = ml_dsa::keygen(&seed);
-        let decision = ExitDecision::slash(&statement(), 550, 9000);
+        let decision = ExitDecision::slash(&statement(), 9000);
         let chain_id = 0x0123_4567_89AB_CDEFu64;
         let signature = sign_decision(&sk, &decision, chain_id, &TEST_ERA)
             .expect("a well formed decision signs");

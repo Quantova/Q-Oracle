@@ -295,7 +295,8 @@ fn a_decoded_burn_block_reproduces_the_event_root_and_verifies() {
         .expect("the decoded proof verifies");
     assert_eq!(burn.burn_ref, BURN_REF);
     assert_eq!(burn.amount, AMOUNT);
-    assert_eq!(burn.beneficiary, BENEFICIARY);
+    assert_eq!(burn.holder, HOLDER);
+    assert_eq!(burn.destination, BENEFICIARY);
     assert_eq!(burn.finalized_height, HEIGHT);
 }
 

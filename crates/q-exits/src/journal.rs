@@ -9,7 +9,7 @@ pub const MAX_JOURNAL_ENTRIES: u32 = 8_000_000;
 
 const MAGIC: [u8; 4] = *b"QXEJ";
 const HEADER_LEN: usize = 5;
-const BODY_LEN: usize = 145;
+const BODY_LEN: usize = 177;
 const FRAME_LEN: usize = 1 + 4 + BODY_LEN + 4;
 
 const KIND_OPEN: u8 = 1;
@@ -22,7 +22,8 @@ pub struct JournaledExit {
     pub corridor: u32,
     pub asset_id: [u8; 16],
     pub amount: u128,
-    pub beneficiary: [u8; 32],
+    pub holder: [u8; 32],
+    pub destination: [u8; 32],
     pub burn_ref: [u8; 32],
     pub finalized_height: u64,
     pub vault_id: u32,
@@ -61,13 +62,14 @@ fn frame_of(event: &ExitEvent) -> [u8; FRAME_LEN] {
             b[1..5].copy_from_slice(&exit.corridor.to_le_bytes());
             b[5..21].copy_from_slice(&exit.asset_id);
             b[21..37].copy_from_slice(&exit.amount.to_le_bytes());
-            b[37..69].copy_from_slice(&exit.beneficiary);
-            b[69..101].copy_from_slice(&exit.burn_ref);
-            b[101..109].copy_from_slice(&exit.finalized_height.to_le_bytes());
-            b[109..113].copy_from_slice(&exit.vault_id.to_le_bytes());
-            b[113..129].copy_from_slice(&exit.locked.to_le_bytes());
-            b[129..137].copy_from_slice(&exit.issued_at.to_le_bytes());
-            b[137..145].copy_from_slice(&exit.deadline.to_le_bytes());
+            b[37..69].copy_from_slice(&exit.holder);
+            b[69..101].copy_from_slice(&exit.destination);
+            b[101..133].copy_from_slice(&exit.burn_ref);
+            b[133..141].copy_from_slice(&exit.finalized_height.to_le_bytes());
+            b[141..145].copy_from_slice(&exit.vault_id.to_le_bytes());
+            b[145..161].copy_from_slice(&exit.locked.to_le_bytes());
+            b[161..169].copy_from_slice(&exit.issued_at.to_le_bytes());
+            b[169..177].copy_from_slice(&exit.deadline.to_le_bytes());
         }
         ExitEvent::Settle { index, foreign_ref } => {
             out[0] = KIND_SETTLE;
@@ -126,13 +128,14 @@ fn decode_frame(frame: &[u8]) -> Result<ExitEvent, ExitError> {
                 corridor: u32_at(b, 1),
                 asset_id: arr16(b, 5),
                 amount: u128_at(b, 21),
-                beneficiary: arr32(b, 37),
-                burn_ref: arr32(b, 69),
-                finalized_height: u64_at(b, 101),
-                vault_id: u32_at(b, 109),
-                locked: u128_at(b, 113),
-                issued_at: u64_at(b, 129),
-                deadline: u64_at(b, 137),
+                holder: arr32(b, 37),
+                destination: arr32(b, 69),
+                burn_ref: arr32(b, 101),
+                finalized_height: u64_at(b, 133),
+                vault_id: u32_at(b, 141),
+                locked: u128_at(b, 145),
+                issued_at: u64_at(b, 161),
+                deadline: u64_at(b, 169),
             },
         }),
         KIND_SETTLE => Ok(ExitEvent::Settle {
@@ -268,7 +271,8 @@ mod tests {
             corridor: 7,
             asset_id: [0xa1; 16],
             amount: 1_000,
-            beneficiary: [0x55; 32],
+            holder: [0x33; 32],
+            destination: [0x55; 32],
             burn_ref: [0x11; 32],
             finalized_height: 4_200_000,
             vault_id: 3,

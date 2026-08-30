@@ -29,9 +29,9 @@ const AMOUNT: u128 = 500;
 const BURN_REF: [u8; 32] = [0x11; 32];
 
 const SECURE_BPS: u32 = 15_000;
-const PREMIUM_BPS: u32 = 11_000;
+const PREMIUM_BPS: u32 = 10_000;
 const REQUIRED: u128 = 750;
-const USER_PAYOUT: u128 = 550;
+const USER_PAYOUT: u128 = 500;
 
 fn attesters() -> [Attester; 3] {
     [
@@ -293,7 +293,8 @@ fn opening_an_exit_locks_the_required_collateral() {
     assert_eq!(desk.free_collateral(1), 2_000 - REQUIRED);
     assert_eq!(desk.exit(id).unwrap().state, ExitState::Pending);
     assert_eq!(desk.exit(id).unwrap().statement.amount, AMOUNT);
-    assert_eq!(desk.exit(id).unwrap().statement.beneficiary, BENEFICIARY);
+    assert_eq!(desk.exit(id).unwrap().statement.holder, HOLDER);
+    assert_eq!(desk.exit(id).unwrap().statement.destination, BENEFICIARY);
     assert!(desk.is_consumed(&BURN_REF));
 }
 
@@ -417,7 +418,7 @@ fn a_burn_for_another_destination_chain_cannot_open_an_exit() {
 }
 
 #[test]
-fn the_window_elapsing_then_slash_pays_the_user_the_premium() {
+fn the_window_elapsing_then_slash_re_mints_one_to_one_to_the_holder() {
     let members = attesters();
     let beacon = Beacon::genesis();
     let mut desk = desk();
@@ -428,15 +429,49 @@ fn the_window_elapsing_then_slash_pays_the_user_the_premium() {
 
     let outcome = desk.slash(id, 200).unwrap();
     assert_eq!(outcome.user_payout, USER_PAYOUT);
-    assert!(
-        outcome.user_payout > AMOUNT,
-        "the user is made whole above the value burned"
+    assert_eq!(
+        outcome.user_payout, AMOUNT,
+        "the on-chain re-mint equals the value burned with no premium"
     );
     assert_eq!(outcome.remainder, REQUIRED - USER_PAYOUT);
-    assert_eq!(outcome.beneficiary, BENEFICIARY);
+    assert_eq!(
+        outcome.holder, HOLDER,
+        "the slash refund is owed to the on-chain holder, not the foreign destination"
+    );
     assert_eq!(desk.locked_collateral(1), 0);
     assert_eq!(desk.free_collateral(1), 2_000 - REQUIRED);
     assert_eq!(desk.exit(id).unwrap().state, ExitState::Slashed);
+}
+
+#[test]
+fn the_exit_fact_carries_the_holder_for_credit_and_the_destination_for_payout() {
+    use q_exits::{ExitDecision, ExitOutcome};
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let mut desk = desk();
+    desk.register_vault(1, 2_000);
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
+    let statement = desk.exit(id).unwrap().statement.clone();
+
+    let settle = ExitDecision::settle(&statement, CHAIN_ID as u32);
+    assert_eq!(settle.outcome, ExitOutcome::Settle);
+    assert_eq!(settle.holder, HOLDER);
+    assert_eq!(settle.destination, BENEFICIARY);
+    assert_eq!(settle.amount, AMOUNT);
+
+    let slash = ExitDecision::slash(&statement, CHAIN_ID as u32);
+    assert_eq!(slash.outcome, ExitOutcome::Slash);
+    assert_eq!(
+        slash.holder, HOLDER,
+        "the on-chain slash fact credits the holder"
+    );
+    assert_eq!(slash.destination, BENEFICIARY);
+    assert_eq!(
+        slash.amount, AMOUNT,
+        "the slash fact re-mints exactly the burned amount"
+    );
 }
 
 #[test]

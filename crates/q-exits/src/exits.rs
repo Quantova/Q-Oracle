@@ -18,7 +18,8 @@ pub struct ExitStatement {
     pub corridor: u32,
     pub asset_id: [u8; 16],
     pub amount: u128,
-    pub beneficiary: [u8; 32],
+    pub holder: [u8; 32],
+    pub destination: [u8; 32],
     pub burn_ref: [u8; 32],
     pub finalized_height: u64,
 }
@@ -37,7 +38,10 @@ impl ExitStatement {
         if self.asset_id == [0u8; 16] {
             return Err(ExitError::ZeroAsset);
         }
-        if self.beneficiary == [0u8; 32] {
+        if self.holder == [0u8; 32] {
+            return Err(ExitError::ZeroBeneficiary);
+        }
+        if self.destination == [0u8; 32] {
             return Err(ExitError::ZeroBeneficiary);
         }
         if self.burn_ref == [0u8; 32] {
@@ -57,7 +61,7 @@ pub struct DeskConfig {
 }
 
 pub const SECURE_RATIO_BPS: u32 = 15_000;
-pub const SLASH_PREMIUM_BPS: u32 = 11_000;
+pub const SLASH_PREMIUM_BPS: u32 = 10_000;
 pub const REDEEM_WINDOW_MS: u64 = 86_400_000;
 
 impl DeskConfig {
@@ -101,7 +105,7 @@ pub struct Release {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlashOutcome {
     pub vault_id: u32,
-    pub beneficiary: [u8; 32],
+    pub holder: [u8; 32],
     pub user_payout: u128,
     pub remainder: u128,
 }
@@ -182,7 +186,8 @@ impl ExitDesk {
                             corridor: exit.corridor,
                             asset_id: exit.asset_id,
                             amount: exit.amount,
-                            beneficiary: exit.beneficiary,
+                            holder: exit.holder,
+                            destination: exit.destination,
                             burn_ref: exit.burn_ref,
                             finalized_height: exit.finalized_height,
                         },
@@ -295,7 +300,8 @@ impl ExitDesk {
             corridor: self.cfg.corridor,
             asset_id: burn.asset_id,
             amount: burn.amount,
-            beneficiary: burn.beneficiary,
+            holder: burn.holder,
+            destination: burn.destination,
             burn_ref: burn.burn_ref,
             finalized_height: burn.finalized_height,
         };
@@ -314,7 +320,8 @@ impl ExitDesk {
                 corridor: statement.corridor,
                 asset_id: statement.asset_id,
                 amount: statement.amount,
-                beneficiary: statement.beneficiary,
+                holder: statement.holder,
+                destination: statement.destination,
                 burn_ref: statement.burn_ref,
                 finalized_height: statement.finalized_height,
                 vault_id,
@@ -399,7 +406,7 @@ impl ExitDesk {
             });
         }
         let vault_id = exit.vault_id;
-        let beneficiary = exit.statement.beneficiary;
+        let holder = exit.statement.holder;
         let locked = exit.locked;
         let amount = exit.statement.amount;
         let user_payout = self.user_premium(amount)?;
@@ -410,7 +417,7 @@ impl ExitDesk {
         self.vaults.seize(vault_id, locked)?;
         Ok(SlashOutcome {
             vault_id,
-            beneficiary,
+            holder,
             user_payout,
             remainder,
         })
@@ -426,19 +433,19 @@ mod tests {
             corridor: 1,
             dest_chain: 9000,
             secure_bps: 15_000,
-            premium_bps: 11_000,
+            premium_bps: 10_000,
             window: 100,
         }
     }
 
     #[test]
-    fn the_aligned_config_matches_the_old_bridge() {
+    fn the_aligned_config_pays_one_to_one_on_slash() {
         let c = DeskConfig::aligned(1, 9000);
         assert_eq!(c.dest_chain, 9000);
         assert_eq!(c.secure_bps, 15_000);
-        assert_eq!(c.premium_bps, 11_000);
+        assert_eq!(c.premium_bps, 10_000);
         assert_eq!(c.window, 86_400_000);
-        assert!(c.premium_bps > BPS_DEN as u32 && c.premium_bps <= c.secure_bps);
+        assert!(c.premium_bps == BPS_DEN as u32 && c.premium_bps <= c.secure_bps);
     }
 
     fn statement() -> ExitStatement {
@@ -447,7 +454,8 @@ mod tests {
             corridor: 1,
             asset_id: [0xa1; 16],
             amount: 1_000,
-            beneficiary: [0x55; 32],
+            holder: [0x33; 32],
+            destination: [0x55; 32],
             burn_ref: [0x11; 32],
             finalized_height: 4_200_000,
         }
@@ -522,9 +530,9 @@ mod tests {
     }
 
     #[test]
-    fn the_user_premium_sits_above_the_value() {
+    fn the_user_premium_equals_the_value_one_to_one() {
         let d = desk();
-        assert_eq!(d.user_premium(1_000).unwrap(), 1_100);
+        assert_eq!(d.user_premium(1_000).unwrap(), 1_000);
     }
 
     #[test]
@@ -564,7 +572,8 @@ mod tests {
             corridor: 1,
             asset_id: [0xa1; 16],
             amount: 1_000,
-            beneficiary: [0x55; 32],
+            holder: [0x33; 32],
+            destination: [0x55; 32],
             burn_ref,
             finalized_height: 4_200_000,
             vault_id,

@@ -106,13 +106,9 @@ impl ExitService {
     pub fn sweep_slash(&mut self, now: u64) -> Vec<ExitDecision> {
         let mut decisions = Vec::new();
         for id in self.desk.slashable(now) {
-            if let Ok(outcome) = self.desk.slash(id, now) {
+            if self.desk.slash(id, now).is_ok() {
                 if let Some(exit) = self.desk.exit(id) {
-                    decisions.push(ExitDecision::slash(
-                        &exit.statement,
-                        outcome.user_payout,
-                        self.dest_chain,
-                    ));
+                    decisions.push(ExitDecision::slash(&exit.statement, self.dest_chain));
                 }
             }
         }

@@ -14,7 +14,8 @@ pub const EVENT_BRIDGE_BURN: &[u8] = b"QBBN";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedBurn {
     pub asset_id: [u8; 16],
-    pub beneficiary: [u8; 32],
+    pub holder: [u8; 32],
+    pub destination: [u8; 32],
     pub amount: u128,
     pub burn_ref: [u8; 32],
     pub dest_chain: u64,
@@ -72,7 +73,7 @@ fn parse_burn_leaf(leaf: &[u8], finalized_height: u64) -> Result<AuthenticatedBu
 
     let mut fields = Decoder::new(data);
     let asset_id = fields.get_bytes().map_err(|_| ExitError::LeafDecode)?;
-    let _holder = fields.get_bytes().map_err(|_| ExitError::LeafDecode)?;
+    let holder = fields.get_bytes().map_err(|_| ExitError::LeafDecode)?;
     let amount = fields.get_u128().map_err(|_| ExitError::LeafDecode)?;
     let destination = fields.get_bytes().map_err(|_| ExitError::LeafDecode)?;
     let dest_chain = fields.get_u64().map_err(|_| ExitError::LeafDecode)?;
@@ -82,12 +83,14 @@ fn parse_burn_leaf(leaf: &[u8], finalized_height: u64) -> Result<AuthenticatedBu
     fields.finish().map_err(|_| ExitError::LeafDecode)?;
 
     let asset_id = <[u8; 16]>::try_from(asset_id).map_err(|_| ExitError::LeafDecode)?;
-    let beneficiary = <[u8; 32]>::try_from(destination).map_err(|_| ExitError::LeafDecode)?;
+    let holder = <[u8; 32]>::try_from(holder).map_err(|_| ExitError::LeafDecode)?;
+    let destination = <[u8; 32]>::try_from(destination).map_err(|_| ExitError::LeafDecode)?;
     let burn_ref = <[u8; 32]>::try_from(burn_ref).map_err(|_| ExitError::LeafDecode)?;
 
     Ok(AuthenticatedBurn {
         asset_id,
-        beneficiary,
+        holder,
+        destination,
         amount,
         burn_ref,
         dest_chain,

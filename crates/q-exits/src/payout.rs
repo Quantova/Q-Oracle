@@ -108,7 +108,7 @@ impl PayoutAttestation {
         self.corridor == statement.corridor
             && self.asset_id == statement.asset_id
             && self.amount == statement.amount
-            && self.beneficiary == statement.beneficiary
+            && self.beneficiary == statement.destination
             && self.burn_ref == statement.burn_ref
     }
 }
@@ -340,7 +340,7 @@ impl BitcoinPayoutWatcher {
                 last = PayoutProofError::AmountMismatch;
                 continue;
             }
-            if payout.beneficiary != statement.beneficiary {
+            if payout.beneficiary != statement.destination {
                 last = PayoutProofError::BeneficiaryMismatch;
                 continue;
             }
@@ -429,7 +429,7 @@ impl EvmPayoutWatcher {
                 last = PayoutProofError::AmountMismatch;
                 continue;
             }
-            if payout.beneficiary != statement.beneficiary {
+            if payout.beneficiary != statement.destination {
                 last = PayoutProofError::BeneficiaryMismatch;
                 continue;
             }
@@ -490,7 +490,8 @@ mod tests {
             corridor: 1,
             asset_id: [0xa1; 16],
             amount: 500,
-            beneficiary: [0x55; 32],
+            holder: [0x33; 32],
+            destination: [0x55; 32],
             burn_ref: [0x11; 32],
             finalized_height: 4_200_000,
         }
@@ -702,7 +703,7 @@ mod tests {
     #[test]
     fn a_real_bitcoin_inclusion_proof_that_covers_the_exit_is_confirmed() {
         let s = statement();
-        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 500, &s.burn_ref)]);
+        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.destination, 500, &s.burn_ref)]);
         let attestation = watcher
             .confirm(&s)
             .expect("the verified payout covers the exit");
@@ -728,7 +729,7 @@ mod tests {
     #[test]
     fn a_bitcoin_payout_that_pays_too_little_does_not_cover_the_exit() {
         let s = statement();
-        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 499, &s.burn_ref)]);
+        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.destination, 499, &s.burn_ref)]);
         assert_eq!(watcher.attest(&s), Err(PayoutProofError::AmountMismatch));
         assert!(watcher.confirm(&s).is_none());
     }
@@ -736,7 +737,7 @@ mod tests {
     #[test]
     fn a_bitcoin_payout_bound_to_another_exit_does_not_cover_this_one() {
         let s = statement();
-        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 500, &[0x99; 32])]);
+        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.destination, 500, &[0x99; 32])]);
         assert_eq!(watcher.attest(&s), Err(PayoutProofError::ReferenceMismatch));
         assert!(watcher.confirm(&s).is_none());
     }
@@ -744,7 +745,7 @@ mod tests {
     #[test]
     fn a_forged_bitcoin_header_fails_the_proof_of_work_check() {
         let s = statement();
-        let mut release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
+        let mut release = bitcoin_release(&s.destination, 500, &s.burn_ref);
         release.headers[0].nonce = release.headers[0].nonce.wrapping_add(1);
         assert_eq!(
             release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
@@ -757,7 +758,7 @@ mod tests {
     #[test]
     fn a_forged_bitcoin_merkle_branch_fails_the_inclusion_check() {
         let s = statement();
-        let mut release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
+        let mut release = bitcoin_release(&s.destination, 500, &s.burn_ref);
         release.branch[0].hash = [0x00; 32];
         assert_eq!(
             release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
@@ -769,7 +770,7 @@ mod tests {
     #[test]
     fn a_forged_bitcoin_payload_breaks_the_txid_binding() {
         let s = statement();
-        let mut release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
+        let mut release = bitcoin_release(&s.destination, 500, &s.burn_ref);
         let last = release.raw_tx.len() - 6;
         release.raw_tx[last] ^= 0xff;
         assert_eq!(
@@ -781,7 +782,7 @@ mod tests {
     #[test]
     fn a_trivial_difficulty_release_chain_is_rejected_without_the_pinned_work() {
         let s = statement();
-        let release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
+        let release = bitcoin_release(&s.destination, 500, &s.burn_ref);
         let heavy = Checkpoint {
             height: release.start_height,
             hash: release.headers[0].block_hash(),
@@ -798,7 +799,7 @@ mod tests {
     #[test]
     fn a_release_chain_off_the_pinned_checkpoint_is_rejected() {
         let s = statement();
-        let release = bitcoin_release(&s.beneficiary, 500, &s.burn_ref);
+        let release = bitcoin_release(&s.destination, 500, &s.burn_ref);
         let foreign = Checkpoint {
             height: release.start_height,
             hash: [0x99u8; 32],
@@ -825,7 +826,7 @@ mod tests {
         put_varint(3, &mut tx);
         tx.extend_from_slice(&500u64.to_le_bytes());
         let mut first = vec![0x51u8, 0x20];
-        first.extend_from_slice(&s.beneficiary);
+        first.extend_from_slice(&s.destination);
         put_varint(first.len() as u64, &mut tx);
         tx.extend_from_slice(&first);
         tx.extend_from_slice(&999u64.to_le_bytes());
@@ -851,7 +852,7 @@ mod tests {
     #[test]
     fn a_confirmed_attestation_round_trips_on_the_wire() {
         let s = statement();
-        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 500, &s.burn_ref)]);
+        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.destination, 500, &s.burn_ref)]);
         let attestation = watcher.confirm(&s).unwrap();
 
         let encoded = attestation.encode();
@@ -862,7 +863,7 @@ mod tests {
     #[test]
     fn one_verified_payout_cannot_be_replayed() {
         let s = statement();
-        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.beneficiary, 500, &s.burn_ref)]);
+        let watcher = bitcoin_watcher(vec![bitcoin_release(&s.destination, 500, &s.burn_ref)]);
         assert!(watcher.confirm(&s).is_some());
 
         assert_eq!(watcher.attest(&s), Err(PayoutProofError::ReusedPayout));
