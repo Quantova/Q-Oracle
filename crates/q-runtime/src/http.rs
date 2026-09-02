@@ -128,20 +128,28 @@ impl RateLimiter {
 pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardStore>>) {
     thread::spawn(move || {
         let limiter = Arc::new(Limiter::default());
-        let rate = RateLimiter::default();
+        let rate = Arc::new(RateLimiter::default());
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let ip = stream
                 .peer_addr()
                 .map(|addr| addr.ip())
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-            if !rate.allow(
-                ip,
-                Instant::now(),
-                RATE_WINDOW,
-                MAX_ADMITS_PER_WINDOW,
-                MAX_ADMITS_PER_IP_PER_WINDOW,
-            ) {
+            // Behind the reverse proxy every connection carries the proxy's own
+            // address, so a per address limit applied here would pool every real
+            // client into one bucket and let a single caller exhaust it for all of
+            // them. For a proxied connection the limit is applied once the request
+            // headers name the real client instead.
+            let proxied = ip.is_loopback();
+            if !proxied
+                && !rate.allow(
+                    ip,
+                    Instant::now(),
+                    RATE_WINDOW,
+                    MAX_ADMITS_PER_WINDOW,
+                    MAX_ADMITS_PER_IP_PER_WINDOW,
+                )
+            {
                 stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
                 let _ = write_error(
                     &mut stream,
@@ -177,9 +185,10 @@ pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardS
             let state = state.clone();
             let limiter = limiter.clone();
             let store = store.clone();
+            let rate = rate.clone();
             thread::spawn(move || {
                 let _slot = SlotGuard { limiter, ip };
-                let _ = handle_connection(stream, state, store);
+                let _ = handle_connection(stream, state, store, rate, proxied);
             });
         }
     });
@@ -200,6 +209,8 @@ fn handle_connection(
     mut stream: TcpStream,
     state: SharedState,
     store: Option<Arc<GuardStore>>,
+    rate: Arc<RateLimiter>,
+    proxied: bool,
 ) -> IoResult<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
@@ -217,6 +228,7 @@ fn handle_connection(
     let path = parts.next().unwrap_or("").to_string();
 
     let mut content_length = 0usize;
+    let mut forwarded: Option<IpAddr> = None;
     loop {
         let header = match read_capped_line(&mut reader, &mut head_budget, deadline) {
             Ok(Some(header)) => header,
@@ -229,6 +241,27 @@ fn handle_connection(
         }
         if let Some(value) = header_value(trimmed, "content-length") {
             content_length = value.parse().unwrap_or(0);
+        }
+        if let Some(value) = header_value(trimmed, "x-real-ip") {
+            forwarded = value.trim().parse().ok();
+        }
+    }
+
+    if proxied {
+        let client = forwarded.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        if !rate.allow(
+            client,
+            Instant::now(),
+            RATE_WINDOW,
+            MAX_ADMITS_PER_WINDOW,
+            MAX_ADMITS_PER_IP_PER_WINDOW,
+        ) {
+            return write_error(
+                &mut stream,
+                429,
+                "rate_limited",
+                "too many requests, slow down",
+            );
         }
     }
 
