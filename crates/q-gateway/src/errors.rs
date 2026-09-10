@@ -33,6 +33,7 @@ pub enum GatewayError {
     UnknownExit(u64),
     MessageExpired { now: u64, expiry: u64 },
     StaleOrReplayedNonce { got: u64, high_water: u64 },
+    ExitQueueFull { pending: usize, cap: usize },
 }
 
 impl From<CodecError> for GatewayError {

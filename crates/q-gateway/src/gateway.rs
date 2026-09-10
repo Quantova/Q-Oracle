@@ -14,6 +14,8 @@ pub const TIER_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/TIER/v1";
 pub const FREEZE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/FREEZE/v1";
 pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
+
+pub const MAX_PENDING_EXITS: usize = 65_536;
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
 const GUARD_SNAPSHOT_VERSION: u8 = 5;
@@ -483,6 +485,12 @@ impl Gateway {
         if amount == 0 {
             return Err(GatewayError::InvalidFact(CodecError::ZeroAmount));
         }
+        if self.pending_exits.len() >= MAX_PENDING_EXITS {
+            return Err(GatewayError::ExitQueueFull {
+                pending: self.pending_exits.len(),
+                cap: MAX_PENDING_EXITS,
+            });
+        }
         let minted = *self.per_asset_minted.get(&asset_id).unwrap_or(&0);
         if amount > minted {
             return Err(GatewayError::ExitExceedsMinted { minted, amount });
@@ -558,10 +566,12 @@ impl Gateway {
         if self.paused_sources.contains(&source_chain) {
             return Err(GatewayError::SourcePaused(source_chain));
         }
-        if let Some(corridor) = self.corridors.get(&source_chain) {
-            if !corridor.active {
-                return Err(GatewayError::CorridorInactive(source_chain));
-            }
+        let corridor = self
+            .corridors
+            .get(&source_chain)
+            .ok_or(GatewayError::CorridorNotOpen(source_chain))?;
+        if !corridor.active {
+            return Err(GatewayError::CorridorInactive(source_chain));
         }
         if self.used_refs.contains(&(source_chain, source_ref)) {
             return Err(GatewayError::ReplayedReference);
@@ -1287,6 +1297,60 @@ mod tests {
 
         gw.advance_to(until);
         assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 1), Ok(()));
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
+    }
+
+    #[test]
+    fn the_pending_exit_queue_stops_growing_at_its_cap() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, u128::MAX);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], u128::MAX);
+        gw.admit_trustless([0xa1; 16], [0x01; 32], MAX_PENDING_EXITS as u128 + 1, 1)
+            .expect("the mint funds every ticket");
+
+        for _ in 0..MAX_PENDING_EXITS {
+            gw.request_exit([0xa1; 16], 1, [0x99; 32])
+                .expect("a ticket inside the cap is taken");
+        }
+        assert_eq!(
+            gw.request_exit([0xa1; 16], 1, [0x99; 32]),
+            Err(GatewayError::ExitQueueFull {
+                pending: MAX_PENDING_EXITS,
+                cap: MAX_PENDING_EXITS,
+            }),
+            "the queue past its cap is refused rather than grown without bound"
+        );
+        assert_eq!(
+            gw.minted_of_asset(&[0xa1; 16]),
+            1,
+            "the refused ticket does not debit the minted supply"
+        );
+    }
+
+    #[test]
+    fn a_trustless_admit_needs_a_registered_corridor_not_merely_an_unpaused_one() {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 7),
+            Err(GatewayError::CorridorNotOpen(7)),
+            "a source with no corridor on the gateway is outside every corridor control"
+        );
+        assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 0);
+
+        gw.register_corridor(7, 6);
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 7), Ok(()));
         assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
     }
 

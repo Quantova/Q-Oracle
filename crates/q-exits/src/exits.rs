@@ -381,11 +381,14 @@ impl ExitDesk {
         if self.consumed.is_released(&attestation.foreign_ref) {
             return Err(ExitError::ReplayedPayout);
         }
-        self.journal.append(&ExitEvent::Settle {
+        self.consumed.record(attestation.foreign_ref)?;
+        if let Err(e) = self.journal.append(&ExitEvent::Settle {
             index: id.0 as u32,
             foreign_ref: attestation.foreign_ref,
-        })?;
-        self.consumed.record(attestation.foreign_ref)?;
+        }) {
+            self.consumed.forget(&attestation.foreign_ref);
+            return Err(e);
+        }
         let exit = self.exits.get_mut(id.0).ok_or(ExitError::UnknownExit)?;
         let vault_id = exit.vault_id;
         let released = exit.locked;
@@ -676,5 +679,174 @@ mod tests {
             "a settle that references no open exit is refused, not silently dropped"
         );
         std::fs::remove_file(&path).ok();
+    }
+}
+
+#[cfg(test)]
+mod settle_commit_order_tests {
+    use super::*;
+    use crate::journal::{ExitJournal, JournaledExit};
+    use crate::ledger::MemoryLedger;
+    use crate::payout::{PayoutAttestation, PayoutWatcher, PAYOUT_VERSION};
+    use std::sync::{Arc, Mutex};
+
+    const BURN: [u8; 32] = [0x11; 32];
+    const FOREIGN: [u8; 32] = [0x77; 32];
+
+    struct SharedJournal {
+        events: Arc<Mutex<Vec<ExitEvent>>>,
+        replayed: Vec<ExitEvent>,
+    }
+
+    impl ExitJournal for SharedJournal {
+        fn append(&mut self, event: &ExitEvent) -> Result<(), ExitError> {
+            self.events.lock().unwrap().push(event.clone());
+            self.replayed.push(event.clone());
+            Ok(())
+        }
+
+        fn events(&self) -> &[ExitEvent] {
+            &self.replayed
+        }
+    }
+
+    struct PickyLedger {
+        inner: MemoryLedger,
+        refuse: Option<[u8; 32]>,
+    }
+
+    impl ReplayLedger for PickyLedger {
+        fn is_released(&self, burn_ref: &[u8; 32]) -> bool {
+            self.inner.is_released(burn_ref)
+        }
+
+        fn record(&mut self, burn_ref: [u8; 32]) -> Result<(), ExitError> {
+            if self.refuse == Some(burn_ref) {
+                return Err(ExitError::LedgerFull);
+            }
+            self.inner.record(burn_ref)
+        }
+
+        fn len(&self) -> usize {
+            self.inner.len()
+        }
+
+        fn forget(&mut self, burn_ref: &[u8; 32]) {
+            self.inner.forget(burn_ref)
+        }
+    }
+
+    struct StubWatcher;
+
+    impl PayoutWatcher for StubWatcher {
+        fn corridor(&self) -> u32 {
+            1
+        }
+
+        fn confirm(&self, statement: &ExitStatement) -> Option<PayoutAttestation> {
+            Some(PayoutAttestation {
+                version: PAYOUT_VERSION,
+                corridor: statement.corridor,
+                asset_id: statement.asset_id,
+                amount: statement.amount,
+                beneficiary: statement.destination,
+                burn_ref: statement.burn_ref,
+                foreign_ref: FOREIGN,
+                proof_height: 1,
+            })
+        }
+    }
+
+    fn cfg() -> DeskConfig {
+        DeskConfig {
+            corridor: 1,
+            dest_chain: 9000,
+            secure_bps: 15_000,
+            premium_bps: 10_000,
+            window: 100,
+        }
+    }
+
+    fn anchor() -> QuantovaAnchor {
+        QuantovaAnchor::from_config(
+            9000,
+            1,
+            0,
+            100,
+            [0x5a; 32],
+            vec![crate::anchor::MemberConfig {
+                id: 1,
+                weight: 100,
+                root_digest: [0x11; 32],
+                root_slots: 64,
+                attest_pk: vec![0u8; crate::anchor::ATTEST_PK_BYTES],
+            }],
+        )
+        .unwrap()
+    }
+
+    fn open_event() -> ExitEvent {
+        ExitEvent::Open {
+            index: 0,
+            exit: JournaledExit {
+                version: EXIT_STATEMENT_VERSION,
+                corridor: 1,
+                asset_id: [0xa1; 16],
+                amount: 1_000,
+                holder: [0x33; 32],
+                destination: [0x55; 32],
+                burn_ref: BURN,
+                finalized_height: 4_200_000,
+                vault_id: 1,
+                locked: 1_500,
+                issued_at: 10,
+                deadline: 110,
+            },
+        }
+    }
+
+    fn pending_desk(refuse: Option<[u8; 32]>) -> (ExitDesk, Arc<Mutex<Vec<ExitEvent>>>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let journal = SharedJournal {
+            events: Arc::clone(&events),
+            replayed: vec![open_event()],
+        };
+        let consumed = PickyLedger {
+            inner: MemoryLedger::new(),
+            refuse,
+        };
+        let mut desk = ExitDesk::assemble(cfg(), anchor(), Box::new(consumed), Box::new(journal))
+            .expect("the desk assembles");
+        desk.register_vault(1, 2_000);
+        desk.reconstruct().expect("the open replays");
+        events.lock().unwrap().clear();
+        (desk, events)
+    }
+
+    #[test]
+    fn a_settle_the_replay_ledger_refuses_is_never_written_to_the_journal() {
+        let (mut desk, events) = pending_desk(Some(FOREIGN));
+        assert_eq!(
+            desk.settle(ExitId(0), &StubWatcher, 50),
+            Err(ExitError::LedgerFull)
+        );
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "a settle that cannot be marked consumed must not be journaled, or the \
+             replay on restart applies a settle the desk never completed"
+        );
+        assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Pending);
+        assert_eq!(desk.locked_collateral(1), 1_500);
+    }
+
+    #[test]
+    fn a_settle_the_replay_ledger_accepts_is_journaled_and_completed() {
+        let (mut desk, events) = pending_desk(None);
+        desk.settle(ExitId(0), &StubWatcher, 50)
+            .expect("the settle completes");
+        assert_eq!(events.lock().unwrap().len(), 1, "exactly one settle event");
+        assert!(desk.is_consumed(&FOREIGN));
+        assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Settled);
+        assert_eq!(desk.locked_collateral(1), 0);
     }
 }

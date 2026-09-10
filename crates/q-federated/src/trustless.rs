@@ -281,6 +281,8 @@ mod tests {
 
     fn gateway_with_cap(asset: [u8; 16], cap: u128) -> Gateway {
         let mut gw = Gateway::new(DEST, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
+        gw.register_corridor(BITCOIN_CHAIN, 6);
+        gw.register_corridor(COSMOS_CHAIN, 6);
         gw.register_asset_cap(asset, cap);
         gw
     }
@@ -427,6 +429,7 @@ mod tests {
     fn admission_refuses_an_unregistered_asset() {
         let c = corridor(Tier::ProofBacked);
         let mut gw = Gateway::new(DEST, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
+        gw.register_corridor(BITCOIN_CHAIN, 6);
         let txid = [0x11u8; 32];
         let recipient = [0x42u8; 32];
         let p = proven(txid, 250_000, recipient, 6);
@@ -699,6 +702,7 @@ mod tests {
     fn ethereum_admission_refuses_an_unregistered_asset() {
         let c = eth_corridor(Tier::ProofBacked);
         let mut gw = Gateway::new(DEST, DEST_ID, OperatorSet::new(0), 1_000_000_000_000);
+        gw.register_corridor(ETH_CHAIN, 6);
         let r = [0x33u8; 32];
         let recipient = [0x42u8; 32];
         let p = eth_proven(r, 250_000, recipient, ETH_ASSET, 64);

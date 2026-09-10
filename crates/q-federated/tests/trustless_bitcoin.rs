@@ -160,6 +160,7 @@ fn gateway_with_bitcoin_asset() -> Gateway {
     }
     let mut gw = Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000);
     install(&mut gw);
+    gw.register_corridor(BITCOIN_CHAIN, 6);
     gw.register_asset_cap(origin_tag(BITCOIN_CHAIN).0, 1_000_000_000);
     gw
 }

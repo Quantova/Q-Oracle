@@ -1624,6 +1624,14 @@ fn gateway_err_json(e: &GatewayError) -> Json {
             "exit_not_ready",
             vec![("now", Json::Int(*now)), ("unlock", Json::Int(*unlock))],
         ),
+        GatewayError::ExitQueueFull { pending, cap } => tagged(
+            "gateway",
+            "exit_queue_full",
+            vec![
+                ("pending", Json::Int(*pending as u64)),
+                ("cap", Json::Int(*cap as u64)),
+            ],
+        ),
         GatewayError::UnknownExit(id) => {
             tagged("gateway", "unknown_exit", vec![("exit_id", Json::Int(*id))])
         }
@@ -1720,6 +1728,10 @@ fn gateway_err_from(j: &Json) -> Result<GatewayError, WireError> {
         "exit_not_ready" => Ok(GatewayError::ExitNotReady {
             now: as_u64(field(j, "now")?, "now")?,
             unlock: as_u64(field(j, "unlock")?, "unlock")?,
+        }),
+        "exit_queue_full" => Ok(GatewayError::ExitQueueFull {
+            pending: as_u64(field(j, "pending")?, "pending")? as usize,
+            cap: as_u64(field(j, "cap")?, "cap")? as usize,
         }),
         "unknown_exit" => Ok(GatewayError::UnknownExit(as_u64(
             field(j, "exit_id")?,

@@ -218,6 +218,7 @@ fn gateway_with_cosmos_asset() -> Gateway {
     }
     let mut gw = Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000);
     install(&mut gw);
+    gw.register_corridor(COSMOS_HUB.corridor_id, 6);
     gw.register_asset_cap(COSMOS_ASSET, 1_000_000_000);
     gw
 }
