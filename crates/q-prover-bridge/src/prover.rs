@@ -9,7 +9,7 @@ use qtv_stark::stark::{prove_with_domain, verify_with_domain, StarkParams};
 use crate::statement::{CorridorStatement, STATEMENT_DIGEST_LEN};
 
 pub const BRIDGE_BLOWUP: usize = 128;
-pub const BRIDGE_QUERIES: usize = 43;
+pub const BRIDGE_QUERIES: usize = 86;
 
 fn params() -> StarkParams {
     StarkParams {
@@ -90,6 +90,24 @@ mod tests {
             observed_height: 880_000,
             expiry_height: 900_000,
         }
+    }
+
+    #[test]
+    fn the_bridge_parameters_meet_the_target_soundness() {
+        use qtv_stark::sponge::{absorb_trace, SHAKE256_RATE};
+        let s = statement();
+        let preimage = s.preimage();
+        let instance = absorb_trace(SHAKE256_RATE, &preimage);
+        let air = instance.air;
+        let n = air.length();
+        let size = n * BRIDGE_BLOWUP;
+        let comp_bound = air.max_degree().next_power_of_two() * n;
+        let comp_fri_blowup = size / comp_bound;
+        let bits = BRIDGE_QUERIES as f64 * 0.5 * (comp_fri_blowup as f64).log2();
+        assert!(
+            bits >= 128.0,
+            "bridge statement composition soundness {bits} bits below the 128 target"
+        );
     }
 
     fn statement() -> CorridorStatement {
