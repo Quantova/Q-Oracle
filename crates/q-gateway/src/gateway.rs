@@ -58,6 +58,7 @@ pub struct Gateway {
     operators: OperatorSet,
     governance: OperatorSet,
     used_refs: BTreeSet<(u32, [u8; 32])>,
+    refs_any_chain: BTreeSet<[u8; 32]>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
     per_asset_cap: BTreeMap<[u8; 16], u128>,
     per_asset_epoch_cap: BTreeMap<[u8; 16], u128>,
@@ -92,6 +93,7 @@ impl Gateway {
             operators,
             governance: OperatorSet::new(0),
             used_refs: BTreeSet::new(),
+            refs_any_chain: BTreeSet::new(),
             per_asset_minted: BTreeMap::new(),
             per_asset_cap: BTreeMap::new(),
             per_asset_epoch_cap: BTreeMap::new(),
@@ -313,9 +315,7 @@ impl Gateway {
     }
 
     pub fn is_reference_used(&self, source_ref: &[u8; 32]) -> bool {
-        self.used_refs
-            .iter()
-            .any(|(_, reference)| reference == source_ref)
+        self.refs_any_chain.contains(source_ref)
     }
 
     pub fn is_reference_used_on(&self, source_chain: u32, source_ref: &[u8; 32]) -> bool {
@@ -614,6 +614,7 @@ impl Gateway {
         }
         self.charge_asset_epoch(&asset_id, amount)?;
         self.used_refs.insert((source_chain, source_ref));
+        self.refs_any_chain.insert(source_ref);
         self.per_asset_minted.insert(asset_id, asset_after);
         self.epoch_minted = epoch_after;
         self.record_asset_epoch(asset_id, amount);
@@ -747,6 +748,7 @@ impl Gateway {
         self.charge_asset_epoch(&fact.asset_id.0, fact.amount)?;
         self.used_refs
             .insert((fact.source_chain, fact.source_ref.0));
+        self.refs_any_chain.insert(fact.source_ref.0);
         self.per_asset_minted.insert(fact.asset_id.0, asset_after);
         self.epoch_minted = epoch_after;
         self.record_asset_epoch(fact.asset_id.0, fact.amount);
@@ -820,6 +822,7 @@ impl Gateway {
         self.deposit_frozen_until = state.deposit_frozen_until;
         self.epoch_minted = state.epoch_minted;
         self.used_refs = state.used_refs;
+        self.refs_any_chain = self.used_refs.iter().map(|(_, r)| *r).collect();
         self.per_asset_minted = state.per_asset_minted;
         self.paused_sources = state.paused_sources;
         self.corridor_cursor = state.corridor_cursor;
@@ -1546,6 +1549,29 @@ mod tests {
             ),
             "a persisted pending exit must still count toward the cap after a restart"
         );
+    }
+
+    #[test]
+    fn a_used_reference_is_still_reported_used_after_a_snapshot_restart() {
+        let mut gw = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 500);
+        assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 500, 1), Ok(()));
+        assert!(gw.is_reference_used(&[0x01; 32]));
+        assert!(!gw.is_reference_used(&[0x02; 32]));
+        let snapshot = gw.encode_guard();
+
+        let mut restored = Gateway::new(9000, DEST_ID, OperatorSet::new(0), 1_000_000_000);
+        restored.register_corridor(1, 6);
+        restored.register_asset_cap([0xa1; 16], 500);
+        restored
+            .rehydrate_guard(&snapshot)
+            .expect("a clean snapshot rehydrates");
+        assert!(
+            restored.is_reference_used(&[0x01; 32]),
+            "a spent reference must stay spent across a restart"
+        );
+        assert!(!restored.is_reference_used(&[0x02; 32]));
     }
 
     #[test]
