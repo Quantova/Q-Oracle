@@ -9,8 +9,8 @@ use q_federated::{FederatedError, PoolError, PoolRequest, TrustlessError, Trustl
 use q_gateway::{GatewayError, MintReceipt};
 use q_qbridge::{
     ApiError, BitcoinProofMaterial, DepositOutcome, DepositProof, DepositRequest,
-    DepositStatusRequest, DepositStatusView, GetPoolRequest, ListPoolsRequest, PoolView,
-    ReportReorgRequest, Request, Response,
+    DepositStatusRequest, DepositStatusView, EmergencyFreezeRequest, GetPoolRequest,
+    ListPoolsRequest, PoolView, ReportReorgRequest, Request, Response, WatchdogFreezeRequest,
 };
 use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
 use qlc_cosmos::commit::{BlockIdFlag, Commit, CommitError, CommitSig, Header};
@@ -186,6 +186,8 @@ pub fn method_of(req: &Request) -> &'static str {
         Request::SubmitDeposit(_) => "submit_deposit",
         Request::DepositStatus(_) => "deposit_status",
         Request::ReportReorg(_) => "report_reorg",
+        Request::EmergencyFreeze(_) => "emergency_freeze",
+        Request::WatchdogFreeze(_) => "watchdog_freeze",
     }
 }
 
@@ -214,22 +216,47 @@ pub fn encode_request(req: &Request) -> Json {
         Request::ReportReorg(r) => object(vec![
             ("source_chain", u32j(r.source_chain)),
             ("fork_depth", u32j(r.fork_depth)),
-            (
-                "signatures",
-                Json::Array(
-                    r.signatures
-                        .iter()
-                        .map(|s| {
-                            object(vec![
-                                ("operator_id", u32j(s.operator_id)),
-                                ("signature", hexs(&s.signature)),
-                            ])
-                        })
-                        .collect(),
-                ),
-            ),
+            ("signatures", signer_sigs_json(&r.signatures)),
+        ]),
+        Request::EmergencyFreeze(r) => object(vec![
+            ("until_height", Json::Int(r.until_height)),
+            ("signatures", signer_sigs_json(&r.signatures)),
+        ]),
+        Request::WatchdogFreeze(r) => object(vec![
+            ("until_height", Json::Int(r.until_height)),
+            ("signature", signer_sig_json(&r.signature)),
         ]),
     }
+}
+
+fn signer_sig_json(s: &SignerSig) -> Json {
+    object(vec![
+        ("operator_id", u32j(s.operator_id)),
+        ("signature", hexs(&s.signature)),
+    ])
+}
+
+fn signer_sigs_json(sigs: &[SignerSig]) -> Json {
+    Json::Array(sigs.iter().map(signer_sig_json).collect())
+}
+
+fn signer_sig_from(j: &Json) -> Result<SignerSig, WireError> {
+    Ok(SignerSig {
+        operator_id: as_u32(field(j, "operator_id")?, "operator_id")?,
+        signature: hex_bounded(field(j, "signature")?, "signature", MAX_OPERATOR_SIG_BYTES)?,
+    })
+}
+
+fn signer_sigs_from(j: &Json) -> Result<Vec<SignerSig>, WireError> {
+    let items = j.as_array().ok_or(WireError::BadType("signatures"))?;
+    if items.len() > MAX_OPERATOR_SIGS {
+        return Err(WireError::BadField("signatures"));
+    }
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        out.push(signer_sig_from(item)?);
+    }
+    Ok(out)
 }
 
 pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
@@ -259,30 +286,19 @@ pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
             source_ref: hex_array::<32>(field(body, "source_ref")?, "source_ref")?,
             asset_id: hex_array::<16>(field(body, "asset_id")?, "asset_id")?,
         })),
-        "report_reorg" => {
-            let sigs_json = field(body, "signatures")?
-                .as_array()
-                .ok_or(WireError::BadType("signatures"))?;
-            if sigs_json.len() > MAX_OPERATOR_SIGS {
-                return Err(WireError::BadField("signatures"));
-            }
-            let mut signatures = Vec::with_capacity(sigs_json.len());
-            for s in sigs_json {
-                signatures.push(SignerSig {
-                    operator_id: as_u32(field(s, "operator_id")?, "operator_id")?,
-                    signature: hex_bounded(
-                        field(s, "signature")?,
-                        "signature",
-                        MAX_OPERATOR_SIG_BYTES,
-                    )?,
-                });
-            }
-            Ok(Request::ReportReorg(ReportReorgRequest {
-                source_chain: as_u32(field(body, "source_chain")?, "source_chain")?,
-                fork_depth: as_u32(field(body, "fork_depth")?, "fork_depth")?,
-                signatures,
-            }))
-        }
+        "report_reorg" => Ok(Request::ReportReorg(ReportReorgRequest {
+            source_chain: as_u32(field(body, "source_chain")?, "source_chain")?,
+            fork_depth: as_u32(field(body, "fork_depth")?, "fork_depth")?,
+            signatures: signer_sigs_from(field(body, "signatures")?)?,
+        })),
+        "emergency_freeze" => Ok(Request::EmergencyFreeze(EmergencyFreezeRequest {
+            until_height: as_u64(field(body, "until_height")?, "until_height")?,
+            signatures: signer_sigs_from(field(body, "signatures")?)?,
+        })),
+        "watchdog_freeze" => Ok(Request::WatchdogFreeze(WatchdogFreezeRequest {
+            until_height: as_u64(field(body, "until_height")?, "until_height")?,
+            signature: signer_sig_from(field(body, "signature")?)?,
+        })),
         other => Err(WireError::UnknownMethod(other.to_string())),
     }
 }
@@ -858,6 +874,10 @@ pub fn encode_response(resp: &Response) -> Json {
             ("result", Json::str("pool")),
             ("pool", pool_view_json(v)),
         ]),
+        Response::Frozen { until_height } => object(vec![
+            ("result", Json::str("frozen")),
+            ("until_height", Json::Int(*until_height)),
+        ]),
         Response::SourcePaused {
             source_chain,
             fork_depth,
@@ -908,6 +928,9 @@ pub fn decode_response(j: &Json) -> Result<Response, WireError> {
         "deposit_admitted" => Ok(Response::DepositAdmitted(outcome_from(field(
             j, "outcome",
         )?)?)),
+        "frozen" => Ok(Response::Frozen {
+            until_height: as_u64(field(j, "until_height")?, "until_height")?,
+        }),
         "source_paused" => Ok(Response::SourcePaused {
             source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
             fork_depth: as_u32(field(j, "fork_depth")?, "fork_depth")?,
@@ -1846,6 +1869,23 @@ mod tests {
         round_response(Response::SourcePaused {
             source_chain: 7,
             fork_depth: 12,
+        });
+        round_request(Request::EmergencyFreeze(EmergencyFreezeRequest {
+            until_height: 4_096,
+            signatures: vec![SignerSig {
+                operator_id: 3,
+                signature: vec![0xc3; 64],
+            }],
+        }));
+        round_request(Request::WatchdogFreeze(WatchdogFreezeRequest {
+            until_height: 512,
+            signature: SignerSig {
+                operator_id: 4,
+                signature: vec![0xd4; 64],
+            },
+        }));
+        round_response(Response::Frozen {
+            until_height: 4_096,
         });
 
         let sigs: Vec<Json> = (0..MAX_OPERATOR_SIGS + 1)
