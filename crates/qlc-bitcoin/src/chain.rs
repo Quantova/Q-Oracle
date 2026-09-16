@@ -65,6 +65,14 @@ pub fn bits_expectation(
     }
 }
 
+const MEDIAN_TIME_SPAN: usize = 11;
+
+fn median_time_past(window: &[BlockHeader]) -> u32 {
+    let mut times: Vec<u32> = window.iter().map(|h| h.timestamp).collect();
+    times.sort_unstable();
+    times[times.len() / 2]
+}
+
 pub fn verify_chain(
     headers: &[BlockHeader],
     start_height: u32,
@@ -76,6 +84,9 @@ pub fn verify_chain(
     let pow_limit = compact_to_target(params.pow_limit_bits);
     let mut work = U256::ZERO;
     for (i, h) in headers.iter().enumerate() {
+        if U256::from_compact(h.bits).to_compact() != h.bits {
+            return Err(SpvError::NonCanonicalBits { index: i });
+        }
         if !h.meets_pow() {
             return Err(SpvError::PowNotMet);
         }
@@ -95,6 +106,11 @@ pub fn verify_chain(
                 check_retarget_boundary(&headers[i - interval], prev, h, params)?;
             } else {
                 bits_expectation(height, prev.bits, h.bits, params, i)?;
+            }
+            if i >= MEDIAN_TIME_SPAN
+                && h.timestamp <= median_time_past(&headers[i - MEDIAN_TIME_SPAN..i])
+            {
+                return Err(SpvError::MedianTimePast { index: i });
             }
         }
         work = work.wrapping_add(&block_work(h.bits));
@@ -208,6 +224,64 @@ impl VerifiedChain {
 mod tests {
     use super::*;
     use crate::params::{BITCOIN, BITCOIN_CASH};
+
+    #[test]
+    fn a_backdated_timestamp_below_the_median_of_eleven_is_rejected() {
+        let easy = NetworkParams {
+            pow_limit_bits: 0x207f_ffff,
+            ..BITCOIN
+        };
+        let mine = |prev: [u8; 32], root: [u8; 32], timestamp: u32| {
+            let mut h = BlockHeader {
+                version: 1,
+                prev_block: prev,
+                merkle_root: root,
+                timestamp,
+                bits: 0x207f_ffff,
+                nonce: 0,
+            };
+            while !h.meets_pow() {
+                h.nonce = h.nonce.wrapping_add(1);
+            }
+            h
+        };
+        let mut headers = Vec::new();
+        let mut prev = [0u8; 32];
+        for i in 0..12u32 {
+            let h = mine(prev, [i as u8 + 1; 32], 1_700_000_000 + i * 600);
+            prev = h.block_hash();
+            headers.push(h);
+        }
+        headers.push(mine(prev, [0xff; 32], 1_700_000_000));
+        assert_eq!(
+            verify_chain(&headers, 0, &easy),
+            Err(SpvError::MedianTimePast { index: 12 })
+        );
+    }
+
+    #[test]
+    fn a_non_canonical_bits_encoding_is_refused() {
+        let easy = NetworkParams {
+            pow_limit_bits: 0x207f_ffff,
+            ..BITCOIN
+        };
+        let mut h = BlockHeader {
+            version: 1,
+            prev_block: [0u8; 32],
+            merkle_root: [0x11u8; 32],
+            timestamp: 1_700_000_000,
+            bits: 0x207f_ffff,
+            nonce: 0,
+        };
+        while !h.meets_pow() {
+            h.nonce += 1;
+        }
+        h.bits |= 0x0080_0000;
+        assert_eq!(
+            verify_chain(&[h], 0, &easy),
+            Err(SpvError::NonCanonicalBits { index: 0 })
+        );
+    }
 
     fn from_hex(s: &str) -> Vec<u8> {
         let b = s.as_bytes();
