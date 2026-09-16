@@ -107,6 +107,18 @@ pub struct ReportReorgRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmergencyFreezeRequest {
+    pub until_height: u64,
+    pub signatures: Vec<SignerSig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchdogFreezeRequest {
+    pub until_height: u64,
+    pub signature: SignerSig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
     CreatePool(PoolRequest),
@@ -115,6 +127,8 @@ pub enum Request {
     SubmitDeposit(DepositRequest),
     DepositStatus(DepositStatusRequest),
     ReportReorg(ReportReorgRequest),
+    EmergencyFreeze(EmergencyFreezeRequest),
+    WatchdogFreeze(WatchdogFreezeRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,6 +201,7 @@ pub enum Response {
     DepositAdmitted(DepositOutcome),
     Status(DepositStatusView),
     SourcePaused { source_chain: u32, fork_depth: u32 },
+    Frozen { until_height: u64 },
     Error(ApiError),
 }
 
@@ -285,6 +300,30 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
                 Ok(()) => Response::SourcePaused {
                     source_chain: request.source_chain,
                     fork_depth: request.fork_depth,
+                },
+                Err(err) => Response::Error(ApiError::Gateway(err)),
+            }
+        }
+        // Both freezes are quorum gated inside the gateway and only ever extend, so
+        // neither can be used to lift a freeze that is already running.
+        Request::EmergencyFreeze(request) => {
+            match state
+                .gateway
+                .emergency_freeze(request.until_height, &request.signatures)
+            {
+                Ok(()) => Response::Frozen {
+                    until_height: request.until_height,
+                },
+                Err(err) => Response::Error(ApiError::Gateway(err)),
+            }
+        }
+        Request::WatchdogFreeze(request) => {
+            match state
+                .gateway
+                .watchdog_freeze(request.until_height, &request.signature)
+            {
+                Ok(()) => Response::Frozen {
+                    until_height: request.until_height,
                 },
                 Err(err) => Response::Error(ApiError::Gateway(err)),
             }
@@ -1189,6 +1228,106 @@ mod tests {
             state.gateway.is_source_paused(source),
             "a quorum report must reach the gateway and pause the source"
         );
+    }
+
+    #[test]
+    fn a_single_operator_can_trip_the_watchdog_freeze_over_the_rpc() {
+        let ops: Vec<Op> = (0..4).map(mk).collect();
+        let mut set = OperatorSet::new(3);
+        for op in &ops {
+            set.register(op.id, op.pk);
+        }
+        let mut state = BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000));
+
+        let until = 100u64;
+        let message = q_gateway::freeze_message(until, DEST_ID);
+        let watchdog = SignerSig {
+            operator_id: ops[0].id,
+            signature: ml_dsa::sign(&ops[0].sk, &message, q_gateway::WATCHDOG_DOMAIN, &[0u8; 32])
+                .expect("sign")
+                .to_vec(),
+        };
+        let response = handle(
+            &mut state,
+            Request::WatchdogFreeze(WatchdogFreezeRequest {
+                until_height: until,
+                signature: watchdog,
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Frozen {
+                until_height: until
+            }
+        );
+
+        // A window past the watchdog ceiling is refused even with a good signature.
+        let far = q_gateway::WATCHDOG_MAX_WINDOW + 1_000;
+        let far_msg = q_gateway::freeze_message(far, DEST_ID);
+        let far_sig = SignerSig {
+            operator_id: ops[0].id,
+            signature: ml_dsa::sign(&ops[0].sk, &far_msg, q_gateway::WATCHDOG_DOMAIN, &[0u8; 32])
+                .expect("sign")
+                .to_vec(),
+        };
+        let refused = handle(
+            &mut state,
+            Request::WatchdogFreeze(WatchdogFreezeRequest {
+                until_height: far,
+                signature: far_sig,
+            }),
+        );
+        assert!(
+            matches!(refused, Response::Error(_)),
+            "a watchdog window past the ceiling must be refused, got {refused:?}"
+        );
+    }
+
+    #[test]
+    fn an_emergency_freeze_needs_a_quorum_over_the_rpc() {
+        let ops: Vec<Op> = (0..4).map(mk).collect();
+        let mut set = OperatorSet::new(3);
+        for op in &ops {
+            set.register(op.id, op.pk);
+        }
+        let mut state = BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000));
+
+        let until = 5_000u64;
+        let message = q_gateway::freeze_message(until, DEST_ID);
+        let sign = |op: &Op| SignerSig {
+            operator_id: op.id,
+            signature: ml_dsa::sign(&op.sk, &message, q_gateway::FREEZE_DOMAIN, &[0u8; 32])
+                .expect("sign")
+                .to_vec(),
+        };
+
+        let thin = handle(
+            &mut state,
+            Request::EmergencyFreeze(EmergencyFreezeRequest {
+                until_height: until,
+                signatures: ops[0..2].iter().map(sign).collect(),
+            }),
+        );
+        assert!(
+            matches!(thin, Response::Error(_)),
+            "a sub quorum freeze must be refused, got {thin:?}"
+        );
+        assert_eq!(state.gateway.frozen_until(), 0, "nothing was frozen");
+
+        let quorum = handle(
+            &mut state,
+            Request::EmergencyFreeze(EmergencyFreezeRequest {
+                until_height: until,
+                signatures: ops[0..3].iter().map(sign).collect(),
+            }),
+        );
+        assert_eq!(
+            quorum,
+            Response::Frozen {
+                until_height: until
+            }
+        );
+        assert_eq!(state.gateway.frozen_until(), until);
     }
 
     #[test]
