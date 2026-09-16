@@ -70,7 +70,7 @@ pub fn is_valid_merkle_branch(
     }
     let mut value = *leaf;
     for (i, sibling) in branch.iter().enumerate() {
-        if (index >> i) & 1 == 1 {
+        if branch_bit(index, i) {
             value = hash_pair(sibling, &value);
         } else {
             value = hash_pair(&value, sibling);
@@ -79,10 +79,16 @@ pub fn is_valid_merkle_branch(
     &value == root
 }
 
+// positions at or past the width of the index read as zero, so an over long branch
+// shifts to zero instead of panicking
+fn branch_bit(index: u64, i: usize) -> bool {
+    i < 64 && (index >> i) & 1 == 1
+}
+
 pub fn merkle_root_from_branch(leaf: &[u8; 32], branch: &[[u8; 32]], index: u64) -> [u8; 32] {
     let mut value = *leaf;
     for (i, sibling) in branch.iter().enumerate() {
-        if (index >> i) & 1 == 1 {
+        if branch_bit(index, i) {
             value = hash_pair(sibling, &value);
         } else {
             value = hash_pair(&value, sibling);
@@ -94,6 +100,14 @@ pub fn merkle_root_from_branch(leaf: &[u8; 32], branch: &[[u8; 32]], index: u64)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_over_long_branch_does_not_overflow_the_shift() {
+        let leaf = [0x42u8; 32];
+        let branch = vec![[0x01u8; 32]; 70];
+        let root = merkle_root_from_branch(&leaf, &branch, u64::MAX);
+        assert!(is_valid_merkle_branch(&leaf, &branch, 70, u64::MAX, &root));
+    }
 
     #[test]
     fn a_single_chunk_merkleizes_to_itself() {
