@@ -255,6 +255,14 @@ pub fn run_with<A: ToSocketAddrs>(
     state: SharedState,
     store: Option<Arc<GuardStore>>,
 ) -> std::io::Result<()> {
+    {
+        let guard = state.read().unwrap_or_else(|e| e.into_inner());
+        if !guard.gateway.governance_configured() {
+            eprintln!(
+                "q-oracle: serving with governance unset, pool creation is open until it is set"
+            );
+        }
+    }
     let listener = TcpListener::bind(addr)?;
     serve(listener, state, store);
     loop {
