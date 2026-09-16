@@ -135,6 +135,14 @@ fn canonical_ops(proof: &ExistenceProof) -> Result<(), ProofError> {
     Ok(())
 }
 
+pub fn deposit_source_ref(store_name: &[u8], proof: &ExistenceProof) -> [u8; 32] {
+    let leaf_hash = proof.leaf.apply(&proof.key, &proof.value);
+    let mut source_pre = Vec::with_capacity(store_name.len() + 32);
+    source_pre.extend_from_slice(store_name);
+    source_pre.extend_from_slice(&leaf_hash);
+    sha256(&source_pre)
+}
+
 pub fn extract_deposit(
     app_hash: &[u8; 32],
     store_name: &[u8],
@@ -169,7 +177,7 @@ pub fn extract_deposit(
     asset_id.copy_from_slice(&proof.value[32..48]);
     let mut amount_bytes = [0u8; 16];
     amount_bytes.copy_from_slice(&proof.value[48..64]);
-    let source_ref = sha256(&proof.key);
+    let source_ref = deposit_source_ref(store_name, proof);
 
     Ok(Deposit {
         source_ref,
@@ -211,13 +219,32 @@ mod tests {
             ],
             store: None,
         };
+        let leaf_hash = proof.leaf.apply(&proof.key, &proof.value);
+        let mut source_pre = STORE_NAME.to_vec();
+        source_pre.extend_from_slice(&leaf_hash);
         let deposit = Deposit {
-            source_ref: sha256(&key),
+            source_ref: sha256(&source_pre),
             asset_id,
             amount,
             recipient,
         };
         (proof, deposit)
+    }
+
+    #[test]
+    fn the_source_ref_binds_the_leaf_hash_not_the_splittable_key() {
+        let (iavl, _) = sample_proof();
+        let leaf_hash = iavl.leaf.apply(&iavl.key, &iavl.value);
+        let (app_hash, proof) = wrap_store_layer(iavl.clone(), STORE_NAME);
+        let deposit = extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof).unwrap();
+        let mut expect = STORE_NAME.to_vec();
+        expect.extend_from_slice(&leaf_hash);
+        assert_eq!(deposit.source_ref, sha256(&expect));
+        assert_ne!(
+            deposit.source_ref,
+            sha256(&iavl.key),
+            "a prefix and key re-split changes sha256(key) but not the leaf hash"
+        );
     }
 
     #[test]
