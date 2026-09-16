@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::Artifact;
+use q_airlock::SignerSig;
 use q_assets::Network;
 use q_codec::{BridgeFact, CodecError};
 use q_federated::{FederatedError, PoolError, PoolRequest, TrustlessError, TrustlessMint};
 use q_gateway::{GatewayError, MintReceipt};
 use q_qbridge::{
     ApiError, BitcoinProofMaterial, DepositOutcome, DepositProof, DepositRequest,
-    DepositStatusRequest, DepositStatusView, GetPoolRequest, ListPoolsRequest, PoolView, Request,
-    Response,
+    DepositStatusRequest, DepositStatusView, GetPoolRequest, ListPoolsRequest, PoolView,
+    ReportReorgRequest, Request, Response,
 };
 use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
 use qlc_cosmos::commit::{BlockIdFlag, Commit, CommitError, CommitSig, Header};
@@ -35,6 +36,10 @@ pub const MAX_PARTICIPATION: usize = 4096;
 pub const MAX_PROOF_NODES: usize = 256;
 
 pub const MAX_VALIDATORS: usize = 4096;
+
+pub const MAX_OPERATOR_SIGS: usize = 1024;
+
+pub const MAX_OPERATOR_SIG_BYTES: usize = 8192;
 
 pub const MAX_PROOF_PATH: usize = 256;
 
@@ -180,6 +185,7 @@ pub fn method_of(req: &Request) -> &'static str {
         Request::GetPool(_) => "get_pool",
         Request::SubmitDeposit(_) => "submit_deposit",
         Request::DepositStatus(_) => "deposit_status",
+        Request::ReportReorg(_) => "report_reorg",
     }
 }
 
@@ -204,6 +210,24 @@ pub fn encode_request(req: &Request) -> Json {
         Request::DepositStatus(r) => object(vec![
             ("source_ref", hexs(&r.source_ref)),
             ("asset_id", hexs(&r.asset_id)),
+        ]),
+        Request::ReportReorg(r) => object(vec![
+            ("source_chain", u32j(r.source_chain)),
+            ("fork_depth", u32j(r.fork_depth)),
+            (
+                "signatures",
+                Json::Array(
+                    r.signatures
+                        .iter()
+                        .map(|s| {
+                            object(vec![
+                                ("operator_id", u32j(s.operator_id)),
+                                ("signature", hexs(&s.signature)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
         ]),
     }
 }
@@ -235,6 +259,30 @@ pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
             source_ref: hex_array::<32>(field(body, "source_ref")?, "source_ref")?,
             asset_id: hex_array::<16>(field(body, "asset_id")?, "asset_id")?,
         })),
+        "report_reorg" => {
+            let sigs_json = field(body, "signatures")?
+                .as_array()
+                .ok_or(WireError::BadType("signatures"))?;
+            if sigs_json.len() > MAX_OPERATOR_SIGS {
+                return Err(WireError::BadField("signatures"));
+            }
+            let mut signatures = Vec::with_capacity(sigs_json.len());
+            for s in sigs_json {
+                signatures.push(SignerSig {
+                    operator_id: as_u32(field(s, "operator_id")?, "operator_id")?,
+                    signature: hex_bounded(
+                        field(s, "signature")?,
+                        "signature",
+                        MAX_OPERATOR_SIG_BYTES,
+                    )?,
+                });
+            }
+            Ok(Request::ReportReorg(ReportReorgRequest {
+                source_chain: as_u32(field(body, "source_chain")?, "source_chain")?,
+                fork_depth: as_u32(field(body, "fork_depth")?, "fork_depth")?,
+                signatures,
+            }))
+        }
         other => Err(WireError::UnknownMethod(other.to_string())),
     }
 }
@@ -810,6 +858,14 @@ pub fn encode_response(resp: &Response) -> Json {
             ("result", Json::str("pool")),
             ("pool", pool_view_json(v)),
         ]),
+        Response::SourcePaused {
+            source_chain,
+            fork_depth,
+        } => object(vec![
+            ("result", Json::str("source_paused")),
+            ("source_chain", u32j(*source_chain)),
+            ("fork_depth", u32j(*fork_depth)),
+        ]),
         Response::DepositAdmitted(outcome) => object(vec![
             ("result", Json::str("deposit_admitted")),
             ("outcome", outcome_json(outcome)),
@@ -852,6 +908,10 @@ pub fn decode_response(j: &Json) -> Result<Response, WireError> {
         "deposit_admitted" => Ok(Response::DepositAdmitted(outcome_from(field(
             j, "outcome",
         )?)?)),
+        "source_paused" => Ok(Response::SourcePaused {
+            source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
+            fork_depth: as_u32(field(j, "fork_depth")?, "fork_depth")?,
+        }),
         "status" => Ok(Response::Status(DepositStatusView {
             source_ref: hex_array::<32>(field(j, "source_ref")?, "source_ref")?,
             asset_id: hex_array::<16>(field(j, "asset_id")?, "asset_id")?,
@@ -914,6 +974,7 @@ fn api_json(api: &ApiError) -> Json {
         ApiError::Pool(e) => pool_err_json(e),
         ApiError::Federated(e) => federated_err_json(e),
         ApiError::Trustless(e) => trustless_err_json(e),
+        ApiError::Gateway(e) => tagged("api", "gateway", vec![("gateway", gateway_err_json(e))]),
     }
 }
 
@@ -1287,6 +1348,7 @@ fn api_from(j: &Json) -> Result<ApiError, WireError> {
             "cosmos_verify" => Ok(ApiError::CosmosVerify(corridor_err_from(field(
                 j, "cosmos",
             )?)?)),
+            "gateway" => Ok(ApiError::Gateway(gateway_err_from(field(j, "gateway")?)?)),
             other => Err(WireError::UnknownErrorCode(other.to_string())),
         },
         "pool" => Ok(ApiError::Pool(pool_err_from(j)?)),
@@ -1764,6 +1826,46 @@ mod tests {
     use q_airlock::{AttestationEnvelope, SignerSig};
     use q_codec::{attest_context, AssetId, Direction, Recipient, SourceRef, FACT_VERSION};
     use qtv_crypto::ml_dsa;
+
+    #[test]
+    fn a_reorg_report_round_trips_and_its_signature_list_is_bounded() {
+        round_request(Request::ReportReorg(ReportReorgRequest {
+            source_chain: 7,
+            fork_depth: 12,
+            signatures: vec![
+                SignerSig {
+                    operator_id: 1,
+                    signature: vec![0xa1; 64],
+                },
+                SignerSig {
+                    operator_id: 2,
+                    signature: vec![0xb2; 64],
+                },
+            ],
+        }));
+        round_response(Response::SourcePaused {
+            source_chain: 7,
+            fork_depth: 12,
+        });
+
+        let sigs: Vec<Json> = (0..MAX_OPERATOR_SIGS + 1)
+            .map(|i| {
+                object(vec![
+                    ("operator_id", u32j(i as u32)),
+                    ("signature", Json::str("aa")),
+                ])
+            })
+            .collect();
+        let body = object(vec![
+            ("source_chain", u32j(7)),
+            ("fork_depth", u32j(12)),
+            ("signatures", Json::Array(sigs)),
+        ]);
+        assert!(
+            decode_request("report_reorg", &body).is_err(),
+            "a signature list past the cap must be refused before it is allocated"
+        );
+    }
 
     fn round_request(req: Request) {
         let body = encode_request(&req);
