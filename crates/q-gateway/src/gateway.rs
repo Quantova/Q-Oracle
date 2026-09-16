@@ -1183,6 +1183,19 @@ mod tests {
     }
 
     #[test]
+    fn an_exit_ack_fact_is_refused_by_the_deposit_path() {
+        let (s, mut gw) = nine_op_gateway(3);
+        let mut ack = fact();
+        ack.direction = Direction::ExitAck;
+
+        assert_eq!(
+            gw.process_deposit(&envelope(&s, &ack)),
+            Err(GatewayError::WrongDirection),
+            "an exit acknowledgement must not mint through the deposit path"
+        );
+    }
+
+    #[test]
     fn corridor_quorum_overrides_the_global_threshold() {
         let (s, mut gw) = nine_op_gateway(3);
         gw.set_corridor_quorum(1, 6)
