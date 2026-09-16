@@ -823,6 +823,48 @@ mod settle_commit_order_tests {
         (desk, events)
     }
 
+    fn second_open_event() -> ExitEvent {
+        let mut event = open_event();
+        if let ExitEvent::Open { index, exit } = &mut event {
+            *index = 1;
+            exit.burn_ref = [0x22; 32];
+        }
+        event
+    }
+
+    #[test]
+    fn one_foreign_payout_cannot_settle_two_exits() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let journal = SharedJournal {
+            events: Arc::clone(&events),
+            replayed: vec![open_event(), second_open_event()],
+        };
+        let consumed = PickyLedger {
+            inner: MemoryLedger::new(),
+            refuse: None,
+        };
+        let mut desk = ExitDesk::assemble(cfg(), anchor(), Box::new(consumed), Box::new(journal))
+            .expect("the desk assembles");
+        desk.register_vault(1, 4_000);
+        desk.reconstruct().expect("both opens replay");
+        events.lock().unwrap().clear();
+
+        desk.settle(ExitId(0), &StubWatcher, 50)
+            .expect("the first exit settles against the payout");
+        assert_eq!(
+            desk.settle(ExitId(1), &StubWatcher, 50),
+            Err(ExitError::ReplayedPayout),
+            "one foreign payment must not release the custody behind two exits"
+        );
+        assert_eq!(desk.exit(ExitId(1)).unwrap().state, ExitState::Pending);
+        assert_eq!(
+            desk.locked_collateral(1),
+            1_500,
+            "the second exit keeps its custody locked"
+        );
+        assert_eq!(events.lock().unwrap().len(), 1, "only the first settle is journaled");
+    }
+
     #[test]
     fn a_settle_the_replay_ledger_refuses_is_never_written_to_the_journal() {
         let (mut desk, events) = pending_desk(Some(FOREIGN));
