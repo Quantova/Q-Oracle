@@ -951,6 +951,12 @@ fn spv_err_json(e: &SpvError) -> Json {
         SpvError::MalformedTransaction => tagged("spv", "malformed_transaction", vec![]),
         SpvError::TransactionMismatch => tagged("spv", "transaction_mismatch", vec![]),
         SpvError::MerkleBranchTooLong => tagged("spv", "merkle_branch_too_long", vec![]),
+        SpvError::NonCanonicalBits { index } => {
+            tagged("spv", "non_canonical_bits", vec![("index", usizej(*index))])
+        }
+        SpvError::MedianTimePast { index } => {
+            tagged("spv", "median_time_past", vec![("index", usizej(*index))])
+        }
     }
 }
 
