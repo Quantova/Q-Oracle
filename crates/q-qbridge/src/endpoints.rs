@@ -1,7 +1,7 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use q_airlock::AttestationEnvelope;
+use q_airlock::{AttestationEnvelope, SignerSig};
 use q_assets::Network;
 use q_codec::BridgeFact;
 use q_federated::{
@@ -9,7 +9,7 @@ use q_federated::{
     install_all, install_pool, Corridor, FederatedError, PoolError, PoolRegistry, PoolRequest,
     PoolSpec, SourceRegistry, Tier, TrustlessError, TrustlessMint,
 };
-use q_gateway::{Gateway, MintReceipt};
+use q_gateway::{Gateway, GatewayError, MintReceipt};
 use qlc_bitcoin::{
     verify_chain, verify_trustless_deposit, BlockHeader, Checkpoint, MerkleStep, NetworkParams,
     SpvError,
@@ -100,6 +100,13 @@ pub struct DepositStatusRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportReorgRequest {
+    pub source_chain: u32,
+    pub fork_depth: u32,
+    pub signatures: Vec<SignerSig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
     CreatePool(PoolRequest),
@@ -107,6 +114,7 @@ pub enum Request {
     GetPool(GetPoolRequest),
     SubmitDeposit(DepositRequest),
     DepositStatus(DepositStatusRequest),
+    ReportReorg(ReportReorgRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +176,7 @@ pub enum ApiError {
     BitcoinSpv(SpvError),
     EthereumVerify(EthError),
     CosmosVerify(CorridorError),
+    Gateway(GatewayError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +186,7 @@ pub enum Response {
     Pool(PoolView),
     DepositAdmitted(DepositOutcome),
     Status(DepositStatusView),
+    SourcePaused { source_chain: u32, fork_depth: u32 },
     Error(ApiError),
 }
 
@@ -265,6 +275,20 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
             Err(err) => Response::Error(err),
         },
         Request::DepositStatus(request) => Response::Status(deposit_status(state, &request)),
+        // Quorum gated inside report_reorg, so reaching it needs no separate gate here.
+        Request::ReportReorg(request) => {
+            match state.gateway.report_reorg(
+                request.source_chain,
+                request.fork_depth,
+                &request.signatures,
+            ) {
+                Ok(()) => Response::SourcePaused {
+                    source_chain: request.source_chain,
+                    fork_depth: request.fork_depth,
+                },
+                Err(err) => Response::Error(ApiError::Gateway(err)),
+            }
+        }
     }
 }
 
@@ -1109,6 +1133,61 @@ mod tests {
         assert_eq!(
             response,
             Response::Error(ApiError::NoAnchor(Network::Bitcoin.id()))
+        );
+    }
+
+    #[test]
+    fn an_operator_quorum_can_pause_a_source_over_the_rpc() {
+        let ops: Vec<Op> = (0..4).map(mk).collect();
+        let mut set = OperatorSet::new(3);
+        for op in &ops {
+            set.register(op.id, op.pk);
+        }
+        let mut state = BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000));
+        let source = Network::Ethereum.id();
+        state.gateway.register_corridor(source, 6);
+
+        let message = q_gateway::reorg_message(source, 9, DEST_ID);
+        let sign = |op: &Op| SignerSig {
+            operator_id: op.id,
+            signature: ml_dsa::sign(&op.sk, &message, q_gateway::REORG_DOMAIN, &[0u8; 32])
+                .expect("sign")
+                .to_vec(),
+        };
+
+        // Two of four is below the floor, so it must not pause.
+        let thin = handle(
+            &mut state,
+            Request::ReportReorg(ReportReorgRequest {
+                source_chain: source,
+                fork_depth: 9,
+                signatures: ops[0..2].iter().map(sign).collect(),
+            }),
+        );
+        assert!(
+            matches!(thin, Response::Error(_)),
+            "a sub quorum report must not pause, got {thin:?}"
+        );
+        assert!(!state.gateway.is_source_paused(source));
+
+        let quorum = handle(
+            &mut state,
+            Request::ReportReorg(ReportReorgRequest {
+                source_chain: source,
+                fork_depth: 9,
+                signatures: ops[0..3].iter().map(sign).collect(),
+            }),
+        );
+        assert_eq!(
+            quorum,
+            Response::SourcePaused {
+                source_chain: source,
+                fork_depth: 9
+            }
+        );
+        assert!(
+            state.gateway.is_source_paused(source),
+            "a quorum report must reach the gateway and pause the source"
         );
     }
 
