@@ -18,7 +18,9 @@ pub const BRIDGE_STORE_PREFIX: &[u8] = b"bridge/deposits/";
 
 pub const BRIDGE_STORE_NAME: &[u8] = b"bridge";
 
-pub const DEFAULT_TRUSTING_PERIOD_SECS: u64 = 1_209_600;
+// stays under the bridged chain's unbonding period (Osmosis is 14 days) so a set that has
+// since unbonded has no window to sign a fork, set to half
+pub const DEFAULT_TRUSTING_PERIOD_SECS: u64 = 604_800;
 
 pub const DEFAULT_MAX_CLOCK_DRIFT_SECS: u64 = 10;
 
