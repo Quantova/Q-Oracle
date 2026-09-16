@@ -245,9 +245,24 @@ pub(crate) fn restore(store: &Option<GuardStore>) -> std::io::Result<BridgeState
                     format!("the guard snapshot is corrupt and was refused: {e:?}"),
                 )
             })?;
+            for asset in state.gateway.minted_assets_without_a_cap() {
+                eprintln!(
+                    "q-oracle: restored a minted total for asset {} with no registered cap, \
+                     its pool did not survive the restart and it cannot mint until re registered",
+                    hex16(&asset)
+                );
+            }
         }
     }
     Ok(state)
+}
+
+fn hex16(bytes: &[u8; 16]) -> String {
+    let mut out = String::with_capacity(32);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
 }
 
 pub fn run_with<A: ToSocketAddrs>(
