@@ -36,6 +36,15 @@ impl ZeroizingSecretKey {
         ZeroizingSecretKey { bytes }
     }
 
+    // derives into place so the key is never carried back by value
+    fn derive(seed: &[u8; SEED_BYTES]) -> (PublicKey, ZeroizingSecretKey) {
+        let mut held = ZeroizingSecretKey {
+            bytes: [0u8; ml_dsa::SECRET_KEY_BYTES],
+        };
+        let public_key = ml_dsa::keygen_into(seed, &mut held.bytes);
+        (public_key, held)
+    }
+
     fn expose(&self) -> &SecretKey {
         &self.bytes
     }
@@ -66,11 +75,11 @@ pub struct SoftSigner {
 
 impl SoftSigner {
     pub fn from_seed(operator_id: u32, seed: &[u8; SEED_BYTES]) -> SoftSigner {
-        let (public_key, secret_key) = ml_dsa::keygen(seed);
+        let (public_key, secret_key) = ZeroizingSecretKey::derive(seed);
         SoftSigner {
             operator_id,
             public_key,
-            secret_key: ZeroizingSecretKey::new(secret_key),
+            secret_key,
         }
     }
 }
@@ -129,11 +138,11 @@ pub struct SoftBackend {
 
 impl SoftBackend {
     pub fn from_seed(operator_id: u32, seed: &[u8; SEED_BYTES]) -> SoftBackend {
-        let (public_key, secret_key) = ml_dsa::keygen(seed);
+        let (public_key, secret_key) = ZeroizingSecretKey::derive(seed);
         SoftBackend {
             operator_id,
             public_key,
-            secret_key: ZeroizingSecretKey::new(secret_key),
+            secret_key,
         }
     }
 }
@@ -259,14 +268,14 @@ impl SoftwareHsm {
         label: &[u8],
         seed: &[u8; SEED_BYTES],
     ) -> SoftwareHsm {
-        let (public_key, secret_key) = ml_dsa::keygen(seed);
+        let (public_key, secret_key) = ZeroizingSecretKey::derive(seed);
         SoftwareHsm {
             slot,
             pin: pin.to_vec(),
             label: label.to_vec(),
             key_handle: 0x51a1,
             public_key,
-            secret_key: ZeroizingSecretKey::new(secret_key),
+            secret_key,
             sessions: RefCell::new(BTreeMap::new()),
             next_session: Cell::new(1),
         }
