@@ -310,6 +310,18 @@ impl Gateway {
         &self.per_asset_minted
     }
 
+    // Minted counters survive a restart in the guard snapshot but caps are re-registered
+    // from the pool set, so a restored counter with no cap means its pool is gone.
+    pub fn minted_assets_without_a_cap(&self) -> Vec<[u8; 16]> {
+        self.per_asset_minted
+            .iter()
+            .filter(|(asset_id, minted)| {
+                **minted > 0 && !self.per_asset_cap.contains_key(*asset_id)
+            })
+            .map(|(asset_id, _)| *asset_id)
+            .collect()
+    }
+
     pub fn is_source_paused(&self, source_chain: u32) -> bool {
         self.paused_sources.contains(&source_chain)
     }
@@ -1017,6 +1029,30 @@ pub fn batch_message(source_chain: u32, batch_index: u64, dest_chain_id: u64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restored_minted_total_with_no_cap_is_reported() {
+        let mut gw = Gateway::new(9000, 0x2a, OperatorSet::new(1), 1_000_000);
+        let asset = [0xa1u8; 16];
+        gw.register_asset_cap(asset, 1_000);
+        gw.register_corridor(1, 6);
+        gw.per_asset_minted.insert(asset, 500);
+        assert!(
+            gw.minted_assets_without_a_cap().is_empty(),
+            "a minted asset that still has its cap is consistent"
+        );
+
+        // A restart rebuilds caps from the pool set, so a pool that is gone leaves the
+        // counter behind with nothing to bound it.
+        let snapshot = gw.encode_guard();
+        let mut fresh = Gateway::new(9000, 0x2a, OperatorSet::new(1), 1_000_000);
+        fresh.rehydrate_guard(&snapshot).expect("rehydrates");
+        assert_eq!(
+            fresh.minted_assets_without_a_cap(),
+            vec![asset],
+            "a restored counter with no cap must be reported"
+        );
+    }
     use q_codec::{AssetId, Recipient, SourceRef, FACT_VERSION};
     use qtv_crypto::ml_dsa;
 
