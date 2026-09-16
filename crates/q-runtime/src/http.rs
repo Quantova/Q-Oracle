@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Result as IoResult, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,6 +19,41 @@ use crate::watch::{persist_or_rollback, Durability};
 use crate::wire::{decode_request, encode_response};
 
 pub const MAX_BODY: usize = 2 * 1024 * 1024;
+
+pub const MAX_INFLIGHT_BODY: usize = 8 * 1024 * 1024;
+
+static INFLIGHT_BODY: AtomicUsize = AtomicUsize::new(0);
+
+struct BodyGuard {
+    held: usize,
+}
+
+impl BodyGuard {
+    fn reserve(want: usize) -> Option<BodyGuard> {
+        let mut seen = INFLIGHT_BODY.load(Ordering::Relaxed);
+        loop {
+            let next = seen.checked_add(want)?;
+            if next > MAX_INFLIGHT_BODY {
+                return None;
+            }
+            match INFLIGHT_BODY.compare_exchange_weak(
+                seen,
+                next,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return Some(BodyGuard { held: want }),
+                Err(actual) => seen = actual,
+            }
+        }
+    }
+}
+
+impl Drop for BodyGuard {
+    fn drop(&mut self) {
+        INFLIGHT_BODY.fetch_sub(self.held, Ordering::AcqRel);
+    }
+}
 
 pub const MAX_HEAD: usize = 16 * 1024;
 
@@ -228,6 +264,7 @@ fn handle_connection(
     let path = parts.next().unwrap_or("").to_string();
 
     let mut content_length = 0usize;
+    let mut seen_length = false;
     let mut forwarded: Option<IpAddr> = None;
     loop {
         let header = match read_capped_line(&mut reader, &mut head_budget, deadline) {
@@ -240,7 +277,34 @@ fn handle_connection(
             break;
         }
         if let Some(value) = header_value(trimmed, "content-length") {
-            content_length = value.parse().unwrap_or(0);
+            if seen_length {
+                return write_error(
+                    &mut stream,
+                    400,
+                    "bad_request",
+                    "the request carries more than one content-length header",
+                );
+            }
+            seen_length = true;
+            match value.trim().parse::<usize>() {
+                Ok(n) => content_length = n,
+                Err(_) => {
+                    return write_error(
+                        &mut stream,
+                        400,
+                        "bad_request",
+                        "the content-length header is not a number",
+                    )
+                }
+            }
+        }
+        if header_value(trimmed, "transfer-encoding").is_some() {
+            return write_error(
+                &mut stream,
+                400,
+                "bad_request",
+                "transfer-encoding is not supported, send a content-length body",
+            );
         }
         if let Some(value) = header_value(trimmed, "x-real-ip") {
             forwarded = value.trim().parse().ok();
@@ -284,6 +348,22 @@ fn handle_connection(
             "the request body is too large",
         );
     }
+
+    let _body_guard = if content_length == 0 {
+        None
+    } else {
+        match BodyGuard::reserve(content_length) {
+            Some(guard) => Some(guard),
+            None => {
+                return write_error(
+                    &mut stream,
+                    503,
+                    "busy",
+                    "the gateway is handling too much request data, retry shortly",
+                )
+            }
+        }
+    };
 
     let mut body = Vec::with_capacity(content_length.min(64 * 1024));
     let mut chunk = [0u8; 8192];
