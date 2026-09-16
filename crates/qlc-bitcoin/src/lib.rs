@@ -53,6 +53,8 @@ pub enum SpvError {
     MalformedTransaction,
     TransactionMismatch,
     MerkleBranchTooLong,
+    NonCanonicalBits { index: usize },
+    MedianTimePast { index: usize },
 }
 
 pub const MAX_MERKLE_BRANCH: usize = 64;
