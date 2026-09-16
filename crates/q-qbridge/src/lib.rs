@@ -7,6 +7,6 @@ pub mod endpoints;
 pub use endpoints::{
     commit_deposit, handle, handle_read, verify_deposit, ApiError, BitcoinAnchor,
     BitcoinProofMaterial, BridgeState, DepositOutcome, DepositPlan, DepositProof, DepositRequest,
-    DepositStatusRequest, DepositStatusView, GetPoolRequest, ListPoolsRequest, PoolView,
-    ReportReorgRequest, Request, Response,
+    DepositStatusRequest, DepositStatusView, EmergencyFreezeRequest, GetPoolRequest,
+    ListPoolsRequest, PoolView, ReportReorgRequest, Request, Response, WatchdogFreezeRequest,
 };
