@@ -32,6 +32,7 @@ struct ZeroizingSecretKey {
 }
 
 impl ZeroizingSecretKey {
+    #[cfg(test)]
     fn new(bytes: SecretKey) -> ZeroizingSecretKey {
         ZeroizingSecretKey { bytes }
     }
