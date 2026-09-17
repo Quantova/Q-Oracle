@@ -156,3 +156,66 @@ fn a_single_operator_cannot_freeze_when_the_threshold_is_left_below_a_supermajor
         "a two-thirds supermajority of nine freezes the gateway"
     );
 }
+
+#[test]
+fn the_supermajority_floor_is_two_thirds_and_never_below_two() {
+    use q_gateway::gateway::supermajority_floor;
+
+    for (size, want) in [
+        (0usize, 2usize),
+        (1, 2),
+        (2, 2),
+        (3, 2),
+        (4, 3),
+        (5, 4),
+        (6, 4),
+        (7, 5),
+        (9, 6),
+        (10, 7),
+        (100, 67),
+    ] {
+        assert_eq!(
+            supermajority_floor(size),
+            want,
+            "the floor for a set of {size} is not the two thirds supermajority"
+        );
+    }
+
+    for size in 0..200usize {
+        let floor = supermajority_floor(size);
+        assert!(
+            floor >= 2,
+            "a set of {size} must never admit a one signature quorum"
+        );
+        assert!(
+            floor * 3 >= size * 2,
+            "the floor for {size} is below two thirds, so two disjoint quorums could both pass"
+        );
+    }
+}
+
+#[test]
+fn a_threshold_left_below_the_floor_cannot_admit_a_short_quorum() {
+    let ops: Vec<Op> = (1..=9).map(mk).collect();
+    let floor = q_gateway::gateway::supermajority_floor(9);
+    assert_eq!(floor, 6, "nine operators need six, or the case below is not short");
+
+    // The set is built with a threshold far under the floor, which is what a
+    // misconfiguration or the unvalidated raw setter would leave behind.
+    let mut gw = gateway(1, &ops);
+    let until = 10_000u64;
+    let msg = freeze_msg(until, DEST_ID);
+    let sigs: Vec<SignerSig> = ops[..5]
+        .iter()
+        .map(|op| sign_ctx(op, &msg, FREEZE_DOMAIN))
+        .collect();
+
+    assert!(
+        matches!(
+            gw.emergency_freeze(until, &sigs),
+            Err(GatewayError::BelowThreshold { .. })
+        ),
+        "five of nine is under the two thirds floor and must be refused however low the \
+         configured threshold was left"
+    );
+}
