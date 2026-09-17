@@ -197,14 +197,14 @@ mod tests {
     use crate::ed25519::{public_key_from_seed, sign};
     use crate::validator::ValidatorInfo;
 
-    const CHAIN_ID: &str = "cosmoshub-4";
+    pub(super) const CHAIN_ID: &str = "cosmoshub-4";
 
-    struct Keyed {
+    pub(super) struct Keyed {
         seed: [u8; 32],
         info: ValidatorInfo,
     }
 
-    fn keyed(seed_byte: u8, power: u64) -> Keyed {
+    pub(super) fn keyed(seed_byte: u8, power: u64) -> Keyed {
         let seed = [seed_byte; 32];
         let info = ValidatorInfo {
             pubkey: public_key_from_seed(&seed),
@@ -240,7 +240,7 @@ mod tests {
         }
     }
 
-    fn precommit(keyed: &Keyed, commit: &Commit) -> CommitSig {
+    pub(super) fn precommit(keyed: &Keyed, commit: &Commit) -> CommitSig {
         let timestamp = Timestamp {
             seconds: 1_700_000_001,
             nanos: keyed.seed[0] as i32,
@@ -262,7 +262,7 @@ mod tests {
         }
     }
 
-    fn build(validators: &[Keyed], signers: &[usize]) -> (Header, Commit, ValidatorSet) {
+    pub(super) fn build(validators: &[Keyed], signers: &[usize]) -> (Header, Commit, ValidatorSet) {
         let set = ValidatorSet::new(validators.iter().map(|k| k.info).collect());
         let header = sample_header(&set);
         let mut commit = Commit {
@@ -477,5 +477,63 @@ mod tests {
         ];
 
         assert!(verify(&pubkey, &vote_sign_bytes(&vote), &signature));
+    }
+}
+
+#[cfg(test)]
+mod duplicate_signature_tests {
+    use super::tests::{build, keyed, precommit, CHAIN_ID};
+    use super::*;
+
+    // Without the counted set, one validator repeating its precommit adds its power once
+    // per copy, which is how a minority walks itself over the two thirds line.
+    #[test]
+    fn a_repeated_validator_counts_once_and_cannot_reach_the_threshold() {
+        let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
+        let (header, mut commit, set) = build(&vs, &[0]);
+
+        for _ in 0..6 {
+            let extra = precommit(&vs[0], &commit);
+            commit.signatures.push(extra);
+        }
+
+        assert_eq!(
+            verify_commit(CHAIN_ID, &header, &commit, &set),
+            Err(CommitError::NotEnoughVotingPower {
+                signed: 25,
+                total: 100
+            }),
+            "a validator repeating its precommit was counted more than once, so 25 percent of \
+             the power carried a commit that needs more than 66"
+        );
+    }
+
+    #[test]
+    fn a_repeat_does_not_inflate_an_otherwise_honest_commit() {
+        let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
+        let (header, mut commit, set) = build(&vs, &[0, 1, 2]);
+        let extra = precommit(&vs[0], &commit);
+        commit.signatures.push(extra);
+
+        assert_eq!(
+            verify_commit(CHAIN_ID, &header, &commit, &set),
+            Ok(75),
+            "the duplicate must not add power to a commit that already verifies"
+        );
+    }
+
+    #[test]
+    fn a_signature_from_outside_the_set_adds_nothing() {
+        let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
+        let (header, mut commit, set) = build(&vs, &[0, 1, 2]);
+        let stranger = keyed(9, 1_000);
+        let extra = precommit(&stranger, &commit);
+        commit.signatures.push(extra);
+
+        assert_eq!(
+            verify_commit(CHAIN_ID, &header, &commit, &set),
+            Ok(75),
+            "a signer outside the validator set contributed power it does not hold"
+        );
     }
 }
