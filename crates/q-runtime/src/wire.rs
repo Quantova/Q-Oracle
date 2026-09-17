@@ -105,7 +105,7 @@ fn as_u8(j: &Json, name: &'static str) -> Result<u8, WireError> {
 }
 
 fn as_usize(j: &Json, name: &'static str) -> Result<usize, WireError> {
-    Ok(as_u64(j, name)? as usize)
+    usize::try_from(as_u64(j, name)?).map_err(|_| WireError::BadNumber(name))
 }
 
 fn as_i64(j: &Json, name: &'static str) -> Result<i64, WireError> {
