@@ -557,16 +557,16 @@ fn deposit_status(state: &BridgeState, request: &DepositStatusRequest) -> Deposi
 mod tests {
     use super::*;
 
-    const DEST_ID: u64 = 0x0000_002a_0000_2328;
+    pub(super) const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use q_airlock::SignerSig;
     use q_codec::{attest_context, AssetId, Direction, Recipient, SourceRef, FACT_VERSION};
     use q_federated::{derive_asset_id, SourceEndpoint};
     use q_gateway::OperatorSet;
     use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
 
-    const DEST: u32 = 9000;
+    pub(super) const DEST: u32 = 9000;
 
-    fn pool_request(network_id: u32, identifier: &str) -> PoolRequest {
+    pub(super) fn pool_request(network_id: u32, identifier: &str) -> PoolRequest {
         PoolRequest {
             network_id,
             identifier: identifier.to_string(),
@@ -585,13 +585,13 @@ mod tests {
         ))
     }
 
-    struct Op {
-        id: u32,
-        pk: PublicKey,
-        sk: SecretKey,
+    pub(super) struct Op {
+        pub(super) id: u32,
+        pub(super) pk: PublicKey,
+        pub(super) sk: SecretKey,
     }
 
-    fn mk(id: u32) -> Op {
+    pub(super) fn mk(id: u32) -> Op {
         let mut seed = [0u8; 32];
         seed[0] = id as u8;
         seed[31] = 0x5e;
@@ -599,7 +599,7 @@ mod tests {
         Op { id, pk, sk }
     }
 
-    fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
+    pub(super) fn attest(op: &Op, fact: &BridgeFact) -> SignerSig {
         let sig = ml_dsa::sign(
             &op.sk,
             &fact.attest_preimage(DEST_ID),
@@ -613,7 +613,7 @@ mod tests {
         }
     }
 
-    fn federated_fact(asset: [u8; 16], source_ref: [u8; 32]) -> BridgeFact {
+    pub(super) fn federated_fact(asset: [u8; 16], source_ref: [u8; 32]) -> BridgeFact {
         BridgeFact {
             version: FACT_VERSION,
             source_chain: Network::Solana.id(),
@@ -2032,5 +2032,74 @@ mod tests {
             response,
             Response::Error(ApiError::NoAnchor(Network::Cosmos.id()))
         );
+    }
+}
+
+#[cfg(test)]
+mod tier_downgrade_tests {
+    use super::tests::{attest, federated_fact, mk, pool_request, Op, DEST, DEST_ID};
+    use super::*;
+    use q_gateway::OperatorSet;
+    use q_federated::SourceEndpoint;
+
+    // verify_deposit matches on the triple (tier, network, proof). The existing coverage
+    // shows a proof presented on a federated corridor being refused. The dangerous
+    // direction is the reverse: a quorum signed envelope accepted on a PROOF BACKED
+    // corridor would silently downgrade a trustless route to operator trust, which is the
+    // whole property the trustless corridors exist to provide.
+    fn bridge_state() -> (Vec<Op>, BridgeState) {
+        let ops: Vec<Op> = (0..4).map(mk).collect();
+        let mut set = OperatorSet::new(3);
+        for op in &ops {
+            set.register(op.id, op.pk);
+        }
+        (ops, BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000)))
+    }
+
+    fn refuses_federated_on(network: Network, identifier: &str) {
+        let (ops, mut state) = bridge_state();
+        let view = match handle(
+            &mut state,
+            Request::CreatePool(pool_request(network.id(), identifier)),
+        ) {
+            Response::PoolCreated(view) => view,
+            other => panic!("expected PoolCreated, got {other:?}"),
+        };
+        for op in &ops {
+            state
+                .sources
+                .declare(network.id(), op.id, SourceEndpoint([0x10 + op.id as u8; 32]));
+        }
+        // The fact must name the same network as the pool, otherwise the network check
+        // fires first and the tier rule below is never reached.
+        let mut fact = federated_fact(view.asset_id, [0x11; 32]);
+        fact.source_chain = network.id();
+        let env = AttestationEnvelope {
+            fact: fact.clone(),
+            signatures: vec![
+                attest(&ops[0], &fact),
+                attest(&ops[1], &fact),
+                attest(&ops[2], &fact),
+            ],
+        };
+        let response = handle(
+            &mut state,
+            Request::SubmitDeposit(DepositRequest {
+                proof: DepositProof::Federated(env),
+            }),
+        );
+        assert_eq!(
+            response,
+            Response::Error(ApiError::ProofTierMismatch),
+            "an operator quorum was accepted on the proof backed {network:?} corridor, which \
+             downgrades a trustless route to operator trust"
+        );
+    }
+
+    #[test]
+    fn a_quorum_envelope_is_refused_on_every_proof_backed_corridor() {
+        refuses_federated_on(Network::Bitcoin, "BTC");
+        refuses_federated_on(Network::Ethereum, "ETH");
+        refuses_federated_on(Network::Cosmos, "ATOM");
     }
 }
