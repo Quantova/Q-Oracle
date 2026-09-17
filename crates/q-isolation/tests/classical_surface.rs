@@ -12,16 +12,10 @@ fn normal_dependents_of(crate_name: &str) -> Vec<String> {
             continue;
         };
         let normal = text
-            .split("\n[")
-            .next()
-            .map(str::to_string)
-            .unwrap_or_default()
-            + &text
-                .split("\n[dependencies]")
-                .nth(1)
-                .and_then(|rest| rest.split("\n[").next())
-                .unwrap_or_default()
-                .to_string();
+            .split("\n[dependencies]")
+            .nth(1)
+            .and_then(|rest| rest.split("\n[").next())
+            .unwrap_or_default();
         if normal
             .lines()
             .any(|line| line.trim_start().starts_with(crate_name))
