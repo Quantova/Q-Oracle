@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/q-prover
-          ref: 2eca1aa2bf01e072fcb49c6764f93569fbee2e8b
+          ref: 5e7e64ad2db51ec56cbc2c796bc2dd8e12f230e9
           path: q-prover
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
