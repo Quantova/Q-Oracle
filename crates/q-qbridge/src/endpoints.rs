@@ -2042,11 +2042,7 @@ mod tier_downgrade_tests {
     use q_gateway::OperatorSet;
     use q_federated::SourceEndpoint;
 
-    // verify_deposit matches on the triple (tier, network, proof). The existing coverage
-    // shows a proof presented on a federated corridor being refused. The dangerous
-    // direction is the reverse: a quorum signed envelope accepted on a PROOF BACKED
-    // corridor would silently downgrade a trustless route to operator trust, which is the
-    // whole property the trustless corridors exist to provide.
+    // A quorum envelope on a proof backed corridor would downgrade it to operator trust.
     fn bridge_state() -> (Vec<Op>, BridgeState) {
         let ops: Vec<Op> = (0..4).map(mk).collect();
         let mut set = OperatorSet::new(3);
@@ -2070,8 +2066,7 @@ mod tier_downgrade_tests {
                 .sources
                 .declare(network.id(), op.id, SourceEndpoint([0x10 + op.id as u8; 32]));
         }
-        // The fact must name the same network as the pool, otherwise the network check
-        // fires first and the tier rule below is never reached.
+        // Match the pool network or the earlier check fires instead.
         let mut fact = federated_fact(view.asset_id, [0x11; 32]);
         fact.source_chain = network.id();
         let env = AttestationEnvelope {
