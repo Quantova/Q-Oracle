@@ -58,13 +58,18 @@ impl OutboundEnvelope {
     }
 }
 
+/// The era MUST be the corridor's, not a literal zero. Signed under a zero era this
+/// either separates nothing, when the deployment leaves the era unset, or fails every
+/// verification with `below_threshold` once a real era is configured, which reads as a
+/// quorum problem rather than a context mismatch.
 pub fn attest<S: AttestationSigner>(
     fact: &BridgeFact,
     signer: &S,
     dest_chain_id: u64,
+    era: &[u8; 32],
 ) -> AttestationEnvelope {
     let preimage = fact.attest_preimage(dest_chain_id);
-    let signature = signer.sign(&preimage, &attest_context(&[0u8; 32]));
+    let signature = signer.sign(&preimage, &attest_context(era));
     AttestationEnvelope {
         fact: fact.clone(),
         signatures: vec![SignerSig {
@@ -93,9 +98,10 @@ pub fn package<S: AttestationSigner>(
     fact: &BridgeFact,
     signer: &S,
     dest_chain_id: u64,
+    era: &[u8; 32],
 ) -> OutboundEnvelope {
     OutboundEnvelope {
-        attestation: attest(fact, signer, dest_chain_id),
+        attestation: attest(fact, signer, dest_chain_id, era),
         stark: corridor_stark(fact, signer),
     }
 }
@@ -232,7 +238,7 @@ mod tests {
 
     #[test]
     fn package_carries_exactly_the_two_pq_artifacts() {
-        let env = package(&fact(), &signer(), DEST_ID);
+        let env = package(&fact(), &signer(), DEST_ID, &[0u8; 32]);
         let artifacts = env.artifacts();
         assert_eq!(artifacts.len(), 2);
         assert!(matches!(artifacts[0], Artifact::Attestation(_)));
@@ -244,7 +250,7 @@ mod tests {
         let s = signer();
         let pk = s.public_key();
         let f = fact();
-        let env = package(&f, &s, DEST_ID);
+        let env = package(&f, &s, DEST_ID, &[0u8; 32]);
         assert_eq!(env.attestation.fact, f);
         assert_eq!(env.attestation.signatures.len(), 1);
         assert_eq!(env.attestation.signatures[0].operator_id, s.operator_id());
@@ -263,7 +269,7 @@ mod tests {
         let s = signer();
         let pk = s.public_key();
         let f = fact();
-        let env = package(&f, &s, DEST_ID);
+        let env = package(&f, &s, DEST_ID, &[0u8; 32]);
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&env.attestation.signatures[0].signature);
         assert!(!ml_dsa::verify(
@@ -279,7 +285,7 @@ mod tests {
         let s = signer();
         let pk = s.public_key();
         let base = fact();
-        let env = package(&base, &s, DEST_ID);
+        let env = package(&base, &s, DEST_ID, &[0u8; 32]);
         let mut sig = [0u8; SIGNATURE_BYTES];
         sig.copy_from_slice(&env.attestation.signatures[0].signature);
         assert!(ml_dsa::verify(
@@ -303,7 +309,7 @@ mod tests {
     fn no_field_can_be_reshaped_under_the_stark() {
         let base = fact();
         let s = signer();
-        let env = package(&base, &s, DEST_ID);
+        let env = package(&base, &s, DEST_ID, &[0u8; 32]);
         assert!(verify_corridor_stark(s.operator_id(), &base, &env.stark));
         for reshaped in reshapes() {
             assert_ne!(reshaped, base);
@@ -323,7 +329,7 @@ mod tests {
     fn the_stark_proof_is_bound_to_its_statement() {
         let f = fact();
         let s = signer();
-        let env = package(&f, &s, DEST_ID);
+        let env = package(&f, &s, DEST_ID, &[0u8; 32]);
         assert!(verify_corridor_stark(s.operator_id(), &f, &env.stark));
 
         let mut moved_digest = env.stark.clone();
@@ -339,7 +345,7 @@ mod tests {
     #[test]
     fn both_artifacts_cross_the_airlock_as_exactly_their_q_form() {
         let f = fact();
-        let env = package(&f, &signer(), DEST_ID);
+        let env = package(&f, &signer(), DEST_ID, &[0u8; 32]);
 
         let attestation_bytes = env.attestation.encode();
         match q_airlock::parse(&attestation_bytes).unwrap() {
@@ -359,7 +365,7 @@ mod tests {
 
     #[test]
     fn no_foreign_bytes_can_ride_beside_either_artifact() {
-        let env = package(&fact(), &signer(), DEST_ID);
+        let env = package(&fact(), &signer(), DEST_ID, &[0u8; 32]);
 
         let mut attestation = env.attestation.encode();
         attestation.extend_from_slice(&[0xf9, 0x02, 0x1a]);
@@ -374,7 +380,7 @@ mod tests {
     fn the_choke_point_turns_a_foreign_observation_into_the_two_pq_artifacts() {
         let s = signer();
         let translated = translate(&lock(), &ctx(), 900_000);
-        let env = package(&translated, &s, DEST_ID);
+        let env = package(&translated, &s, DEST_ID, &[0u8; 32]);
 
         assert!(verify_corridor_stark(
             s.operator_id(),
@@ -393,15 +399,17 @@ mod tests {
 
     #[test]
     fn the_outbound_envelope_crosses_the_isolation_door_as_the_two_pq_artifacts() {
-        let crossings = package(&fact(), &signer(), DEST_ID).cross().unwrap();
+        let crossings = package(&fact(), &signer(), DEST_ID, &[0u8; 32])
+            .cross()
+            .unwrap();
         assert_eq!(crossings[0].kind, q_isolation::PqArtifact::MlDsaAttestation);
         assert_eq!(crossings[1].kind, q_isolation::PqArtifact::HashStark);
     }
 
     #[test]
     fn packaging_is_deterministic_across_operators() {
-        let a = package(&fact(), &signer(), DEST_ID);
-        let b = package(&fact(), &signer(), DEST_ID);
+        let a = package(&fact(), &signer(), DEST_ID, &[0u8; 32]);
+        let b = package(&fact(), &signer(), DEST_ID, &[0u8; 32]);
         assert_eq!(a, b);
     }
 }

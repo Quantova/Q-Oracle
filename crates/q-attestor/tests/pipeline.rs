@@ -82,7 +82,7 @@ fn a_verified_foreign_fact_becomes_two_pq_artifacts_and_nothing_foreign_crosses(
 
     let signer = SoftSigner::from_seed(0, &[0x09u8; 32]);
     let fact = translate(&lock(), &ctx(), 900_000);
-    let env = package(&fact, &signer, DEST_ID);
+    let env = package(&fact, &signer, DEST_ID, &[0u8; 32]);
 
     let statement = corridor_statement(signer.operator_id(), &fact);
     let commitment = prove_statement(&statement);
