@@ -18,7 +18,7 @@ pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const MAX_PENDING_EXITS: usize = 65_536;
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
-const GUARD_SNAPSHOT_VERSION: u8 = 5;
+const GUARD_SNAPSHOT_VERSION: u8 = 6;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
@@ -779,6 +779,9 @@ impl Gateway {
         let mut w = Writer::new();
         w.u8(GUARD_SNAPSHOT_VERSION);
         w.u8(self.global_pause as u8);
+        // A freeze is a window of heights. Persisting the window without the clock it is
+        // measured against makes it permanent across a restart.
+        w.u64(self.current_height);
         w.u64(self.frozen_until);
         w.u64(self.deposit_frozen_until);
         w.u128(self.epoch_minted);
@@ -830,6 +833,7 @@ impl Gateway {
     pub fn rehydrate_guard(&mut self, bytes: &[u8]) -> Result<(), CodecError> {
         let state = decode_guard(bytes)?;
         self.global_pause = state.global_pause;
+        self.advance_to(state.current_height);
         self.frozen_until = state.frozen_until;
         self.deposit_frozen_until = state.deposit_frozen_until;
         self.epoch_minted = state.epoch_minted;
@@ -851,6 +855,7 @@ impl Gateway {
 
 struct GuardState {
     global_pause: bool,
+    current_height: u64,
     frozen_until: u64,
     deposit_frozen_until: u64,
     epoch_minted: u128,
@@ -884,6 +889,7 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         1 => true,
         other => return Err(CodecError::UnknownTag(other)),
     };
+    let current_height = r.u64()?;
     let frozen_until = r.u64()?;
     let deposit_frozen_until = r.u64()?;
     let epoch_minted = r.u128()?;
@@ -975,6 +981,7 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
 
     r.finish()?;
     Ok(GuardState {
+        current_height,
         global_pause,
         frozen_until,
         deposit_frozen_until,

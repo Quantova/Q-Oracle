@@ -32,6 +32,7 @@ fn unix_millis() -> u64 {
 }
 
 pub struct ExitService {
+    gateway: Option<SharedState>,
     desk: ExitDesk,
     feed: BurnFeed,
     source: RpcBurnSource,
@@ -50,6 +51,7 @@ impl ExitService {
         }
         desk.reconstruct()?;
         Ok(ExitService {
+            gateway: None,
             desk,
             feed: BurnFeed::new(cfg.start_height, ExitConfig { enabled: true }),
             source: RpcBurnSource::new(cfg.rpc_host.clone(), cfg.rpc_port),
@@ -123,6 +125,11 @@ impl ExitService {
                 let now = unix_millis();
                 let _ = self.poll_burns(now);
                 let _ = self.sweep_slash(now);
+                if let Some(state) = self.gateway.as_ref() {
+                    let head = self.feed.scanned_through();
+                    let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+                    guard.gateway.advance_to(head);
+                }
                 let mut waited = Duration::ZERO;
                 while waited < EXIT_POLL_INTERVAL && !flag.load(Ordering::SeqCst) {
                     thread::sleep(EXIT_POLL_SLICE);
@@ -155,18 +162,30 @@ pub fn start_exits() -> std::io::Result<Option<ExitHandle>> {
     start_exits_with(load_exit_config())
 }
 
+pub(crate) fn start_exits_for(gateway: Option<SharedState>) -> std::io::Result<Option<ExitHandle>> {
+    start_exits_inner(load_exit_config(), gateway)
+}
+
 pub(crate) fn start_exits_with(
     loaded: Result<Option<ExitTrustConfig>, ExitConfigError>,
+) -> std::io::Result<Option<ExitHandle>> {
+    start_exits_inner(loaded, None)
+}
+
+pub(crate) fn start_exits_inner(
+    loaded: Result<Option<ExitTrustConfig>, ExitConfigError>,
+    gateway: Option<SharedState>,
 ) -> std::io::Result<Option<ExitHandle>> {
     match loaded {
         Ok(None) => Ok(None),
         Ok(Some(cfg)) => {
-            let service = ExitService::build(&cfg).map_err(|e| {
+            let mut service = ExitService::build(&cfg).map_err(|e| {
                 std::io::Error::new(
                     ErrorKind::InvalidInput,
                     format!("the exit trust configuration is unusable, refusing to start: {e:?}"),
                 )
             })?;
+            service.gateway = gateway;
             Ok(Some(service.spawn()))
         }
         Err(e) => Err(std::io::Error::new(
@@ -376,10 +395,13 @@ pub fn shared(state: BridgeState) -> SharedState {
 }
 
 pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Result<()> {
-    let _exits = start_exits()?;
+    // The state comes up first so the exit loop can carry the destination chain height
+    // into the gateway. Without a clock every height relative control, the deposit freeze
+    // included, is measured against zero and never elapses.
     let store = snapshot.map(|path| GuardStore::new(path));
-    let state = restore(&store)?;
-    run_with(addr, shared(state), store.map(Arc::new))
+    let state = shared(restore(&store)?);
+    let _exits = start_exits_for(Some(state.clone()))?;
+    run_with(addr, state, store.map(Arc::new))
 }
 
 pub(crate) fn restore(store: &Option<GuardStore>) -> std::io::Result<BridgeState> {
