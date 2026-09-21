@@ -442,8 +442,13 @@ impl ExitDesk {
         let holder = exit.statement.holder;
         let locked = exit.locked;
         let amount = exit.statement.amount;
-        let user_payout = self.user_premium(amount)?;
-        let remainder = locked.checked_sub(user_payout).ok_or(ExitError::Overflow)?;
+        // The chain's own slash restores the burned tokens to this holder, so paying a
+        // premium here as well pays for one failed exit twice and breaks conservation the
+        // moment the settlement leg is wired. The seized collateral is the penalty against
+        // the defaulting operator, not a second payment to a holder already made whole.
+        let _ = self.user_premium(amount)?;
+        let user_payout = 0u128;
+        let remainder = locked;
         self.journal
             .append(&ExitEvent::Slash { index: id.0 as u32 })?;
         self.exits[id.0].state = ExitState::Slashed;

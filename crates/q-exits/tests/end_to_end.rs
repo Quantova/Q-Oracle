@@ -471,7 +471,7 @@ fn a_burn_for_another_destination_chain_cannot_open_an_exit() {
 }
 
 #[test]
-fn the_window_elapsing_then_slash_re_mints_one_to_one_to_the_holder() {
+fn the_window_elapsing_then_slash_leaves_the_holder_to_the_chain_re_mint() {
     let members = attesters();
     let beacon = Beacon::genesis();
     let mut desk = desk();
@@ -481,12 +481,13 @@ fn the_window_elapsing_then_slash_re_mints_one_to_one_to_the_holder() {
         .unwrap();
 
     let outcome = desk.slash(id, 200).unwrap();
-    assert_eq!(outcome.user_payout, USER_PAYOUT);
+    // The chain's own slash restores the burned tokens to this holder. Paying collateral
+    // here as well would make a failed exit profitable, which is an incentive to fail one.
     assert_eq!(
-        outcome.user_payout, AMOUNT,
-        "the on-chain re-mint equals the value burned with no premium"
+        outcome.user_payout, 0,
+        "the desk pays a holder the chain has already made whole"
     );
-    assert_eq!(outcome.remainder, REQUIRED - USER_PAYOUT);
+    assert_eq!(outcome.remainder, REQUIRED);
     assert_eq!(
         outcome.holder, HOLDER,
         "the slash refund is owed to the on-chain holder, not the foreign destination"
@@ -648,11 +649,11 @@ fn collateral_is_conserved_across_a_settle_and_a_slash() {
     );
 
     let outcome = desk.slash(id_b, 200).unwrap();
-    assert_eq!(outcome.user_payout, USER_PAYOUT);
+    assert_eq!(outcome.user_payout, 0);
     assert_eq!(
         outcome.user_payout + outcome.remainder,
         REQUIRED,
-        "the slash splits exactly the seized collateral"
+        "the slash accounts for exactly the seized collateral"
     );
 
     let remaining = desk.free_collateral(1) + desk.locked_collateral(1);
