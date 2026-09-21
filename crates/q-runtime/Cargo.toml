@@ -24,6 +24,6 @@ q-airlock = { workspace = true }
 qlc-bitcoin = { workspace = true }
 qlc-ethereum = { workspace = true }
 qlc-cosmos = { workspace = true }
+qtv-crypto = { workspace = true }
 
 [dev-dependencies]
-qtv-crypto = { workspace = true }

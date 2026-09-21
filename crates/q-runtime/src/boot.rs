@@ -182,6 +182,153 @@ pub const DEST_CHAIN_ID: u64 = 0;
 
 pub const DEFAULT_EPOCH_CAP: u128 = 1_000_000_000_000_000_000_000_000;
 
+pub const OPERATORS_ENV: &str = "Q_ORACLE_OPERATORS";
+pub const QUORUM_ENV: &str = "Q_ORACLE_QUORUM";
+pub const DEST_CHAIN_ID_ENV: &str = "Q_ORACLE_DEST_CHAIN_ID";
+pub const ERA_ENV: &str = "Q_ORACLE_ERA";
+
+#[derive(Debug)]
+pub enum BootConfigError {
+    Missing(&'static str),
+    Malformed(&'static str),
+    EmptyOperatorSet,
+    QuorumBelowFloor { got: usize, floor: usize },
+    QuorumAboveSize { got: usize, size: usize },
+}
+
+/// An operator set and a quorum read from configuration. An empty set leaves every
+/// quorum gated control unsatisfiable while still serving, so this refuses instead.
+pub fn boot_from_env() -> Result<BridgeState, BootConfigError> {
+    boot_from_config(
+        std::env::var(OPERATORS_ENV).ok().as_deref(),
+        std::env::var(QUORUM_ENV).ok().as_deref(),
+        std::env::var(DEST_CHAIN_ID_ENV).ok().as_deref(),
+        std::env::var(ERA_ENV).ok().as_deref(),
+    )
+}
+
+pub fn boot_from_config(
+    operators_raw: Option<&str>,
+    quorum_raw: Option<&str>,
+    dest_raw: Option<&str>,
+    era_raw: Option<&str>,
+) -> Result<BridgeState, BootConfigError> {
+    let raw = operators_raw.ok_or(BootConfigError::Missing(OPERATORS_ENV))?;
+    let mut operators: Vec<(u32, Vec<u8>)> = Vec::new();
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let (id, key) = entry
+            .split_once(':')
+            .ok_or(BootConfigError::Malformed(OPERATORS_ENV))?;
+        let id: u32 = id
+            .parse()
+            .map_err(|_| BootConfigError::Malformed("operator id"))?;
+        let key = decode_hex(key).ok_or(BootConfigError::Malformed("operator key"))?;
+        operators.push((id, key));
+    }
+    if operators.is_empty() {
+        return Err(BootConfigError::EmptyOperatorSet);
+    }
+    let quorum: usize = quorum_raw
+        .ok_or(BootConfigError::Missing(QUORUM_ENV))?
+        .trim()
+        .parse()
+        .map_err(|_| BootConfigError::Malformed(QUORUM_ENV))?;
+    let floor = q_gateway::gateway::supermajority_floor(operators.len());
+    if quorum < floor {
+        return Err(BootConfigError::QuorumBelowFloor { got: quorum, floor });
+    }
+    if quorum > operators.len() {
+        return Err(BootConfigError::QuorumAboveSize {
+            got: quorum,
+            size: operators.len(),
+        });
+    }
+    let dest_chain_id: u64 = dest_raw
+        .ok_or(BootConfigError::Missing(DEST_CHAIN_ID_ENV))?
+        .trim()
+        .parse()
+        .map_err(|_| BootConfigError::Malformed(DEST_CHAIN_ID_ENV))?;
+    let era: [u8; 32] = match era_raw {
+        Some(raw) => decode_hex(raw)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or(BootConfigError::Malformed(ERA_ENV))?,
+        None => [0u8; 32],
+    };
+
+    let mut set = OperatorSet::new(quorum);
+    for (id, key) in operators {
+        let pk: qtv_crypto::ml_dsa::PublicKey = key
+            .try_into()
+            .map_err(|_| BootConfigError::Malformed("operator key length"))?;
+        if !set.register(id, pk) {
+            return Err(BootConfigError::Malformed("duplicate operator"));
+        }
+    }
+    Ok(boot_with(set, dest_chain_id, era, DEFAULT_EPOCH_CAP))
+}
+
+fn decode_hex(input: &str) -> Option<Vec<u8>> {
+    let text = input.trim();
+    if !text.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).ok())
+        .collect()
+}
+
+#[cfg(test)]
+mod boot_config_tests {
+    use super::*;
+
+    // Distinct keys: one key under two ids is refused, which is its own protection.
+    fn key(tag: u8) -> String {
+        format!("{tag:02x}").repeat(qtv_crypto::ml_dsa::PUBLIC_KEY_BYTES)
+    }
+
+    fn three() -> String {
+        format!("1:{},2:{},3:{}", key(0xa1), key(0xb2), key(0xc3))
+    }
+
+    // Serving with no operators leaves every quorum gated control unsatisfiable while the
+    // gateway still answers. Refusing to come up is the only safe reading of that config.
+    #[test]
+    fn an_empty_operator_set_refuses_to_boot() {
+        let Err(err) = boot_from_config(Some(""), Some("3"), Some("9000"), None) else {
+            panic!("an empty operator set must refuse");
+        };
+        assert!(matches!(err, BootConfigError::EmptyOperatorSet), "{err:?}");
+    }
+
+    #[test]
+    fn a_missing_operator_set_refuses_to_boot() {
+        let Err(err) = boot_from_config(None, Some("3"), Some("9000"), None) else {
+            panic!("a missing operator set must refuse");
+        };
+        assert!(matches!(err, BootConfigError::Missing(_)), "{err:?}");
+    }
+
+    // A quorum under the supermajority floor is a minority that can mint on its own.
+    #[test]
+    fn a_quorum_below_the_supermajority_floor_refuses_to_boot() {
+        let operators = three();
+        let Err(err) = boot_from_config(Some(&operators), Some("1"), Some("9000"), None) else {
+            panic!("a quorum of one over three must refuse");
+        };
+        assert!(
+            matches!(err, BootConfigError::QuorumBelowFloor { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_configured_set_at_the_floor_boots() {
+        let operators = three();
+        assert!(boot_from_config(Some(&operators), Some("2"), Some("9000"), None).is_ok());
+    }
+}
+
 pub fn boot() -> BridgeState {
     boot_with(
         OperatorSet::new(0),
@@ -236,7 +383,22 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
 }
 
 pub(crate) fn restore(store: &Option<GuardStore>) -> std::io::Result<BridgeState> {
-    let mut state = boot();
+    // Serving with an empty operator set makes every quorum gated control permanently
+    // unsatisfiable while the gateway still answers, so refuse to come up instead.
+    let state = boot_from_env().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("the operator configuration is missing or unusable, refusing to serve: {e:?}"),
+        )
+    })?;
+    restore_into(state, store)
+}
+
+pub(crate) fn restore_into(
+    state: BridgeState,
+    store: &Option<GuardStore>,
+) -> std::io::Result<BridgeState> {
+    let mut state = state;
     if let Some(store) = store {
         if let Some(bytes) = store.load()? {
             state.gateway.rehydrate_guard(&bytes).map_err(|e| {
@@ -593,7 +755,8 @@ mod tests {
             .expect("the admission is persisted");
         drop(state);
 
-        let restored = restore(&Some(store)).expect("a present snapshot rehydrates the guard");
+        let restored =
+            restore_into(boot(), &Some(store)).expect("a present snapshot rehydrates the guard");
         assert!(
             restored.gateway.is_reference_used(&[0x11; 32]),
             "the reserved reference survives the restart"
@@ -606,7 +769,7 @@ mod tests {
     fn a_corrupt_snapshot_refuses_to_start_rather_than_serving_an_empty_guard() {
         let path = temp_snapshot("corrupt");
         std::fs::write(&path, b"\xff\xff\xff not a guard snapshot").unwrap();
-        let result = restore(&Some(GuardStore::new(path.clone())));
+        let result = restore_into(boot(), &Some(GuardStore::new(path.clone())));
         let err = match result {
             Ok(_) => panic!("a corrupt snapshot must fail closed rather than start"),
             Err(err) => err,
@@ -618,7 +781,8 @@ mod tests {
     #[test]
     fn an_absent_snapshot_starts_a_fresh_guard() {
         let path = temp_snapshot("absent");
-        let restored = restore(&Some(GuardStore::new(path))).expect("first run starts fresh");
+        let restored =
+            restore_into(boot(), &Some(GuardStore::new(path))).expect("first run starts fresh");
         assert!(!restored.gateway.is_reference_used(&[0x11; 32]));
     }
 
