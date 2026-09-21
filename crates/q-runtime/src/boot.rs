@@ -228,6 +228,7 @@ pub const OPERATORS_ENV: &str = "Q_ORACLE_OPERATORS";
 pub const QUORUM_ENV: &str = "Q_ORACLE_QUORUM";
 pub const DEST_CHAIN_ID_ENV: &str = "Q_ORACLE_DEST_CHAIN_ID";
 pub const ERA_ENV: &str = "Q_ORACLE_ERA";
+pub const SOURCES_ENV: &str = "Q_ORACLE_SOURCES";
 
 #[derive(Debug)]
 pub enum BootConfigError {
@@ -241,12 +242,44 @@ pub enum BootConfigError {
 /// An operator set and a quorum read from configuration. An empty set leaves every
 /// quorum gated control unsatisfiable while still serving, so this refuses instead.
 pub fn boot_from_env() -> Result<BridgeState, BootConfigError> {
-    boot_from_config(
+    let mut state = boot_from_config(
         std::env::var(OPERATORS_ENV).ok().as_deref(),
         std::env::var(QUORUM_ENV).ok().as_deref(),
         std::env::var(DEST_CHAIN_ID_ENV).ok().as_deref(),
         std::env::var(ERA_ENV).ok().as_deref(),
-    )
+    )?;
+    declare_sources_from(&mut state, std::env::var(SOURCES_ENV).ok().as_deref())?;
+    Ok(state)
+}
+
+/// corridor:operator:endpoint triples. The federated admission gate refuses any signer
+/// that is not declared here, and nothing else populates the registry, so without this
+/// every federated corridor is closed and the failure reads as `undeclared_source`.
+pub fn declare_sources_from(
+    state: &mut BridgeState,
+    raw: Option<&str>,
+) -> Result<(), BootConfigError> {
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let mut parts = entry.split(':');
+        let corridor = parts
+            .next()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .ok_or(BootConfigError::Malformed("source corridor"))?;
+        let operator_id = parts
+            .next()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .ok_or(BootConfigError::Malformed("source operator"))?;
+        let endpoint = parts
+            .next()
+            .and_then(decode_hex)
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok())
+            .ok_or(BootConfigError::Malformed("source endpoint"))?;
+        declare_operator_source(state, corridor, operator_id, SourceEndpoint(endpoint));
+    }
+    Ok(())
 }
 
 pub fn boot_from_config(
@@ -290,12 +323,15 @@ pub fn boot_from_config(
         .trim()
         .parse()
         .map_err(|_| BootConfigError::Malformed(DEST_CHAIN_ID_ENV))?;
-    let era: [u8; 32] = match era_raw {
-        Some(raw) => decode_hex(raw)
-            .and_then(|bytes| bytes.try_into().ok())
-            .ok_or(BootConfigError::Malformed(ERA_ENV))?,
-        None => [0u8; 32],
-    };
+    // An all zero era separates nothing: it is the same era before and after every restart
+    // and every wipe, so an accepted attestation stays replayable for ever. It is one of
+    // only two controls against a second mint, so it has to be set, and set to a value.
+    let era: [u8; 32] = decode_hex(era_raw.ok_or(BootConfigError::Missing(ERA_ENV))?)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(BootConfigError::Malformed(ERA_ENV))?;
+    if era == [0u8; 32] {
+        return Err(BootConfigError::Malformed(ERA_ENV));
+    }
 
     let mut set = OperatorSet::new(quorum);
     for (id, key) in operators {
@@ -337,7 +373,8 @@ mod boot_config_tests {
     // gateway still answers. Refusing to come up is the only safe reading of that config.
     #[test]
     fn an_empty_operator_set_refuses_to_boot() {
-        let Err(err) = boot_from_config(Some(""), Some("3"), Some("9000"), None) else {
+        let Err(err) = boot_from_config(Some(""), Some("3"), Some("9000"), Some(&"ab".repeat(32)))
+        else {
             panic!("an empty operator set must refuse");
         };
         assert!(matches!(err, BootConfigError::EmptyOperatorSet), "{err:?}");
@@ -345,7 +382,8 @@ mod boot_config_tests {
 
     #[test]
     fn a_missing_operator_set_refuses_to_boot() {
-        let Err(err) = boot_from_config(None, Some("3"), Some("9000"), None) else {
+        let Err(err) = boot_from_config(None, Some("3"), Some("9000"), Some(&"ab".repeat(32)))
+        else {
             panic!("a missing operator set must refuse");
         };
         assert!(matches!(err, BootConfigError::Missing(_)), "{err:?}");
@@ -355,7 +393,12 @@ mod boot_config_tests {
     #[test]
     fn a_quorum_below_the_supermajority_floor_refuses_to_boot() {
         let operators = three();
-        let Err(err) = boot_from_config(Some(&operators), Some("1"), Some("9000"), None) else {
+        let Err(err) = boot_from_config(
+            Some(&operators),
+            Some("1"),
+            Some("9000"),
+            Some(&"ab".repeat(32)),
+        ) else {
             panic!("a quorum of one over three must refuse");
         };
         assert!(
@@ -364,10 +407,40 @@ mod boot_config_tests {
         );
     }
 
+    // An all zero era separates nothing, so it is refused like a missing one.
+    #[test]
+    fn an_all_zero_era_is_refused() {
+        let operators = three();
+        let Err(err) = boot_from_config(
+            Some(&operators),
+            Some("2"),
+            Some("9000"),
+            Some(&"00".repeat(32)),
+        ) else {
+            panic!("an all zero era must refuse");
+        };
+        assert!(matches!(err, BootConfigError::Malformed(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_missing_era_is_refused() {
+        let operators = three();
+        let Err(err) = boot_from_config(Some(&operators), Some("2"), Some("9000"), None) else {
+            panic!("a missing era must refuse");
+        };
+        assert!(matches!(err, BootConfigError::Missing(_)), "{err:?}");
+    }
+
     #[test]
     fn a_configured_set_at_the_floor_boots() {
         let operators = three();
-        assert!(boot_from_config(Some(&operators), Some("2"), Some("9000"), None).is_ok());
+        assert!(boot_from_config(
+            Some(&operators),
+            Some("2"),
+            Some("9000"),
+            Some(&"ab".repeat(32))
+        )
+        .is_ok());
     }
 }
 
@@ -421,7 +494,17 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
     // The state comes up first so the exit loop can carry the destination chain height
     // into the gateway. Without a clock every height relative control, the deposit freeze
     // included, is measured against zero and never elapses.
-    let store = snapshot.map(|path| GuardStore::new(path));
+    // The replay set and the minted ledger live in memory. Without a snapshot they are
+    // lost on restart and an already accepted attestation mints a second time, so the
+    // snapshot is not optional for a serving oracle.
+    let Some(path) = snapshot else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "no guard snapshot is configured, so the replay set would not survive a \
+             restart and an accepted attestation could mint twice; refusing to serve",
+        ));
+    };
+    let store = Some(GuardStore::new(path));
     let state = shared(restore(&store)?);
     let _exits = start_exits_for(Some(state.clone()))?;
     run_with(addr, state, store.map(Arc::new))

@@ -27,6 +27,7 @@ pub enum GatewayError {
     TierDowngrade { from: u8, to: u8 },
     Frozen { until: u64 },
     WatchdogWindowTooWide { until: u64, max: u64 },
+    WatchdogWithoutClock,
     StaleBatch { got: u64, expected: u64 },
     ExitExceedsMinted { minted: u128, amount: u128 },
     ExitNotReady { now: u64, unlock: u64 },

@@ -195,7 +195,17 @@ pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardS
                 );
                 continue;
             }
-            match limiter.try_admit(ip, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP) {
+            // Behind a reverse proxy every peer is loopback, so a per address connection
+            // cap on the PEER pools every real client into one bucket and a few dozen
+            // sockets lock out everyone. The real client is only known once the head is
+            // read, and the rate limiter above already applies per client limits there,
+            // so the proxy itself is bounded by the global cap alone.
+            let per_ip = if ip.is_loopback() {
+                MAX_CONNECTIONS
+            } else {
+                MAX_CONNECTIONS_PER_IP
+            };
+            match limiter.try_admit(ip, MAX_CONNECTIONS, per_ip) {
                 Admit::Ok => {}
                 Admit::TotalFull => {
                     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();

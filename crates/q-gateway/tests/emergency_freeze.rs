@@ -71,10 +71,13 @@ fn attest(ops: &[&Op], fact: &BridgeFact) -> AttestationEnvelope {
     }
 }
 
+// Era bound, like the gateway builds it. Without the era one observed freeze body is
+// replayable for ever, including across a restart and a wipe.
 fn until_message(until: u64) -> Vec<u8> {
     let mut w = Writer::new();
     w.u64(until);
     w.u64(DEST_ID);
+    w.fixed(&[0u8; 32]);
     w.finish()
 }
 

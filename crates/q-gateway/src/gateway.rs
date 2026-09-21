@@ -397,7 +397,7 @@ impl Gateway {
         until_height: u64,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
-        let message = freeze_message(until_height, self.dest_chain_id);
+        let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
         let distinct = verify_quorum(&message, FREEZE_DOMAIN, sigs, &self.operators);
         let need = self
             .operators
@@ -428,7 +428,7 @@ impl Gateway {
                 max: ceiling,
             });
         }
-        let message = freeze_message(until_height, self.dest_chain_id);
+        let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
         let distinct = verify_quorum(
             &message,
             WATCHDOG_DOMAIN,
@@ -1019,9 +1019,16 @@ pub fn tier_message(source_chain: u32, proposed: u8, dest_chain_id: u64) -> Vec<
 }
 
 pub fn freeze_message(until_height: u64, dest_chain_id: u64) -> Vec<u8> {
+    freeze_message_for_era(until_height, dest_chain_id, &[0u8; 32])
+}
+
+/// Era bound. Without it one observed watchdog body is replayable for ever, including
+/// across a restart and a wipe.
+pub fn freeze_message_for_era(until_height: u64, dest_chain_id: u64, era: &[u8; 32]) -> Vec<u8> {
     let mut w = Writer::new();
     w.u64(until_height);
     w.u64(dest_chain_id);
+    w.fixed(era);
     w.finish()
 }
 

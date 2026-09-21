@@ -34,10 +34,12 @@ fn sign_ctx(op: &Op, message: &[u8], context: &[u8]) -> SignerSig {
     }
 }
 
+// Era bound, like the gateway builds it.
 fn freeze_msg(until: u64, dest: u64) -> Vec<u8> {
     let mut w = Writer::new();
     w.u64(until);
     w.u64(dest);
+    w.fixed(&[0u8; 32]);
     w.finish()
 }
 

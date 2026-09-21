@@ -1700,6 +1700,9 @@ fn gateway_err_json(e: &GatewayError) -> Json {
             "watchdog_window_too_wide",
             vec![("until", Json::Int(*until)), ("max", Json::Int(*max))],
         ),
+        GatewayError::WatchdogWithoutClock => {
+            tagged("gateway", "watchdog_without_clock", Vec::new())
+        }
         GatewayError::StaleBatch { got, expected } => tagged(
             "gateway",
             "stale_batch",
