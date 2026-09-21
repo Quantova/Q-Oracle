@@ -409,6 +409,13 @@ pub fn load_exit_config() -> Result<Option<ExitTrustConfig>, ExitConfigError> {
     parse_exit_config(&ProcessEnv)
 }
 
+/// The foreign escrow figures, read on their own. They bound the deposit mint path, which
+/// serves whether or not exits are enabled, so they cannot live only inside the exit
+/// configuration.
+pub fn load_reserves() -> Result<Vec<([u8; 16], u128)>, ExitConfigError> {
+    parse_reserves(&ProcessEnv)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

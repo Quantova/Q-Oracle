@@ -26,6 +26,10 @@ use crate::persist::GuardStore;
 /// The only corridor with a working payout verifier. q_assets::Network::Bitcoin.
 const BITCOIN_CORRIDOR: u32 = 43;
 
+/// Whether settle and slash decisions are signed by the operator quorum and submitted to
+/// the chain. They are not, so exits stay refused; this flips only with that leg.
+const EXIT_ACK_PATH_WIRED: bool = false;
+
 /// Submitted release proofs waiting to be matched against a pending exit. Bounded so a
 /// stream of unmatched proofs cannot grow the queue without limit; the oldest go first.
 const MAX_PENDING_RELEASES: usize = 1024;
@@ -331,6 +335,19 @@ pub(crate) fn start_exits_inner(
                      can be proven and every exit would slash; refusing to serve exits",
                 ));
             }
+            // A settled or slashed exit only resolves on chain through a quorum signed exit
+            // acknowledgement submitted to the bridge settle address. Nothing signs one or
+            // submits one: the decisions this service reaches are dropped. The chain then
+            // keeps every burn outstanding, and a slash, which pays the holder nothing here
+            // because the chain's own slash is what restores the burned tokens, leaves the
+            // holder with neither the tokens nor a payout. Refuse until that path exists.
+            if !EXIT_ACK_PATH_WIRED {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "no exit acknowledgement reaches the chain, so a slashed exit would leave \
+                     the holder with nothing; refusing to serve exits",
+                ));
+            }
             let mut service = ExitService::build(&cfg).map_err(|e| {
                 std::io::Error::new(
                     ErrorKind::InvalidInput,
@@ -338,15 +355,6 @@ pub(crate) fn start_exits_inner(
                 )
             })?;
             service.gateway = gateway;
-            // The watchtower above is a detector: it pauses AFTER an over mint is already
-            // in the minted ledger. Seed the same escrow figures into the gateway so the
-            // bound is refused before the mint, not audited after it.
-            if let Some(state) = service.gateway.as_ref() {
-                let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
-                for (asset, escrowed) in &cfg.reserves {
-                    guard.gateway.set_escrow(*asset, *escrowed);
-                }
-            }
             Ok(Some(service.spawn()))
         }
         Err(e) => Err(std::io::Error::new(
@@ -628,6 +636,15 @@ pub fn shared(state: BridgeState) -> SharedState {
     Arc::new(RwLock::new(state))
 }
 
+/// Bound the deposit mint path by the foreign escrow. Minting past what is held on the far
+/// side is refused before the mint rather than detected after it.
+pub(crate) fn apply_reserves(state: &SharedState, reserves: &[([u8; 16], u128)]) {
+    let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+    for (asset, escrowed) in reserves {
+        guard.gateway.set_escrow(*asset, *escrowed);
+    }
+}
+
 pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Result<()> {
     // The state comes up first so the exit loop can carry the destination chain height
     // into the gateway. Without a clock every height relative control, the deposit freeze
@@ -644,6 +661,19 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
     };
     let store = Some(GuardStore::new(path));
     let state = shared(restore(&store)?);
+    let reserves = crate::exits::load_reserves().map_err(|e| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("the foreign reserve figures are unusable, refusing to start: {e:?}"),
+        )
+    })?;
+    if reserves.is_empty() {
+        eprintln!(
+            "q-oracle: no foreign reserves are configured, so deposits mint against the \
+             asset caps alone with no escrow bound"
+        );
+    }
+    apply_reserves(&state, &reserves);
     let _exits = start_exits_for(Some(state.clone()))?;
     run_with(addr, state, store.map(Arc::new))
 }
@@ -1198,6 +1228,50 @@ mod tests {
             service.sweep_settle(1).is_empty(),
             "with no checkpoint the sweep is a no-op"
         );
+    }
+
+    #[test]
+    fn reserves_bound_the_deposit_mint_with_exits_off() {
+        let asset = [0xa1; 16];
+        let state = shared(boot_configured());
+        {
+            let mut guard = state.write().unwrap();
+            guard.gateway.register_corridor(1, 6);
+            guard.gateway.register_asset_cap(asset, 1_000_000_000);
+            guard.gateway.advance_to(10_000);
+        }
+        apply_reserves(&state, &[(asset, 1_000)]);
+        let mut guard = state.write().unwrap();
+        assert!(guard
+            .gateway
+            .admit_trustless(asset, [1; 32], 1_000, 1)
+            .is_ok());
+        assert!(
+            matches!(
+                guard.gateway.admit_trustless(asset, [2; 32], 1, 1),
+                Err(q_gateway::GatewayError::EscrowExceeded { .. })
+            ),
+            "the escrow bound holds on the deposit path without any exit configuration"
+        );
+    }
+
+    #[test]
+    fn a_complete_bitcoin_exit_configuration_is_refused_while_no_ack_reaches_the_chain() {
+        let mut cfg = full_exit_config(temp_ledger("noack"));
+        cfg.corridor = BITCOIN_CORRIDOR;
+        cfg.reserves = vec![([0xa1; 16], 1_000_000_000)];
+        cfg.bitcoin = Some(BitcoinCheckpointConfig {
+            height: 1,
+            hash: [0x11; 32],
+            min_work: 0,
+            confirmations: 6,
+        });
+        let refused = start_exits_inner(Ok(Some(cfg)), None);
+        assert!(
+            refused.is_err(),
+            "every prerequisite is met, but a slash would still leave the holder with nothing"
+        );
+        assert_eq!(refused.err().unwrap().kind(), ErrorKind::InvalidInput);
     }
 
     #[test]
