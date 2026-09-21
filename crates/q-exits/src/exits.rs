@@ -51,13 +51,18 @@ impl ExitStatement {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeskConfig {
     pub corridor: u32,
     pub dest_chain: u64,
     pub secure_bps: u32,
     pub premium_bps: u32,
     pub window: u64,
+    // The assets this desk's vault actually backs. A desk that serves none serves every
+    // asset, which is how a burn of unrelated paper reaches a corridor's collateral.
+    pub assets: Vec<[u8; 16]>,
+    // The most one exit may draw, so a single burn cannot reach the whole vault.
+    pub max_amount: u128,
 }
 
 pub const SECURE_RATIO_BPS: u32 = 15_000;
@@ -72,7 +77,19 @@ impl DeskConfig {
             secure_bps: SECURE_RATIO_BPS,
             premium_bps: SLASH_PREMIUM_BPS,
             window: REDEEM_WINDOW_MS,
+            assets: Vec::new(),
+            max_amount: 0,
         }
+    }
+
+    pub fn serving(mut self, assets: Vec<[u8; 16]>, max_amount: u128) -> DeskConfig {
+        self.assets = assets;
+        self.max_amount = max_amount;
+        self
+    }
+
+    fn serves(&self, asset: &[u8; 16]) -> bool {
+        self.assets.iter().any(|served| served == asset)
     }
 }
 
@@ -295,6 +312,19 @@ impl ExitDesk {
                 expected: self.cfg.dest_chain,
             });
         }
+        // A desk backs one corridor's assets. Without this any bridged asset draws on
+        // this vault, and the dest_chain gate above is a constant against a constant.
+        // A desk backs one corridor's assets. Without this any bridged asset draws on
+        // this vault, and the dest_chain gate above is a constant against a constant.
+        if !self.cfg.serves(&burn.asset_id) {
+            return Err(ExitError::UnservedAsset { got: burn.asset_id });
+        }
+        if self.cfg.max_amount > 0 && burn.amount > self.cfg.max_amount {
+            return Err(ExitError::AmountAboveCeiling {
+                got: burn.amount,
+                ceiling: self.cfg.max_amount,
+            });
+        }
         let statement = ExitStatement {
             version: EXIT_STATEMENT_VERSION,
             corridor: self.cfg.corridor,
@@ -438,6 +468,8 @@ mod tests {
             secure_bps: 15_000,
             premium_bps: 10_000,
             window: 100,
+            assets: vec![[0xa1; 16]],
+            max_amount: 0,
         }
     }
 
@@ -764,6 +796,8 @@ mod settle_commit_order_tests {
             secure_bps: 15_000,
             premium_bps: 10_000,
             window: 100,
+            assets: vec![[0xa1; 16]],
+            max_amount: 0,
         }
     }
 
@@ -862,7 +896,11 @@ mod settle_commit_order_tests {
             1_500,
             "the second exit keeps its custody locked"
         );
-        assert_eq!(events.lock().unwrap().len(), 1, "only the first settle is journaled");
+        assert_eq!(
+            events.lock().unwrap().len(),
+            1,
+            "only the first settle is journaled"
+        );
     }
 
     #[test]

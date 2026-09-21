@@ -665,6 +665,8 @@ mod tests {
             rpc_port: 8080,
             ledger_path: ledger,
             bitcoin: None,
+            assets: vec![[0xa1; 16]],
+            max_exit_amount: 0,
         }
     }
 

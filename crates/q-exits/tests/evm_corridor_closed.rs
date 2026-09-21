@@ -33,7 +33,10 @@ fn release() -> EvmReleaseProof {
 
 #[test]
 fn an_evm_release_proof_never_verifies_while_the_corridor_is_closed() {
-    assert_eq!(release().verify(), Err(PayoutProofError::EvmCorridorDisabled));
+    assert_eq!(
+        release().verify(),
+        Err(PayoutProofError::EvmCorridorDisabled)
+    );
 }
 
 #[test]

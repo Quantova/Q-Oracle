@@ -23,6 +23,8 @@ pub enum ExitError {
     PayoutUnproven,
     ReplayedPayout,
     WrongDestination { got: u64, expected: u64 },
+    UnservedAsset { got: [u8; 16] },
+    AmountAboveCeiling { got: u128, ceiling: u128 },
     Overflow,
     InvalidArtifact(CodecError),
     UnsetAnchor,

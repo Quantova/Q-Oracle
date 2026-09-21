@@ -198,7 +198,10 @@ fn the_supermajority_floor_is_two_thirds_and_never_below_two() {
 fn a_threshold_left_below_the_floor_cannot_admit_a_short_quorum() {
     let ops: Vec<Op> = (1..=9).map(mk).collect();
     let floor = q_gateway::gateway::supermajority_floor(9);
-    assert_eq!(floor, 6, "nine operators need six, or the case below is not short");
+    assert_eq!(
+        floor, 6,
+        "nine operators need six, or the case below is not short"
+    );
 
     // The set is built with a threshold far under the floor, which is what a
     // misconfiguration or the unvalidated raw setter would leave behind.

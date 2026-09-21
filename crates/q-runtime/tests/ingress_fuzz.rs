@@ -60,7 +60,15 @@ fn a_deeply_nested_body_is_refused_rather_than_overflowing_the_stack() {
 
 #[test]
 fn an_unbalanced_or_truncated_body_is_refused_not_accepted() {
-    for text in ["[", "{", "{\"a\":", "[1,", "\"unterminated", "{\"a\":1}}", "[]]"] {
+    for text in [
+        "[",
+        "{",
+        "{\"a\":",
+        "[1,",
+        "\"unterminated",
+        "{\"a\":1}}",
+        "[]]",
+    ] {
         assert!(
             json::parse(text).is_err(),
             "the parser accepted malformed input: {text}"

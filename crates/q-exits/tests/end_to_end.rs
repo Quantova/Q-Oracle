@@ -138,6 +138,8 @@ fn config() -> DeskConfig {
         secure_bps: SECURE_BPS,
         premium_bps: PREMIUM_BPS,
         window: 100,
+        assets: vec![ASSET],
+        max_amount: 0,
     }
 }
 
@@ -156,6 +158,57 @@ fn proof_of(members: &[Attester], beacon: &Beacon, burn_ref: [u8; 32]) -> ProofO
         leaf: leaves[burn_index].clone(),
         inclusion: prove_inclusion(&leaves, burn_index).unwrap(),
     }
+}
+
+fn proof_of_asset(
+    members: &[Attester],
+    beacon: &Beacon,
+    burn_ref: [u8; 32],
+    asset: [u8; 16],
+    amount: u128,
+) -> ProofOfBurn {
+    let leaves = vec![
+        vec![0xde; 8],
+        burn_leaf(amount, asset, BENEFICIARY, burn_ref),
+        vec![0xad; 12],
+    ];
+    let burn_index = 1;
+    let header = header_for(&leaves);
+    let block = Block::new(HEIGHT, header.hash(), Parent::Genesis);
+    ProofOfBurn {
+        header_bytes: to_bytes(&header),
+        certificate: finalized_certificate(members, block, beacon),
+        leaf: leaves[burn_index].clone(),
+        inclusion: prove_inclusion(&leaves, burn_index).unwrap(),
+    }
+}
+
+// A desk backs one corridor. A burn of unrelated paper must not reach its collateral.
+#[test]
+fn a_burn_of_an_unserved_asset_cannot_lock_the_corridor_vault() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let mut desk = ExitDesk::new(config(), anchor(&members, &beacon)).unwrap();
+    desk.register_vault(1, 1_000_000);
+
+    let junk = [0xee; 16];
+    let proof = proof_of_asset(&members, &beacon, [0x71; 32], junk, 600_000);
+    let opened = desk.open_exit(&proof, 1, 0);
+    assert!(
+        matches!(opened, Err(ExitError::UnservedAsset { .. })),
+        "an unserved asset opened an exit against this vault, got {opened:?}"
+    );
+    assert_eq!(
+        desk.locked_collateral(1),
+        0,
+        "collateral was locked for an asset the desk does not back"
+    );
+
+    let honest = proof_of_asset(&members, &beacon, [0x72; 32], ASSET, 200_000);
+    assert!(
+        desk.open_exit(&honest, 1, 0).is_ok(),
+        "the corridor's own asset must still open"
+    );
 }
 
 fn desk() -> ExitDesk {

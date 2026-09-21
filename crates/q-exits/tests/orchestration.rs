@@ -140,6 +140,8 @@ fn config() -> DeskConfig {
         secure_bps: 15_000,
         premium_bps: 11_000,
         window: 100,
+        assets: vec![ASSET],
+        max_amount: 0,
     }
 }
 

@@ -5,7 +5,8 @@ const LOCKFILE: &str = include_str!("../../../Cargo.lock");
 
 fn normal_dependents_of(crate_name: &str) -> Vec<String> {
     let mut dependents = Vec::new();
-    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/..")).expect("crates dir") {
+    for entry in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/..")).expect("crates dir")
+    {
         let dir = entry.expect("entry").path();
         let manifest = dir.join("Cargo.toml");
         let Ok(text) = std::fs::read_to_string(&manifest) else {

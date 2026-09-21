@@ -2039,8 +2039,8 @@ mod tests {
 mod tier_downgrade_tests {
     use super::tests::{attest, federated_fact, mk, pool_request, Op, DEST, DEST_ID};
     use super::*;
-    use q_gateway::OperatorSet;
     use q_federated::SourceEndpoint;
+    use q_gateway::OperatorSet;
 
     // A quorum envelope on a proof backed corridor would downgrade it to operator trust.
     fn bridge_state() -> (Vec<Op>, BridgeState) {
@@ -2049,7 +2049,10 @@ mod tier_downgrade_tests {
         for op in &ops {
             set.register(op.id, op.pk);
         }
-        (ops, BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000)))
+        (
+            ops,
+            BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000)),
+        )
     }
 
     fn refuses_federated_on(network: Network, identifier: &str) {
@@ -2062,9 +2065,11 @@ mod tier_downgrade_tests {
             other => panic!("expected PoolCreated, got {other:?}"),
         };
         for op in &ops {
-            state
-                .sources
-                .declare(network.id(), op.id, SourceEndpoint([0x10 + op.id as u8; 32]));
+            state.sources.declare(
+                network.id(),
+                op.id,
+                SourceEndpoint([0x10 + op.id as u8; 32]),
+            );
         }
         // Match the pool network or the earlier check fires instead.
         let mut fact = federated_fact(view.asset_id, [0x11; 32]);

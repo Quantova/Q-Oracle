@@ -26,6 +26,8 @@ pub const COMMITTEE_ENV: &str = "Q_ORACLE_EXITS_COMMITTEE";
 pub const VAULTS_ENV: &str = "Q_ORACLE_EXITS_VAULTS";
 pub const LEDGER_ENV: &str = "Q_ORACLE_EXITS_LEDGER";
 pub const BITCOIN_ENV: &str = "Q_ORACLE_EXITS_BITCOIN";
+pub const ASSETS_ENV: &str = "Q_ORACLE_EXITS_ASSETS";
+pub const MAX_AMOUNT_ENV: &str = "Q_ORACLE_EXITS_MAX_AMOUNT";
 
 pub fn parse_enabled(value: Option<&str>) -> bool {
     matches!(value, Some("1"))
@@ -85,6 +87,10 @@ pub struct ExitTrustConfig {
     pub rpc_port: u16,
     pub ledger_path: PathBuf,
     pub bitcoin: Option<BitcoinCheckpointConfig>,
+    // The assets this corridor's vault backs, and the ceiling on one exit. Empty serves
+    // nothing, so a desk that was never told its assets refuses every exit.
+    pub assets: Vec<[u8; 16]>,
+    pub max_exit_amount: u128,
 }
 
 impl ExitTrustConfig {
@@ -101,6 +107,7 @@ impl ExitTrustConfig {
 
     pub fn desk_config(&self) -> DeskConfig {
         DeskConfig::aligned(self.corridor, self.dest_chain as u64)
+            .serving(self.assets.clone(), self.max_exit_amount)
     }
 
     pub fn active_vault(&self) -> u32 {
@@ -225,6 +232,34 @@ fn parse_committee<E: EnvSource>(env: &E) -> Result<Vec<MemberConfig>, ExitConfi
     Ok(members)
 }
 
+// A desk serves only the assets named here. Absent means it serves none and refuses
+// every exit, which is the safe reading of an unconfigured corridor.
+fn parse_assets<E: EnvSource>(env: &E) -> Result<Vec<[u8; 16]>, ExitConfigError> {
+    let Some(raw) = env.get(ASSETS_ENV) else {
+        return Ok(Vec::new());
+    };
+    let mut assets = Vec::new();
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let bytes = decode_hex(entry).ok_or(ExitConfigError::Malformed("exit asset"))?;
+        let asset: [u8; 16] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| ExitConfigError::Malformed("exit asset length"))?;
+        assets.push(asset);
+    }
+    Ok(assets)
+}
+
+fn opt_u128<E: EnvSource>(env: &E, key: &str, fallback: u128) -> Result<u128, ExitConfigError> {
+    match env.get(key) {
+        Some(raw) => raw
+            .trim()
+            .parse()
+            .map_err(|_| ExitConfigError::Malformed("exit amount ceiling")),
+        None => Ok(fallback),
+    }
+}
+
 fn parse_vaults<E: EnvSource>(env: &E) -> Result<Vec<VaultSeed>, ExitConfigError> {
     let raw = req(env, VAULTS_ENV, "vault registry")?;
     let mut vaults = Vec::new();
@@ -314,6 +349,8 @@ pub fn parse_exit_config<E: EnvSource>(
         .map_err(|_| ExitConfigError::Malformed("chain rpc port"))?;
     let ledger_path = PathBuf::from(req(env, LEDGER_ENV, "replay ledger path")?);
     let bitcoin = parse_bitcoin(env)?;
+    let assets = parse_assets(env)?;
+    let max_exit_amount = opt_u128(env, MAX_AMOUNT_ENV, 0)?;
 
     let config = ExitTrustConfig {
         chain_id,
@@ -330,6 +367,8 @@ pub fn parse_exit_config<E: EnvSource>(
         rpc_port,
         ledger_path,
         bitcoin,
+        assets,
+        max_exit_amount,
     };
     config.build_anchor().map_err(ExitConfigError::Anchor)?;
     Ok(Some(config))
