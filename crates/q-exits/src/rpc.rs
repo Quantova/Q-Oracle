@@ -155,6 +155,21 @@ pub fn decode_finalized_block(body: &str) -> Result<FinalizedBlock, BurnWatchErr
         .ok_or_else(|| BurnWatchError::Rpc("burn_block has no certificate field".to_string()))?;
     let certificate = decode_certificate(&decode_hex(cert_hex)?)?;
 
+    // The chain caps the event array it serves. An inclusion proof built over a
+    // truncated leaf list cannot match the header's event root, so every burn in that
+    // block would be refused and skipped for good. Refuse the block instead, so the
+    // watcher retries rather than walking past it.
+    if value
+        .get("truncated")
+        .and_then(Json::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(BurnWatchError::Rpc(
+            "burn_block truncated its event array, so an inclusion proof cannot be built              against the header event root"
+                .to_string(),
+        ));
+    }
+
     let leaves = value
         .get("events")
         .and_then(Json::as_array)
@@ -355,6 +370,13 @@ impl Json {
     fn as_u64(&self) -> Option<u64> {
         match self {
             Json::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    fn as_bool(&self) -> Option<bool> {
+        match self {
+            Json::Bool(value) => Some(*value),
             _ => None,
         }
     }
