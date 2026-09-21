@@ -19,6 +19,7 @@ q-exits = { path = "../q-exits" }
 q-federated = { workspace = true }
 q-gateway = { workspace = true }
 q-assets = { workspace = true }
+q-watchtower = { workspace = true }
 q-codec = { workspace = true }
 q-airlock = { workspace = true }
 qlc-bitcoin = { workspace = true }

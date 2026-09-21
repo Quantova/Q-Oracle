@@ -39,6 +39,7 @@ q-airlock = { path = "crates/q-airlock" }
 q-attestor = { path = "crates/q-attestor" }
 q-gateway = { path = "crates/q-gateway" }
 q-assets = { path = "crates/q-assets" }
+q-watchtower = { path = "crates/q-watchtower" }
 q-federated = { path = "crates/q-federated" }
 
 [profile.dev.package.qtv-crypto]

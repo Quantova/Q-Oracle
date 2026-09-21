@@ -28,6 +28,7 @@ pub const LEDGER_ENV: &str = "Q_ORACLE_EXITS_LEDGER";
 pub const BITCOIN_ENV: &str = "Q_ORACLE_EXITS_BITCOIN";
 pub const ASSETS_ENV: &str = "Q_ORACLE_EXITS_ASSETS";
 pub const MAX_AMOUNT_ENV: &str = "Q_ORACLE_EXITS_MAX_AMOUNT";
+pub const RESERVES_ENV: &str = "Q_ORACLE_EXITS_RESERVES";
 
 pub fn parse_enabled(value: Option<&str>) -> bool {
     matches!(value, Some("1"))
@@ -91,6 +92,9 @@ pub struct ExitTrustConfig {
     // nothing, so a desk that was never told its assets refuses every exit.
     pub assets: Vec<[u8; 16]>,
     pub max_exit_amount: u128,
+    // Escrow held on the foreign side, per asset, which the reserve shortfall circuit
+    // breaker audits the minted total against. Absent, that breaker cannot run at all.
+    pub reserves: Vec<([u8; 16], u128)>,
 }
 
 impl ExitTrustConfig {
@@ -250,6 +254,31 @@ fn parse_assets<E: EnvSource>(env: &E) -> Result<Vec<[u8; 16]>, ExitConfigError>
     Ok(assets)
 }
 
+// asset:amount pairs. The watchtower audits minted against these, so exits cannot run
+// without them: a circuit breaker with no input is not a circuit breaker.
+fn parse_reserves<E: EnvSource>(env: &E) -> Result<Vec<([u8; 16], u128)>, ExitConfigError> {
+    let Some(raw) = env.get(RESERVES_ENV) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+        let (asset, amount) = entry
+            .split_once(':')
+            .ok_or(ExitConfigError::Malformed("exit reserve"))?;
+        let bytes = decode_hex(asset).ok_or(ExitConfigError::Malformed("reserve asset"))?;
+        let asset: [u8; 16] = bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| ExitConfigError::Malformed("reserve asset length"))?;
+        let amount: u128 = amount
+            .trim()
+            .parse()
+            .map_err(|_| ExitConfigError::Malformed("reserve amount"))?;
+        out.push((asset, amount));
+    }
+    Ok(out)
+}
+
 fn opt_u128<E: EnvSource>(env: &E, key: &str, fallback: u128) -> Result<u128, ExitConfigError> {
     match env.get(key) {
         Some(raw) => raw
@@ -350,6 +379,7 @@ pub fn parse_exit_config<E: EnvSource>(
     let ledger_path = PathBuf::from(req(env, LEDGER_ENV, "replay ledger path")?);
     let bitcoin = parse_bitcoin(env)?;
     let assets = parse_assets(env)?;
+    let reserves = parse_reserves(env)?;
     let max_exit_amount = opt_u128(env, MAX_AMOUNT_ENV, 0)?;
 
     let config = ExitTrustConfig {
@@ -369,6 +399,7 @@ pub fn parse_exit_config<E: EnvSource>(
         bitcoin,
         assets,
         max_exit_amount,
+        reserves,
     };
     config.build_anchor().map_err(ExitConfigError::Anchor)?;
     Ok(Some(config))

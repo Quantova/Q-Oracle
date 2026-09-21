@@ -33,6 +33,7 @@ fn unix_millis() -> u64 {
 
 pub struct ExitService {
     gateway: Option<SharedState>,
+    reserves: q_watchtower::StaticReserves,
     desk: ExitDesk,
     feed: BurnFeed,
     source: RpcBurnSource,
@@ -50,8 +51,13 @@ impl ExitService {
             desk.register_vault(vault.vault_id, vault.collateral);
         }
         desk.reconstruct()?;
+        let mut reserves = q_watchtower::StaticReserves::new();
+        for (asset, escrowed) in &cfg.reserves {
+            reserves.set(*asset, *escrowed);
+        }
         Ok(ExitService {
             gateway: None,
+            reserves,
             desk,
             feed: BurnFeed::new(cfg.start_height, ExitConfig { enabled: true }),
             source: RpcBurnSource::new(cfg.rpc_host.clone(), cfg.rpc_port),
@@ -129,6 +135,13 @@ impl ExitService {
                     let head = self.feed.scanned_through();
                     let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
                     guard.gateway.advance_to(head);
+                    // The independent over mint check, run against the configured escrow.
+                    // Any breach pauses the gateway rather than serving another deposit.
+                    let breaches =
+                        q_watchtower::Watchtower::enforce(&mut guard.gateway, &self.reserves);
+                    for breach in &breaches {
+                        eprintln!("q-oracle: reserve shortfall, gateway paused: {breach:?}");
+                    }
                 }
                 let mut waited = Duration::ZERO;
                 while waited < EXIT_POLL_INTERVAL && !flag.load(Ordering::SeqCst) {
@@ -179,6 +192,16 @@ pub(crate) fn start_exits_inner(
     match loaded {
         Ok(None) => Ok(None),
         Ok(Some(cfg)) => {
+            // The reserve shortfall breaker audits minted totals against foreign escrow.
+            // With no escrow figures it cannot run, and exits would be served with the one
+            // independent check on over minting absent, so refuse to start instead.
+            if cfg.reserves.is_empty() {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "exits are configured but no foreign reserves are, so the reserve \
+                     shortfall breaker cannot run; refusing to serve exits",
+                ));
+            }
             let mut service = ExitService::build(&cfg).map_err(|e| {
                 std::io::Error::new(
                     ErrorKind::InvalidInput,
@@ -853,6 +876,7 @@ mod tests {
             bitcoin: None,
             assets: vec![[0xa1; 16]],
             max_exit_amount: 0,
+            reserves: vec![([0xa1; 16], 1_000_000_000)],
         }
     }
 

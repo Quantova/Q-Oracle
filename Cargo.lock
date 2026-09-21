@@ -193,6 +193,7 @@ dependencies = [
  "q-federated",
  "q-gateway",
  "q-qbridge",
+ "q-watchtower",
  "qlc-bitcoin",
  "qlc-cosmos",
  "qlc-ethereum",
