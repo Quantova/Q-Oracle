@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/Q-Lightclient
-          ref: 251424da8b4c73ea9cf3f0c83de814e3474fb90f
+          ref: 02e0871b39821ca7d98f961be223c28ee7b34a69
           path: Q-Lightclient
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -37,13 +37,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/Quantova-Chain
-          ref: 344618ba9c813981fac47ec2d9655401aee6ddf2
+          ref: 9d4dda908fbe65155451d483435ca69dc48ad00b
           path: Quantova-Chain
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/QCore.rs
-          ref: cce9ea1ec4309cf3db7b1bddbb6c4073e55af8e0
+          ref: 2b2826257d3d0d402b1c56a9ef4892382147238a
           path: QCore.rs
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::redundant_closure)]
+#![allow(clippy::manual_is_multiple_of)]
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
@@ -12,8 +13,8 @@ pub mod watch;
 pub mod wire;
 
 pub use boot::{
-    boot, boot_with, declare_operator_source, run, run_with, shared, start_exits, ExitHandle,
-    ExitService, DEFAULT_EPOCH_CAP, DEST_CHAIN,
+    boot, boot_with, declare_operator_source, run, run_with, shared, ExitHandle, ExitService,
+    DEFAULT_EPOCH_CAP, DEST_CHAIN,
 };
 pub use exits::{
     exit_config_from_env, exits_started, load_exit_config, parse_enabled, parse_exit_config,

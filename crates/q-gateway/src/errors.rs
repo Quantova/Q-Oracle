@@ -11,30 +11,78 @@ pub enum GatewayError {
     CorridorNotOpen(u32),
     CorridorInactive(u32),
     SourcePaused(u32),
-    InsufficientFinality { got: u32, need: u32 },
+    InsufficientFinality {
+        got: u32,
+        need: u32,
+    },
     AssetNotRegistered,
-    AssetCapExceeded { minted: u128, cap: u128, add: u128 },
-    EpochCapExceeded { minted: u128, cap: u128, add: u128 },
+    AssetCapExceeded {
+        minted: u128,
+        cap: u128,
+        add: u128,
+    },
+    EpochCapExceeded {
+        minted: u128,
+        cap: u128,
+        add: u128,
+    },
     ReplayedReference,
     UnknownOperator(u32),
     BadSignature(u32),
-    BelowThreshold { got: usize, need: usize },
-    ThinQuorum { quorum: usize, size: usize },
+    BelowThreshold {
+        got: usize,
+        need: usize,
+    },
+    ThinQuorum {
+        quorum: usize,
+        size: usize,
+    },
     ProveNothing,
     InvalidFact(CodecError),
     Unauthorized,
     NoGovernanceSet,
-    TierDowngrade { from: u8, to: u8 },
-    Frozen { until: u64 },
-    WatchdogWindowTooWide { until: u64, max: u64 },
+    TierDowngrade {
+        from: u8,
+        to: u8,
+    },
+    Frozen {
+        until: u64,
+    },
+    WatchdogWindowTooWide {
+        until: u64,
+        max: u64,
+    },
     WatchdogWithoutClock,
-    StaleBatch { got: u64, expected: u64 },
-    ExitExceedsMinted { minted: u128, amount: u128 },
-    ExitNotReady { now: u64, unlock: u64 },
+    EscrowExceeded {
+        minted: u128,
+        escrowed: u128,
+        add: u128,
+    },
+    StaleBatch {
+        got: u64,
+        expected: u64,
+    },
+    ExitExceedsMinted {
+        minted: u128,
+        amount: u128,
+    },
+    ExitNotReady {
+        now: u64,
+        unlock: u64,
+    },
     UnknownExit(u64),
-    MessageExpired { now: u64, expiry: u64 },
-    StaleOrReplayedNonce { got: u64, high_water: u64 },
-    ExitQueueFull { pending: usize, cap: usize },
+    MessageExpired {
+        now: u64,
+        expiry: u64,
+    },
+    StaleOrReplayedNonce {
+        got: u64,
+        high_water: u64,
+    },
+    ExitQueueFull {
+        pending: usize,
+        cap: usize,
+    },
 }
 
 impl From<CodecError> for GatewayError {

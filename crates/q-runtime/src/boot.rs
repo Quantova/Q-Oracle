@@ -5,21 +5,30 @@ use std::io::ErrorKind;
 use std::net::{TcpListener, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use q_exits::{
-    BurnFeed, ExitConfig, ExitDecision, ExitDesk, ExitError, ExitId, FeedError, PayoutWatcher,
-    PersistentJournal, QuantovaBurnSource, ReplayStore, RpcBurnSource,
+    BitcoinPayoutWatcher, BitcoinReleaseProof, BurnFeed, ExitConfig, ExitDecision, ExitDesk,
+    ExitError, ExitId, FeedError, PayoutWatcher, PersistentJournal, QuantovaBurnSource,
+    ReplayStore, RpcBurnSource,
 };
 use q_federated::SourceEndpoint;
 use q_gateway::{Gateway, OperatorSet};
 use q_qbridge::BridgeState;
+use qlc_bitcoin::{Checkpoint, NetworkParams, U256};
 
 use crate::exits::{load_exit_config, ExitConfigError, ExitTrustConfig};
 use crate::http::{serve, SharedState};
 use crate::persist::GuardStore;
+
+/// The only corridor with a working payout verifier. q_assets::Network::Bitcoin.
+const BITCOIN_CORRIDOR: u32 = 43;
+
+/// Submitted release proofs waiting to be matched against a pending exit. Bounded so a
+/// stream of unmatched proofs cannot grow the queue without limit; the oldest go first.
+const MAX_PENDING_RELEASES: usize = 1024;
 
 const EXIT_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const EXIT_POLL_SLICE: Duration = Duration::from_millis(100);
@@ -39,6 +48,49 @@ pub struct ExitService {
     source: RpcBurnSource,
     vault_id: u32,
     dest_chain: u32,
+    // Everything the settle sweep needs: the corridor's checkpoint and assets, and the
+    // queue the RPC surface drops submitted release proofs onto. Absent when no
+    // checkpoint is configured, in which case nothing can be proven and the sweep is a
+    // no-op; `start_exits_inner` refuses to serve in that state rather than slash.
+    settle: Option<SettleInputs>,
+}
+
+pub struct SettleInputs {
+    corridor: u32,
+    // One watcher is bound to one asset, so a corridor backing several needs one each.
+    // Building only for the first would silently slash every exit of the others.
+    assets: Vec<[u8; 16]>,
+    params: NetworkParams,
+    checkpoint: Checkpoint,
+    confirmation_depth: u32,
+    queue: ReleaseQueue,
+    held: Vec<BitcoinReleaseProof>,
+}
+
+/// Release proofs cross from the RPC thread to the exit thread through this.
+pub type ReleaseQueue = Arc<Mutex<Vec<BitcoinReleaseProof>>>;
+
+/// One exit desk per process, so one queue. Set when the exit service is built; absent
+/// means exits are not running and a submitted proof has nowhere to go.
+static RELEASE_QUEUE: OnceLock<ReleaseQueue> = OnceLock::new();
+
+pub fn release_queue() -> &'static ReleaseQueue {
+    RELEASE_QUEUE.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+}
+
+pub fn release_queue_if_running() -> Option<&'static ReleaseQueue> {
+    RELEASE_QUEUE.get()
+}
+
+/// Accept a submitted release proof. Verification is not done here: the proof is checked
+/// against the checkpoint when the sweep runs, and an unprovable one simply never settles
+/// anything. The only thing enforced at the door is the queue bound.
+pub fn submit_release(queue: &ReleaseQueue, proof: BitcoinReleaseProof) {
+    let mut held = queue.lock().unwrap_or_else(|e| e.into_inner());
+    if held.len() >= MAX_PENDING_RELEASES {
+        held.remove(0);
+    }
+    held.push(proof);
 }
 
 impl ExitService {
@@ -55,9 +107,23 @@ impl ExitService {
         for (asset, escrowed) in &cfg.reserves {
             reserves.set(*asset, *escrowed);
         }
+        let settle = cfg.bitcoin.as_ref().map(|checkpoint| SettleInputs {
+            corridor: cfg.corridor,
+            assets: cfg.assets.clone(),
+            params: qlc_bitcoin::BITCOIN,
+            checkpoint: Checkpoint {
+                height: checkpoint.height,
+                hash: checkpoint.hash,
+                min_work: U256::from_u64(checkpoint.min_work),
+            },
+            confirmation_depth: checkpoint.confirmations,
+            queue: release_queue().clone(),
+            held: Vec::new(),
+        });
         Ok(ExitService {
             gateway: None,
             reserves,
+            settle,
             desk,
             feed: BurnFeed::new(cfg.start_height, ExitConfig { enabled: true }),
             source: RpcBurnSource::new(cfg.rpc_host.clone(), cfg.rpc_port),
@@ -111,6 +177,51 @@ impl ExitService {
         Ok(ExitDecision::settle(&statement, self.dest_chain))
     }
 
+    /// Settle every pending exit whose foreign payout has been proven. Runs before the
+    /// slash sweep so a proof that lands inside the window settles rather than slashes.
+    pub fn sweep_settle(&mut self, now: u64) -> Vec<ExitDecision> {
+        let Some(settle) = self.settle.as_mut() else {
+            return Vec::new();
+        };
+        {
+            let mut queued = settle.queue.lock().unwrap_or_else(|e| e.into_inner());
+            settle.held.append(&mut queued);
+        }
+        while settle.held.len() > MAX_PENDING_RELEASES {
+            settle.held.remove(0);
+        }
+        if settle.held.is_empty() {
+            return Vec::new();
+        }
+        // A watcher owns its proofs for the length of the sweep, so each gets a clone and
+        // the held set survives to the next tick. A proof that matched is consumed by the
+        // desk's own replay set, so re-offering it settles nothing twice.
+        let watchers: Vec<BitcoinPayoutWatcher> = settle
+            .assets
+            .iter()
+            .map(|asset| {
+                BitcoinPayoutWatcher::new(
+                    settle.corridor,
+                    *asset,
+                    settle.params,
+                    settle.checkpoint.clone(),
+                    settle.confirmation_depth,
+                    settle.held.clone(),
+                )
+            })
+            .collect();
+        let mut decisions = Vec::new();
+        for id in self.desk.settleable(now) {
+            for watcher in &watchers {
+                if let Ok(decision) = self.settle(id, watcher, now) {
+                    decisions.push(decision);
+                    break;
+                }
+            }
+        }
+        decisions
+    }
+
     pub fn sweep_slash(&mut self, now: u64) -> Vec<ExitDecision> {
         let mut decisions = Vec::new();
         for id in self.desk.slashable(now) {
@@ -130,6 +241,7 @@ impl ExitService {
             while !flag.load(Ordering::SeqCst) {
                 let now = unix_millis();
                 let _ = self.poll_burns(now);
+                let _ = self.sweep_settle(now);
                 let _ = self.sweep_slash(now);
                 if let Some(state) = self.gateway.as_ref() {
                     let head = self.feed.scanned_through();
@@ -171,14 +283,11 @@ impl ExitHandle {
     }
 }
 
-pub fn start_exits() -> std::io::Result<Option<ExitHandle>> {
-    start_exits_with(load_exit_config())
-}
-
 pub(crate) fn start_exits_for(gateway: Option<SharedState>) -> std::io::Result<Option<ExitHandle>> {
     start_exits_inner(load_exit_config(), gateway)
 }
 
+#[cfg(test)]
 pub(crate) fn start_exits_with(
     loaded: Result<Option<ExitTrustConfig>, ExitConfigError>,
 ) -> std::io::Result<Option<ExitHandle>> {
@@ -202,6 +311,26 @@ pub(crate) fn start_exits_inner(
                      shortfall breaker cannot run; refusing to serve exits",
                 ));
             }
+            // An exit only leaves the desk two ways: settled against a proven foreign
+            // payout, or slashed at the deadline. Settlement needs a payout verifier for
+            // the corridor, and only Bitcoin has one. EvmReleaseProof::verify is a stub
+            // that always returns EvmCorridorDisabled, so on any other corridor every
+            // exit would run to its deadline and slash, destroying the user's funds on
+            // this side with no payout on the far side. Refuse rather than serve that.
+            if cfg.corridor != BITCOIN_CORRIDOR {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "exits are configured on a corridor with no payout verifier, so every \
+                     exit would slash instead of settle; refusing to serve exits",
+                ));
+            }
+            if cfg.bitcoin.is_none() {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "the bitcoin exit corridor has no checkpoint configured, so no payout \
+                     can be proven and every exit would slash; refusing to serve exits",
+                ));
+            }
             let mut service = ExitService::build(&cfg).map_err(|e| {
                 std::io::Error::new(
                     ErrorKind::InvalidInput,
@@ -209,6 +338,15 @@ pub(crate) fn start_exits_inner(
                 )
             })?;
             service.gateway = gateway;
+            // The watchtower above is a detector: it pauses AFTER an over mint is already
+            // in the minted ledger. Seed the same escrow figures into the gateway so the
+            // bound is refused before the mint, not audited after it.
+            if let Some(state) = service.gateway.as_ref() {
+                let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+                for (asset, escrowed) in &cfg.reserves {
+                    guard.gateway.set_escrow(*asset, *escrowed);
+                }
+            }
             Ok(Some(service.spawn()))
         }
         Err(e) => Err(std::io::Error::new(
@@ -347,7 +485,7 @@ pub fn boot_from_config(
 
 fn decode_hex(input: &str) -> Option<Vec<u8>> {
     let text = input.trim();
-    if !text.len().is_multiple_of(2) {
+    if text.len() % 2 != 0 {
         return None;
     }
     (0..text.len())
@@ -914,7 +1052,7 @@ mod tests {
         assert!(!restored.gateway.is_reference_used(&[0x11; 32]));
     }
 
-    use crate::exits::VaultSeed;
+    use crate::exits::{BitcoinCheckpointConfig, VaultSeed};
     use q_exits::{
         BurnWatchError, FinalizedBlock, MemberConfig, ATTEST_PK_BYTES, BEACON_SEED_BYTES,
     };
@@ -1016,6 +1154,49 @@ mod tests {
         assert!(
             handle.is_none(),
             "a default disabled runtime starts no exit service"
+        );
+    }
+
+    #[test]
+    fn a_corridor_with_no_payout_verifier_refuses_to_serve_exits() {
+        let mut cfg = full_exit_config(temp_ledger("nopayout"));
+        cfg.reserves = vec![([0xa1; 16], 1_000_000_000)];
+        cfg.bitcoin = Some(BitcoinCheckpointConfig {
+            height: 1,
+            hash: [0x11; 32],
+            min_work: 0,
+            confirmations: 6,
+        });
+        // Corridor 1 is not Bitcoin, and EvmReleaseProof::verify is a disabled stub, so
+        // no exit on this corridor could ever settle. Serving would slash every one.
+        assert_ne!(cfg.corridor, BITCOIN_CORRIDOR);
+        let refused = start_exits_inner(Ok(Some(cfg)), None);
+        assert!(refused.is_err(), "a corridor that cannot settle is refused");
+        assert_eq!(refused.err().unwrap().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn the_bitcoin_corridor_without_a_checkpoint_refuses_to_serve_exits() {
+        let mut cfg = full_exit_config(temp_ledger("nocheckpoint"));
+        cfg.corridor = BITCOIN_CORRIDOR;
+        cfg.reserves = vec![([0xa1; 16], 1_000_000_000)];
+        cfg.bitcoin = None;
+        let refused = start_exits_inner(Ok(Some(cfg)), None);
+        assert!(
+            refused.is_err(),
+            "no checkpoint means no payout can be proven, so exits are refused"
+        );
+        assert_eq!(refused.err().unwrap().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn a_service_without_a_checkpoint_settles_nothing_rather_than_panicking() {
+        let mut cfg = full_exit_config(temp_ledger("nosweep"));
+        cfg.bitcoin = None;
+        let mut service = ExitService::build(&cfg).expect("the desk still builds");
+        assert!(
+            service.sweep_settle(1).is_empty(),
+            "with no checkpoint the sweep is a no-op"
         );
     }
 

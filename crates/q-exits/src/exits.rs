@@ -290,6 +290,17 @@ impl ExitDesk {
         self.exits.len()
     }
 
+    /// Exits still inside their window, in the order they were opened. The settle sweep
+    /// walks these; anything left when the deadline passes falls to `slashable`.
+    pub fn settleable(&self, now: u64) -> Vec<ExitId> {
+        self.exits
+            .iter()
+            .enumerate()
+            .filter(|(_, exit)| exit.state == ExitState::Pending && now <= exit.deadline)
+            .map(|(index, _)| ExitId(index))
+            .collect()
+    }
+
     pub fn slashable(&self, now: u64) -> Vec<ExitId> {
         self.exits
             .iter()

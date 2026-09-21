@@ -31,7 +31,6 @@ const BURN_REF: [u8; 32] = [0x11; 32];
 const SECURE_BPS: u32 = 15_000;
 const PREMIUM_BPS: u32 = 10_000;
 const REQUIRED: u128 = 750;
-const USER_PAYOUT: u128 = 500;
 
 fn attesters() -> [Attester; 3] {
     [
@@ -707,4 +706,65 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
     assert_eq!(desk.open_exit(&proof, 1, 10), Err(ExitError::NotFinalized));
     assert!(!desk.is_consumed(&BURN_REF));
     assert_eq!(desk.locked_collateral(1), 0);
+}
+
+#[test]
+fn a_pending_exit_is_settleable_inside_the_window_and_slashable_after_it() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let mut desk = desk();
+    desk.register_vault(1, 2_000);
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
+
+    assert_eq!(desk.settleable(60), vec![id]);
+    assert!(desk.slashable(60).is_empty());
+
+    assert!(desk.settleable(200).is_empty());
+    assert_eq!(desk.slashable(200), vec![id]);
+}
+
+#[test]
+fn the_settle_sweep_order_takes_an_exit_off_the_slash_list() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let mut desk = desk();
+    desk.register_vault(1, 2_000);
+    let id = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
+    let watcher = bitcoin_watcher(release_around(release_tx(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
+
+    // What the daemon loop does: settle first, then slash. Without the settle pass this
+    // exit reaches its deadline pending and is slashed, which burns the user's funds on
+    // this side with the payout already made on the far side.
+    for pending in desk.settleable(60) {
+        desk.settle(pending, &watcher, 60).unwrap();
+    }
+    assert_eq!(desk.exit(id).unwrap().state, ExitState::Settled);
+    assert!(desk.slashable(200).is_empty());
+}
+
+#[test]
+fn a_settled_exit_is_never_offered_for_settling_again() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let mut desk = desk();
+    desk.register_vault(1, 2_000);
+    desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
+    let watcher = bitcoin_watcher(release_around(release_tx(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
+    for pending in desk.settleable(60) {
+        desk.settle(pending, &watcher, 60).unwrap();
+    }
+    assert!(desk.settleable(61).is_empty());
 }

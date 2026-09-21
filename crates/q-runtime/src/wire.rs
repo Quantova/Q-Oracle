@@ -4,6 +4,8 @@
 use q_airlock::Artifact;
 use q_airlock::SignerSig;
 use q_assets::Network;
+use q_exits::BitcoinReleaseProof;
+
 use q_codec::{BridgeFact, CodecError};
 use q_federated::{FederatedError, PoolError, PoolRequest, TrustlessError, TrustlessMint};
 use q_gateway::{GatewayError, MintReceipt};
@@ -257,6 +259,61 @@ fn signer_sigs_from(j: &Json) -> Result<Vec<SignerSig>, WireError> {
         out.push(signer_sig_from(item)?);
     }
     Ok(out)
+}
+
+/// A Bitcoin header chain long enough to bury any honest confirmation depth. Anything
+/// longer is a submitter making the verifier work, not a payout proof.
+const MAX_RELEASE_HEADERS: usize = 4096;
+/// A Merkle branch is log2 of the block's transaction count; 64 is far past any real
+/// block and keeps a crafted branch from spinning the hasher.
+const MAX_RELEASE_BRANCH: usize = 64;
+/// Bitcoin's own consensus limit on a serialised transaction.
+const MAX_RELEASE_TX_BYTES: usize = 1_000_000;
+const BITCOIN_HEADER_BYTES: usize = 80;
+
+fn block_header_from(j: &Json) -> Result<BlockHeader, WireError> {
+    let bytes = hex_array::<BITCOIN_HEADER_BYTES>(j, "header")?;
+    BlockHeader::parse(&bytes).map_err(|_| WireError::BadField("header"))
+}
+
+fn merkle_step_from(j: &Json) -> Result<MerkleStep, WireError> {
+    Ok(MerkleStep {
+        hash: hex_array::<32>(field(j, "hash")?, "hash")?,
+        sibling_on_left: as_bool(field(j, "sibling_on_left")?, "sibling_on_left")?,
+    })
+}
+
+/// Decode a submitted Bitcoin release proof. Nothing here trusts the submitter: every
+/// bound is a cost ceiling, and the proof itself is verified against the corridor's
+/// checkpoint when the settle sweep runs.
+pub fn decode_release_proof(body: &Json) -> Result<BitcoinReleaseProof, WireError> {
+    let header_items = field(body, "headers")?
+        .as_array()
+        .ok_or(WireError::BadType("headers"))?;
+    if header_items.is_empty() || header_items.len() > MAX_RELEASE_HEADERS {
+        return Err(WireError::BadField("headers"));
+    }
+    let mut headers = Vec::with_capacity(header_items.len());
+    for item in header_items {
+        headers.push(block_header_from(item)?);
+    }
+    let branch_items = field(body, "branch")?
+        .as_array()
+        .ok_or(WireError::BadType("branch"))?;
+    if branch_items.len() > MAX_RELEASE_BRANCH {
+        return Err(WireError::BadField("branch"));
+    }
+    let mut branch = Vec::with_capacity(branch_items.len());
+    for item in branch_items {
+        branch.push(merkle_step_from(item)?);
+    }
+    Ok(BitcoinReleaseProof {
+        headers,
+        start_height: as_u32(field(body, "start_height")?, "start_height")?,
+        release_height: as_u32(field(body, "release_height")?, "release_height")?,
+        branch,
+        raw_tx: hex_bounded(field(body, "raw_tx")?, "raw_tx", MAX_RELEASE_TX_BYTES)?,
+    })
 }
 
 pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
@@ -1657,6 +1714,19 @@ fn gateway_err_json(e: &GatewayError) -> Json {
                 ("add", u128s(*add)),
             ],
         ),
+        GatewayError::EscrowExceeded {
+            minted,
+            escrowed,
+            add,
+        } => tagged(
+            "gateway",
+            "escrow_exceeded",
+            vec![
+                ("minted", u128s(*minted)),
+                ("escrowed", u128s(*escrowed)),
+                ("add", u128s(*add)),
+            ],
+        ),
         GatewayError::ReplayedReference => tagged("gateway", "replayed_reference", vec![]),
         GatewayError::UnknownOperator(id) => tagged(
             "gateway",
@@ -1770,6 +1840,11 @@ fn gateway_err_from(j: &Json) -> Result<GatewayError, WireError> {
         "asset_cap_exceeded" => Ok(GatewayError::AssetCapExceeded {
             minted: as_u128(field(j, "minted")?, "minted")?,
             cap: as_u128(field(j, "cap")?, "cap")?,
+            add: as_u128(field(j, "add")?, "add")?,
+        }),
+        "escrow_exceeded" => Ok(GatewayError::EscrowExceeded {
+            minted: as_u128(field(j, "minted")?, "minted")?,
+            escrowed: as_u128(field(j, "escrowed")?, "escrowed")?,
             add: as_u128(field(j, "add")?, "add")?,
         }),
         "epoch_cap_exceeded" => Ok(GatewayError::EpochCapExceeded {

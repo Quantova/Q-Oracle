@@ -463,6 +463,27 @@ fn handle_connection(
         }
     };
 
+    if method == "submit_release" {
+        let Some(queue) = crate::boot::release_queue_if_running() else {
+            return write_error(
+                &mut stream,
+                404,
+                "not_found",
+                "this oracle is not serving exits, so there is no payout to prove",
+            );
+        };
+        let proof = match crate::wire::decode_release_proof(&parsed) {
+            Ok(proof) => proof,
+            Err(err) => {
+                let (code, error, message) = err.http();
+                return write_error(&mut stream, code, error, &message);
+            }
+        };
+        crate::boot::submit_release(queue, proof);
+        let body = object(vec![("accepted", Json::Bool(true))]).render();
+        return write_response(&mut stream, 202, &body);
+    }
+
     let request = match decode_request(method, &parsed) {
         Ok(request) => request,
         Err(err) => {
@@ -666,6 +687,7 @@ fn write_response(stream: &mut TcpStream, code: u16, body: &str) -> IoResult<()>
 fn reason(code: u16) -> &'static str {
     match code {
         200 => "OK",
+        202 => "Accepted",
         204 => "No Content",
         400 => "Bad Request",
         404 => "Not Found",

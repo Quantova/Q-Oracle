@@ -60,6 +60,10 @@ pub struct Gateway {
     used_refs: BTreeSet<(u32, [u8; 32])>,
     refs_any_chain: BTreeSet<[u8; 32]>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
+    // Foreign escrow per asset. Minting more than is held on the far side is the one
+    // conservation break a bridge must never commit, and until this nothing checked it
+    // before the mint.
+    escrowed: BTreeMap<[u8; 16], u128>,
     per_asset_cap: BTreeMap<[u8; 16], u128>,
     per_asset_epoch_cap: BTreeMap<[u8; 16], u128>,
     per_asset_epoch_minted: BTreeMap<[u8; 16], u128>,
@@ -95,6 +99,7 @@ impl Gateway {
             used_refs: BTreeSet::new(),
             refs_any_chain: BTreeSet::new(),
             per_asset_minted: BTreeMap::new(),
+            escrowed: BTreeMap::new(),
             per_asset_cap: BTreeMap::new(),
             per_asset_epoch_cap: BTreeMap::new(),
             per_asset_epoch_minted: BTreeMap::new(),
@@ -230,7 +235,41 @@ impl Gateway {
         self.per_asset_epoch_cap.insert(asset_id, cap);
     }
 
+    /// Declare the escrow held on the far side for one asset. Absent, that asset has no
+    /// escrow bound and only the caps apply.
+    pub fn set_escrow(&mut self, asset_id: [u8; 16], escrowed: u128) {
+        self.escrowed.insert(asset_id, escrowed);
+    }
+
+    pub fn escrow_of(&self, asset_id: &[u8; 16]) -> Option<u128> {
+        self.escrowed.get(asset_id).copied()
+    }
+
+    /// Minted must never exceed escrowed. Checked before the mint, not audited after it.
+    fn charge_asset_escrow(&self, asset_id: &[u8; 16], amount: u128) -> Result<(), GatewayError> {
+        let Some(&escrowed) = self.escrowed.get(asset_id) else {
+            return Ok(());
+        };
+        let minted = *self.per_asset_minted.get(asset_id).unwrap_or(&0);
+        let after = minted
+            .checked_add(amount)
+            .ok_or(GatewayError::EscrowExceeded {
+                minted,
+                escrowed,
+                add: amount,
+            })?;
+        if after > escrowed {
+            return Err(GatewayError::EscrowExceeded {
+                minted,
+                escrowed,
+                add: amount,
+            });
+        }
+        Ok(())
+    }
+
     fn charge_asset_epoch(&self, asset_id: &[u8; 16], amount: u128) -> Result<(), GatewayError> {
+        self.charge_asset_escrow(asset_id, amount)?;
         if let Some(&cap) = self.per_asset_epoch_cap.get(asset_id) {
             let minted = *self.per_asset_epoch_minted.get(asset_id).unwrap_or(&0);
             let after = minted
