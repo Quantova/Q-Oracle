@@ -77,6 +77,9 @@ dependencies = [
 [[package]]
 name = "q-assets"
 version = "0.1.0"
+dependencies = [
+ "qlc-registry",
+]
 
 [[package]]
 name = "q-attestor"

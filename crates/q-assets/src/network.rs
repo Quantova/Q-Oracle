@@ -202,3 +202,29 @@ mod tests {
         assert_eq!(Network::RobinhoodChain.id(), 33);
     }
 }
+
+#[cfg(test)]
+mod shared_ids {
+    use super::Network;
+
+    #[test]
+    fn every_oracle_network_is_the_same_network_in_the_light_client_registry() {
+        for network in Network::ALL {
+            let id = network as u32;
+            let registered = qlc_registry::NetworkId::try_from(id)
+                .unwrap_or_else(|_| panic!("{} id {id} is not in the registry", network.name()));
+            let corridor = qlc_registry::corridor::corridor(registered);
+            let same = corridor.name == network.name()
+                || matches!(
+                    (network.name(), corridor.name),
+                    ("Cosmos", "Cosmos Hub") | ("Tron", "TRON") | ("Ripple", "XRP Ledger")
+                );
+            assert!(
+                same,
+                "id {id} is {} here and {} in the registry",
+                network.name(),
+                corridor.name
+            );
+        }
+    }
+}
