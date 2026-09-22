@@ -291,25 +291,25 @@ impl ExitService {
         decisions
     }
 
+    pub fn step(&mut self, now: u64) {
+        let _ = self.poll_burns(now);
+        let _ = self.sweep_settle(now);
+        let _ = self.sweep_slash(now);
+        if let Some(state) = self.gateway.as_ref() {
+            let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+            let breaches = q_watchtower::Watchtower::enforce(&mut guard.gateway, &self.reserves);
+            for breach in &breaches {
+                eprintln!("q-oracle: reserve shortfall, gateway paused: {breach:?}");
+            }
+        }
+    }
+
     pub fn spawn(mut self) -> ExitHandle {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
         let thread = thread::spawn(move || {
             while !flag.load(Ordering::SeqCst) {
-                let now = unix_millis();
-                let _ = self.poll_burns(now);
-                let _ = self.sweep_settle(now);
-                let _ = self.sweep_slash(now);
-                if let Some(state) = self.gateway.as_ref() {
-                    let head = self.feed.scanned_through();
-                    let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
-                    guard.gateway.advance_to(head);
-                    let breaches =
-                        q_watchtower::Watchtower::enforce(&mut guard.gateway, &self.reserves);
-                    for breach in &breaches {
-                        eprintln!("q-oracle: reserve shortfall, gateway paused: {breach:?}");
-                    }
-                }
+                self.step(unix_millis());
                 let mut waited = Duration::ZERO;
                 while waited < EXIT_POLL_INTERVAL && !flag.load(Ordering::SeqCst) {
                     thread::sleep(EXIT_POLL_SLICE);
@@ -521,7 +521,7 @@ pub fn boot_from_config(
 
 fn decode_hex(input: &str) -> Option<Vec<u8>> {
     let text = input.trim();
-    if text.len() % 2 != 0 || !text.is_ascii() {
+    if text.len() % 2 != 0 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     (0..text.len())
@@ -537,6 +537,7 @@ mod boot_config_tests {
     #[test]
     fn hex_with_a_multibyte_character_is_refused_without_a_panic() {
         assert_eq!(decode_hex("aé"), None);
+        assert_eq!(decode_hex("+a+b"), None);
         assert_eq!(decode_hex("0aff"), Some(vec![0x0a, 0xff]));
     }
 
@@ -1436,6 +1437,25 @@ mod tests {
             )
             .is_err(),
             "a reserve for an asset no pool registers is a typo, not a bound"
+        );
+    }
+
+    #[test]
+    fn the_exit_loop_leaves_the_gateway_height_to_the_bounded_clock() {
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let mut cfg = full_exit_config(temp_ledger("exitheight"));
+        cfg.rpc_port = port;
+        let mut service = ExitService::build(&cfg).unwrap();
+        assert!(service.scanned_through() > 0);
+        let state = shared(boot_configured());
+        service.gateway = Some(state.clone());
+        service.step(unix_millis());
+        assert_eq!(
+            state.read().unwrap().gateway.current_height(),
+            0,
+            "the burn scan height is unbounded by the clock rate, so it never moves the gateway"
         );
     }
 

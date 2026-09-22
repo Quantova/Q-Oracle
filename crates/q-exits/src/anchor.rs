@@ -47,6 +47,9 @@ impl QuantovaAnchor {
             if member.attest_pk.len() != ATTEST_PK_BYTES {
                 return Err(ExitError::BadPublicKeyLen);
             }
+            if keys.iter().any(|k| k.id == member.id) {
+                return Err(ExitError::DuplicateMember(member.id));
+            }
             let mut attest_pk = [0u8; ATTEST_PK_BYTES];
             attest_pk.copy_from_slice(&member.attest_pk);
             keys.push(MemberKey {
@@ -157,6 +160,14 @@ mod tests {
         assert_eq!(
             QuantovaAnchor::from_config(1, 2, 0, 100, [0u8; 32], committee).err(),
             Some(ExitError::TauBelowQuorum { tau: 2, need: 3 })
+        );
+    }
+
+    #[test]
+    fn a_member_id_listed_twice_is_refused() {
+        assert_eq!(
+            QuantovaAnchor::from_config(1, 2, 0, 100, [0u8; 32], vec![member(), member()]).err(),
+            Some(ExitError::DuplicateMember(1))
         );
     }
 

@@ -138,7 +138,7 @@ pub enum Durability {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ingested {
     pub source_chain: u32,
-    pub response: Response,
+    pub response: Option<Response>,
     pub durability: Durability,
 }
 
@@ -199,6 +199,10 @@ pub fn ingest_once(
                 (response, durability)
             }));
             if let Ok((response, durability)) = routed {
+                let response = match durability {
+                    Durability::PersistFailed => None,
+                    _ => Some(response),
+                };
                 ingested.push(Ingested {
                     source_chain,
                     response,
@@ -415,7 +419,7 @@ mod tests {
         assert_eq!(ingested.len(), 1);
         assert_eq!(ingested[0].source_chain, Network::Bitcoin.id());
         match &ingested[0].response {
-            Response::DepositAdmitted(DepositOutcome::AdmittedPendingChainMint(mint)) => {
+            Some(Response::DepositAdmitted(DepositOutcome::AdmittedPendingChainMint(mint))) => {
                 assert_eq!(mint.amount, 250_000);
                 assert_eq!(mint.recipient, recipient);
                 assert_eq!(mint.confirmations, 6);
@@ -561,6 +565,10 @@ mod tests {
             ingested[0].durability,
             Durability::PersistFailed,
             "a durability failure on the ingestion seam is surfaced, not silently dropped"
+        );
+        assert!(
+            ingested[0].response.is_none(),
+            "a rolled back admission never hands out a mint that could be relayed"
         );
         {
             let guard = state.read().unwrap();

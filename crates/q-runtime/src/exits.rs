@@ -275,6 +275,9 @@ fn parse_reserves<E: EnvSource>(env: &E) -> Result<Vec<([u8; 16], u128)>, ExitCo
             .trim()
             .parse()
             .map_err(|_| ExitConfigError::Malformed("reserve amount"))?;
+        if out.iter().any(|(held, _)| *held == asset) {
+            return Err(ExitConfigError::Malformed("reserve asset listed twice"));
+        }
         out.push((asset, amount));
     }
     Ok(out)
@@ -305,6 +308,9 @@ fn parse_vaults<E: EnvSource>(env: &E) -> Result<Vec<VaultSeed>, ExitConfigError
             .trim()
             .parse()
             .map_err(|_| ExitConfigError::Malformed("vault collateral"))?;
+        if vaults.iter().any(|v: &VaultSeed| v.vault_id == vault_id) {
+            return Err(ExitConfigError::Malformed("vault listed twice"));
+        }
         vaults.push(VaultSeed {
             vault_id,
             collateral,
@@ -479,6 +485,26 @@ mod tests {
         map.insert(CHAIN_RPC_PORT_ENV.into(), "8080".into());
         map.insert(LEDGER_ENV.into(), "/var/lib/q-oracle/exits.led".into());
         MapEnv(map)
+    }
+
+    #[test]
+    fn a_vault_or_reserve_listed_twice_is_refused() {
+        let mut env = full_env();
+        env.0
+            .insert(VAULTS_ENV.into(), "1:2000000,1:3000000".into());
+        assert_eq!(
+            parse_exit_config(&env),
+            Err(ExitConfigError::Malformed("vault listed twice"))
+        );
+        let mut env = full_env();
+        env.0.insert(
+            RESERVES_ENV.into(),
+            format!("{}:10,{}:20", "a1".repeat(16), "a1".repeat(16)),
+        );
+        assert_eq!(
+            parse_exit_config(&env),
+            Err(ExitConfigError::Malformed("reserve asset listed twice"))
+        );
     }
 
     #[test]
