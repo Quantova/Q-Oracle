@@ -22,6 +22,7 @@ const CLOCK_SLICE: Duration = Duration::from_millis(100);
 // expire every fact in one answer. An honest chain far ahead is caught up over time.
 const MAX_BLOCKS_PER_SEC: u64 = 4;
 const CLOCK_SLACK_SECS: u64 = 60;
+const MIN_EPOCH_GAP: Duration = Duration::from_secs(6 * 60 * 60);
 
 pub trait ChainHead {
     fn head_and_epoch(&self) -> Result<(u64, Option<u64>), String>;
@@ -62,31 +63,57 @@ pub fn bounded_head(last: Option<(u64, Duration)>, reported: u64) -> u64 {
 
 pub struct ChainClock<H: ChainHead> {
     head: H,
-    last: Option<(u64, Instant)>,
+    origin: Option<(u64, Instant)>,
+    epoch_moved: Option<Instant>,
+    fresh: bool,
 }
 
 impl<H: ChainHead> ChainClock<H> {
     pub fn new(head: H) -> ChainClock<H> {
-        ChainClock { head, last: None }
+        ChainClock {
+            head,
+            origin: None,
+            epoch_moved: None,
+            fresh: false,
+        }
     }
 
-    /// One poll. Moves the gateway forward, never back, and follows the chain's epoch.
     pub fn tick(&mut self, state: &SharedState) -> Result<u64, String> {
         let (reported, epoch) = self.head.head_and_epoch()?;
         let now = Instant::now();
+        let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+        let (origin_height, origin_at) = match self.origin {
+            Some(origin) => origin,
+            None => {
+                let restored = guard.gateway.current_height();
+                self.fresh = restored == 0;
+                if self.fresh {
+                    guard.gateway.advance_to(reported);
+                }
+                let origin = (guard.gateway.current_height(), now);
+                self.origin = Some(origin);
+                origin
+            }
+        };
         let head = bounded_head(
-            self.last
-                .map(|(height, at)| (height, now.duration_since(at))),
+            Some((origin_height, now.duration_since(origin_at))),
             reported,
         );
-        let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
         guard.gateway.advance_to(head);
         if let Some(epoch) = epoch {
-            guard.gateway.advance_epoch_to(epoch);
+            let current = guard.gateway.current_epoch();
+            let spaced = self
+                .epoch_moved
+                .map_or(true, |at| now.duration_since(at) >= MIN_EPOCH_GAP);
+            if (self.fresh && self.epoch_moved.is_none() && epoch > current)
+                || (epoch == current.saturating_add(1) && spaced)
+            {
+                guard.gateway.advance_epoch_to(epoch);
+                self.epoch_moved = Some(now);
+            }
         }
         let accepted = guard.gateway.current_height();
         drop(guard);
-        self.last = Some((accepted, now));
         Ok(accepted)
     }
 }
@@ -197,6 +224,36 @@ mod tests {
             state.read().unwrap().gateway.current_epoch(),
             3,
             "an older epoch from a lagging node changes nothing"
+        );
+    }
+
+    #[test]
+    fn a_restarted_clock_bounds_its_first_answer_from_the_restored_height() {
+        let state = shared(boot_configured());
+        state.write().unwrap().gateway.advance_to(5_000);
+        let mut clock = ChainClock::new(Scripted(RefCell::new(vec![(u64::MAX, None)])));
+        let moved = clock.tick(&state).unwrap();
+        assert!(moved <= 5_000 + (CLOCK_SLACK_SECS + 1) * MAX_BLOCKS_PER_SEC);
+    }
+
+    #[test]
+    fn a_restarted_clock_takes_one_epoch_step_at_a_time() {
+        let state = shared(boot_configured());
+        state.write().unwrap().gateway.advance_to(5_000);
+        let mut clock = ChainClock::new(Scripted(RefCell::new(vec![
+            (5_001, Some(4)),
+            (5_002, Some(1)),
+            (5_003, Some(2)),
+        ])));
+        clock.tick(&state).unwrap();
+        assert_eq!(state.read().unwrap().gateway.current_epoch(), 0);
+        clock.tick(&state).unwrap();
+        assert_eq!(state.read().unwrap().gateway.current_epoch(), 1);
+        clock.tick(&state).unwrap();
+        assert_eq!(
+            state.read().unwrap().gateway.current_epoch(),
+            1,
+            "a second step inside the gap is refused"
         );
     }
 

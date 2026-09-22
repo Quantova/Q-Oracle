@@ -67,7 +67,6 @@ pub const MONERO: u32 = 34;
 pub const LITECOIN: u32 = 35;
 pub const DOGECOIN: u32 = 36;
 pub const ZCASH: u32 = 37;
-pub const CCTP_USDC: u32 = 38;
 
 pub const ORIGIN_MARKER: u8 = 0x0F;
 pub const PROVISIONAL_CAP_BASE_UNITS: u128 = 1_000_000_000_000;
@@ -135,7 +134,6 @@ pub fn corridors() -> Vec<Corridor> {
         corridor(LITECOIN, "Litecoin", 12),
         corridor(DOGECOIN, "Dogecoin", 30),
         corridor(ZCASH, "Zcash", 24),
-        corridor(CCTP_USDC, "Circle CCTP USDC", 20),
     ]
 }
 
@@ -150,7 +148,7 @@ mod tests {
 
     #[test]
     fn the_set_covers_nineteen_corridors() {
-        assert_eq!(corridors().len(), 19);
+        assert_eq!(corridors().len(), 18);
     }
 
     #[test]
@@ -192,9 +190,12 @@ mod tests {
     fn named_corridors_resolve_to_their_chain_ids() {
         assert_eq!(find(SOLANA).unwrap().name, "Solana");
         assert_eq!(find(TRON).unwrap().name, "TRON");
-        assert_eq!(find(CCTP_USDC).unwrap().name, "Circle CCTP USDC");
         assert_eq!(find(MONERO).unwrap().name, "Monero");
         assert!(find(9999).is_none());
+        assert!(
+            find(38).is_none(),
+            "no origin network backs a CCTP corridor"
+        );
     }
 
     #[test]

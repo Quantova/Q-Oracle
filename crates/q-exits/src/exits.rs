@@ -522,6 +522,7 @@ mod tests {
             vec![crate::anchor::MemberConfig {
                 id: 1,
                 weight: 100,
+                stake: 100,
                 root_digest: [0x11; 32],
                 root_slots: 64,
                 attest_pk: vec![0u8; crate::anchor::ATTEST_PK_BYTES],
@@ -827,6 +828,7 @@ mod settle_commit_order_tests {
             vec![crate::anchor::MemberConfig {
                 id: 1,
                 weight: 100,
+                stake: 100,
                 root_digest: [0x11; 32],
                 root_slots: 64,
                 attest_pk: vec![0u8; crate::anchor::ATTEST_PK_BYTES],

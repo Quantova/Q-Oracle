@@ -273,12 +273,12 @@ fn source_reorg_auto_pauses_the_route() {
     let ops: Vec<TestOp> = (0..4).map(mk_op).collect();
     let mut gw = build_gateway(&ops, 3, 1_000_000);
 
-    let reorg_msg = q_gateway::gateway::reorg_message(SOURCE_BTC, 3, DEST_ID, &[0u8; 32]);
+    let reorg_msg = q_gateway::gateway::reorg_message(SOURCE_BTC, 3, 0, DEST_ID, &[0u8; 32]);
     let sigs: Vec<SignerSig> = ops[0..3]
         .iter()
         .map(|op| sign_over(op, &reorg_msg, REORG_DOMAIN))
         .collect();
-    gw.report_reorg(SOURCE_BTC, 3, &sigs)
+    gw.report_reorg(SOURCE_BTC, 3, 0, &sigs)
         .expect("reorg pauses source");
     assert!(gw.is_source_paused(SOURCE_BTC));
 
@@ -291,12 +291,38 @@ fn source_reorg_auto_pauses_the_route() {
 
 fn pause_at(gw: &mut Gateway, ops: &[TestOp], height: u64) {
     gw.advance_to(height);
-    let reorg_msg = q_gateway::gateway::reorg_message(SOURCE_BTC, 3, DEST_ID, &[0u8; 32]);
-    let sigs: Vec<SignerSig> = ops[0..3]
+    let sigs = reorg_sigs(ops, height);
+    gw.report_reorg(SOURCE_BTC, 3, height, &sigs)
+        .expect("paused");
+}
+
+fn reorg_sigs(ops: &[TestOp], at: u64) -> Vec<SignerSig> {
+    let reorg_msg = q_gateway::gateway::reorg_message(SOURCE_BTC, 3, at, DEST_ID, &[0u8; 32]);
+    ops[0..3]
         .iter()
         .map(|op| sign_over(op, &reorg_msg, REORG_DOMAIN))
-        .collect();
-    gw.report_reorg(SOURCE_BTC, 3, &sigs).expect("paused");
+        .collect()
+}
+
+#[test]
+fn a_reorg_report_cannot_be_replayed_after_the_resume_it_preceded() {
+    let ops: Vec<TestOp> = (0..4).map(mk_op).collect();
+    let mut gw = build_gateway(&ops, 3, 1_000_000);
+    pause_at(&mut gw, &ops, 100);
+    let replayed = reorg_sigs(&ops, 100);
+    gw.advance_to(101);
+    gw.resume_source(SOURCE_BTC, 101, &resume_sigs(&ops, 101))
+        .expect("a quorum resumes");
+    assert!(matches!(
+        gw.report_reorg(SOURCE_BTC, 3, 100, &replayed),
+        Err(GatewayError::ResumeOutOfWindow { .. })
+    ));
+    assert!(!gw.is_source_paused(SOURCE_BTC));
+    gw.advance_to(102 + q_gateway::gateway::RESUME_WINDOW + 1);
+    assert!(matches!(
+        gw.report_reorg(SOURCE_BTC, 3, 102, &reorg_sigs(&ops, 102)),
+        Err(GatewayError::ResumeOutOfWindow { .. })
+    ));
 }
 
 fn resume_sigs(ops: &[TestOp], at: u64) -> Vec<SignerSig> {
@@ -354,13 +380,13 @@ fn a_reorg_report_signed_under_another_era_pauses_nothing() {
     let ops: Vec<TestOp> = (0..4).map(mk_op).collect();
     let mut gw = build_gateway(&ops, 3, 1_000_000);
     gw.set_era([7u8; 32]);
-    let old_era = q_gateway::gateway::reorg_message(SOURCE_BTC, 3, DEST_ID, &[0u8; 32]);
+    let old_era = q_gateway::gateway::reorg_message(SOURCE_BTC, 3, 0, DEST_ID, &[0u8; 32]);
     let sigs: Vec<SignerSig> = ops[0..3]
         .iter()
         .map(|op| sign_over(op, &old_era, REORG_DOMAIN))
         .collect();
     assert!(matches!(
-        gw.report_reorg(SOURCE_BTC, 3, &sigs),
+        gw.report_reorg(SOURCE_BTC, 3, 0, &sigs),
         Err(GatewayError::BelowThreshold { .. })
     ));
     assert!(!gw.is_source_paused(SOURCE_BTC));

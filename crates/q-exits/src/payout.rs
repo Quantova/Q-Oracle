@@ -189,12 +189,17 @@ impl BitcoinReleaseProof {
         if !coinbase.is_coinbase() || self.coinbase_branch.iter().any(|step| step.sibling_on_left) {
             return Err(PayoutProofError::MalformedTransaction);
         }
+        let outputs =
+            parse_bitcoin_outputs(&self.raw_tx).ok_or(PayoutProofError::MalformedTransaction)?;
+        let (beneficiary, value, burn_ref) =
+            scan_release_outputs(&outputs).ok_or(PayoutProofError::UnboundPayout)?;
+        let depth = qlc_bitcoin::confirmations_for(value as u128, confirmation_depth);
         chain
             .verify_deposit(
                 self.release_height,
                 coinbase.txid(),
                 &self.coinbase_branch,
-                confirmation_depth,
+                depth,
             )
             .map_err(PayoutProofError::Spv)?;
         if self.branch.len() != self.coinbase_branch.len() {
@@ -202,12 +207,8 @@ impl BitcoinReleaseProof {
         }
         let txid = double_sha256(&self.raw_tx);
         let confirmed = chain
-            .verify_deposit(self.release_height, txid, &self.branch, confirmation_depth)
+            .verify_deposit(self.release_height, txid, &self.branch, depth)
             .map_err(PayoutProofError::Spv)?;
-        let outputs =
-            parse_bitcoin_outputs(&self.raw_tx).ok_or(PayoutProofError::MalformedTransaction)?;
-        let (beneficiary, value, burn_ref) =
-            scan_release_outputs(&outputs).ok_or(PayoutProofError::UnboundPayout)?;
         Ok(VerifiedPayout {
             asset_id: None,
             amount: value as u128,

@@ -63,7 +63,7 @@ fn a_no_signature_freeze_or_reorg_is_refused() {
     );
     assert!(!gw.is_frozen());
     assert_eq!(
-        gw.report_reorg(1, 2, &[]),
+        gw.report_reorg(1, 2, 0, &[]),
         Err(GatewayError::BelowThreshold { got: 0, need: 3 })
     );
     assert!(!gw.is_source_paused(1));

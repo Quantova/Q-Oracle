@@ -199,7 +199,7 @@ fn parse_committee<E: EnvSource>(env: &E) -> Result<Vec<MemberConfig>, ExitConfi
     let mut members = Vec::new();
     for entry in raw.split(';').filter(|e| !e.trim().is_empty()) {
         let fields: Vec<&str> = entry.split(',').collect();
-        if fields.len() != 5 {
+        if fields.len() != 5 && fields.len() != 6 {
             return Err(ExitConfigError::Malformed("committee member"));
         }
         let id = fields[0]
@@ -225,9 +225,17 @@ fn parse_committee<E: EnvSource>(env: &E) -> Result<Vec<MemberConfig>, ExitConfi
         if attest_pk.len() != ATTEST_PK_BYTES {
             return Err(ExitConfigError::Malformed("member attest key length"));
         }
+        let stake = match fields.get(5) {
+            Some(raw) => raw
+                .trim()
+                .parse()
+                .map_err(|_| ExitConfigError::Malformed("member stake"))?,
+            None => weight,
+        };
         members.push(MemberConfig {
             id,
             weight,
+            stake,
             root_digest,
             root_slots,
             attest_pk,

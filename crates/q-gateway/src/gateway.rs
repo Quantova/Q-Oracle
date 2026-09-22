@@ -22,6 +22,7 @@ pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const MAX_PENDING_EXITS: usize = 65_536;
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
+pub const WATCHDOG_COOLDOWN: u64 = 8 * WATCHDOG_MAX_WINDOW;
 const GUARD_SNAPSHOT_VERSION: u8 = 6;
 
 pub fn supermajority_floor(size: usize) -> usize {
@@ -80,6 +81,8 @@ pub struct Gateway {
     // The height each pause took effect. Not persisted: after a restart it is the restored
     // height, so a resume signed before the restart does not lift the pause.
     paused_since: BTreeMap<u32, u64>,
+    resumed_at: BTreeMap<u32, u64>,
+    watchdog_last: BTreeMap<u32, u64>,
     global_pause: bool,
     current_height: u64,
     frozen_until: u64,
@@ -117,6 +120,8 @@ impl Gateway {
             corridor_cursor: BTreeMap::new(),
             paused_sources: BTreeSet::new(),
             paused_since: BTreeMap::new(),
+            resumed_at: BTreeMap::new(),
+            watchdog_last: BTreeMap::new(),
             global_pause: false,
             current_height: 0,
             frozen_until: 0,
@@ -398,13 +403,35 @@ impl Gateway {
         self.used_refs.contains(&(source_chain, *source_ref))
     }
 
+    fn reorg_fresh(&self, source_chain: u32, at_height: u64) -> Result<(), GatewayError> {
+        let resumed = self.resumed_at.get(&source_chain).copied();
+        if at_height > self.current_height.saturating_add(RESUME_SKEW)
+            || self.current_height > at_height.saturating_add(RESUME_WINDOW)
+            || resumed.is_some_and(|resumed| at_height <= resumed)
+        {
+            return Err(GatewayError::ResumeOutOfWindow {
+                at: at_height,
+                now: self.current_height,
+            });
+        }
+        Ok(())
+    }
+
     pub fn report_reorg(
         &mut self,
         source_chain: u32,
         fork_depth: u32,
+        at_height: u64,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
-        let message = reorg_message(source_chain, fork_depth, self.dest_chain_id, &self.era);
+        self.reorg_fresh(source_chain, at_height)?;
+        let message = reorg_message(
+            source_chain,
+            fork_depth,
+            at_height,
+            self.dest_chain_id,
+            &self.era,
+        );
         let distinct = verify_quorum(&message, REORG_DOMAIN, sigs, &self.operators);
         let need = self
             .operators
@@ -417,7 +444,9 @@ impl Gateway {
             });
         }
         self.paused_sources.insert(source_chain);
-        self.paused_since.insert(source_chain, self.current_height);
+        self.paused_since
+            .entry(source_chain)
+            .or_insert(self.current_height);
         self.touch_guard();
         Ok(())
     }
@@ -449,9 +478,17 @@ impl Gateway {
         &self,
         source_chain: u32,
         fork_depth: u32,
+        at_height: u64,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
-        let message = reorg_message(source_chain, fork_depth, self.dest_chain_id, &self.era);
+        self.reorg_fresh(source_chain, at_height)?;
+        let message = reorg_message(
+            source_chain,
+            fork_depth,
+            at_height,
+            self.dest_chain_id,
+            &self.era,
+        );
         self.quorum_met(&message, REORG_DOMAIN, sigs)
     }
 
@@ -533,6 +570,7 @@ impl Gateway {
         }
         self.paused_sources.remove(&source_chain);
         self.paused_since.remove(&source_chain);
+        self.resumed_at.insert(source_chain, at_height);
         self.touch_guard();
         Ok(())
     }
@@ -621,9 +659,17 @@ impl Gateway {
             std::slice::from_ref(sig),
             &self.operators,
         );
-        if distinct.is_empty() {
+        let Some(&operator) = distinct.iter().next() else {
             return Err(GatewayError::BelowThreshold { got: 0, need: 1 });
+        };
+        let cooling = self
+            .watchdog_last
+            .get(&operator)
+            .is_some_and(|&last| self.current_height < last.saturating_add(WATCHDOG_COOLDOWN));
+        if cooling || self.current_height < self.deposit_frozen_until {
+            return Err(GatewayError::WatchdogCooldown);
         }
+        self.watchdog_last.insert(operator, self.current_height);
         if until_height > self.deposit_frozen_until {
             self.deposit_frozen_until = until_height;
             self.touch_guard();
@@ -820,10 +866,7 @@ impl Gateway {
         Ok(())
     }
 
-    pub fn process_deposit(
-        &mut self,
-        env: &AttestationEnvelope,
-    ) -> Result<MintReceipt, GatewayError> {
+    pub fn precheck_deposit(&self, env: &AttestationEnvelope) -> Result<(), GatewayError> {
         if self.global_pause {
             return Err(GatewayError::GlobalPause);
         }
@@ -896,6 +939,15 @@ impl Gateway {
                 need: required,
             });
         }
+        Ok(())
+    }
+
+    pub fn process_deposit(
+        &mut self,
+        env: &AttestationEnvelope,
+    ) -> Result<MintReceipt, GatewayError> {
+        self.precheck_deposit(env)?;
+        let fact = &env.fact;
 
         let cap = *self
             .per_asset_cap
@@ -1208,12 +1260,14 @@ pub fn attestation_message(fact: &BridgeFact, dest_chain_id: u64) -> Vec<u8> {
 pub fn reorg_message(
     source_chain: u32,
     fork_depth: u32,
+    at_height: u64,
     dest_chain_id: u64,
     era: &[u8; 32],
 ) -> Vec<u8> {
     let mut w = Writer::new();
     w.u32(source_chain);
     w.u32(fork_depth);
+    w.u64(at_height);
     w.u64(dest_chain_id);
     w.fixed(era);
     w.finish()
@@ -2217,7 +2271,7 @@ mod tests {
         );
         assert_eq!(gw.frozen_until(), 0, "the freeze did not take effect");
         assert_eq!(
-            gw.report_reorg(1, 3, &[]),
+            gw.report_reorg(1, 3, 0, &[]),
             Err(GatewayError::BelowThreshold { got: 0, need: 2 }),
             "a zero threshold must not fail open into a no-signature pause"
         );

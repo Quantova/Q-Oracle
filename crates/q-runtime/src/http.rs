@@ -552,6 +552,12 @@ fn handle_connection(
                 let body = object(vec![("accepted", Json::Bool(true))]).render();
                 write_response(&mut stream, 200, &body)
             }
+            Err(crate::boot::ReleaseRefusal::Unmatched) => write_error(
+                &mut stream,
+                409,
+                "unmatched",
+                "the proof pays no pending exit",
+            ),
             Err(crate::boot::ReleaseRefusal::Unproven) => write_error(
                 &mut stream,
                 400,

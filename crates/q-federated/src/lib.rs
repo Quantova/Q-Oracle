@@ -12,8 +12,8 @@ pub mod watch;
 pub use admission::{admit, install, FederatedError};
 pub use corridors::{
     corridors, find, origin_tag, Corridor, Tier, TrustGrade, ALGORAND, APTOS, AVALANCHE, BNB_CHAIN,
-    CARDANO, CCTP_USDC, DOGECOIN, HEDERA, LITECOIN, MONERO, NEAR, POLYGON, SOLANA, STELLAR, SUI,
-    TON, TRON, XRPL, ZCASH,
+    CARDANO, DOGECOIN, HEDERA, LITECOIN, MONERO, NEAR, POLYGON, SOLANA, STELLAR, SUI, TON, TRON,
+    XRPL, ZCASH,
 };
 pub use pools::{
     corridor_for, depth_for, derive_asset_id, grade_for, install_all, install_pool, tier_for,
@@ -33,7 +33,7 @@ mod exports {
 
     #[test]
     fn the_crate_root_surface_is_reachable() {
-        assert_eq!(corridors().len(), 19);
+        assert_eq!(corridors().len(), 18);
         assert_eq!(find(SOLANA).unwrap().tier, Tier::Federated);
         assert!(SourceRegistry::new().endpoint(SOLANA, 0).is_none());
     }

@@ -53,6 +53,7 @@ pub enum GatewayError {
         max: u64,
     },
     WatchdogWithoutClock,
+    WatchdogCooldown,
     NotPaused(u32),
     ResumeOutOfWindow {
         at: u64,

@@ -118,6 +118,7 @@ pub enum CommitError {
     HeaderMismatch,
     NotEnoughVotingPower { signed: u128, total: u128 },
     SetTooLarge,
+    DuplicateSigner,
 }
 
 pub fn tally_signed_power(
@@ -146,8 +147,8 @@ pub fn tally_signed_power(
         if sig.flag != BlockIdFlag::Commit {
             continue;
         }
-        if counted.contains(&sig.validator_address) {
-            continue;
+        if !counted.insert(sig.validator_address) {
+            return Err(CommitError::DuplicateSigner);
         }
         let validator = match by_address.get(&sig.validator_address) {
             Some(v) => *v,
@@ -156,7 +157,6 @@ pub fn tally_signed_power(
         if sig.signature.len() != 64 {
             continue;
         }
-        counted.insert(sig.validator_address);
         let vote = CanonicalVote {
             vote_type: PRECOMMIT_TYPE,
             height: commit.height,
@@ -499,12 +499,8 @@ mod duplicate_signature_tests {
 
         assert_eq!(
             verify_commit(CHAIN_ID, &header, &commit, &set),
-            Err(CommitError::NotEnoughVotingPower {
-                signed: 25,
-                total: 100
-            }),
-            "a validator repeating its precommit was counted more than once, so 25 percent of \
-             the power carried a commit that needs more than 66"
+            Err(CommitError::DuplicateSigner),
+            "a validator repeating its precommit must not be counted more than once"
         );
     }
 
@@ -517,8 +513,8 @@ mod duplicate_signature_tests {
 
         assert_eq!(
             verify_commit(CHAIN_ID, &header, &commit, &set),
-            Ok(75),
-            "the duplicate must not add power to a commit that already verifies"
+            Err(CommitError::DuplicateSigner),
+            "a commit naming one validator twice is malformed"
         );
     }
 

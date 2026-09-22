@@ -51,6 +51,7 @@ pub enum SpvError {
     InsufficientWork,
     UnverifiableRetarget { index: usize },
     CheckpointNotArmed,
+    DepositTooLarge,
     MalformedTransaction,
     TransactionMismatch,
     MerkleBranchTooLong,

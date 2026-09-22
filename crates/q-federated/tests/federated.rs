@@ -183,7 +183,7 @@ fn a_duplicate_signer_does_not_double_count() {
 #[test]
 fn every_named_corridor_is_labeled_federated_tier() {
     let all = corridors();
-    assert_eq!(all.len(), 19);
+    assert_eq!(all.len(), 18);
     for c in &all {
         assert_eq!(c.tier, Tier::Federated);
         assert_eq!(c.tier.label(), "Federated");
@@ -211,7 +211,6 @@ fn every_named_corridor_is_labeled_federated_tier() {
         "Litecoin",
         "Dogecoin",
         "Zcash",
-        "Circle CCTP USDC",
     ] {
         assert!(names.contains(expected), "missing corridor {expected}");
     }

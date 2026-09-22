@@ -38,7 +38,7 @@ pub const MAX_PARTICIPATION: usize = 4096;
 
 pub const MAX_PROOF_NODES: usize = 256;
 
-pub const MAX_VALIDATORS: usize = 4096;
+pub const MAX_VALIDATORS: usize = 1024;
 
 pub const MAX_OPERATOR_SIGS: usize = 1024;
 
@@ -220,6 +220,7 @@ pub fn encode_request(req: &Request) -> Json {
         Request::ReportReorg(r) => object(vec![
             ("source_chain", u32j(r.source_chain)),
             ("fork_depth", u32j(r.fork_depth)),
+            ("at_height", Json::Int(r.at_height)),
             ("signatures", signer_sigs_json(&r.signatures)),
         ]),
         Request::ResumeSource(r) => object(vec![
@@ -369,6 +370,7 @@ pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
         "report_reorg" => Ok(Request::ReportReorg(ReportReorgRequest {
             source_chain: as_u32(field(body, "source_chain")?, "source_chain")?,
             fork_depth: as_u32(field(body, "fork_depth")?, "fork_depth")?,
+            at_height: as_u64(field(body, "at_height")?, "at_height")?,
             signatures: signer_sigs_from(field(body, "signatures")?)?,
         })),
         "resume_source" => Ok(Request::ResumeSource(ResumeSourceRequest {
@@ -471,6 +473,7 @@ fn encode_proof(proof: &DepositProof) -> Json {
                 roots_json(&update.execution.execution_branch),
             ),
             ("receipt_index", Json::Int(deposit.receipt_index)),
+            ("log_index", Json::Int(u64::from(deposit.log_index))),
             (
                 "receipt_proof",
                 Json::Array(deposit.receipt_proof.iter().map(|n| hexs(n)).collect()),
@@ -662,6 +665,8 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
             };
             let deposit = EthDepositProof {
                 receipt_index: as_u64(field(j, "receipt_index")?, "receipt_index")?,
+                log_index: u32::try_from(as_u64(field(j, "log_index")?, "log_index")?)
+                    .map_err(|_| WireError::BadField("log_index"))?,
                 receipt_proof,
                 ancestry,
             };
@@ -1181,6 +1186,7 @@ fn spv_err_json(e: &SpvError) -> Json {
             vec![("index", usizej(*index))],
         ),
         SpvError::CheckpointNotArmed => tagged("spv", "checkpoint_not_armed", vec![]),
+        SpvError::DepositTooLarge => tagged("spv", "deposit_too_large", vec![]),
         SpvError::MalformedTransaction => tagged("spv", "malformed_transaction", vec![]),
         SpvError::TransactionMismatch => tagged("spv", "transaction_mismatch", vec![]),
         SpvError::MerkleBranchTooLong => tagged("spv", "merkle_branch_too_long", vec![]),
@@ -1232,6 +1238,7 @@ fn spv_err_from(j: &Json) -> Result<SpvError, WireError> {
         }),
         "malformed_transaction" => Ok(SpvError::MalformedTransaction),
         "transaction_mismatch" => Ok(SpvError::TransactionMismatch),
+        "deposit_too_large" => Ok(SpvError::DepositTooLarge),
         "merkle_branch_too_long" => Ok(SpvError::MerkleBranchTooLong),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
@@ -1465,6 +1472,7 @@ fn commit_err_json(e: &CommitError) -> Json {
             vec![("signed", u128s(*signed)), ("total", u128s(*total))],
         ),
         CommitError::SetTooLarge => tagged("commit", "set_too_large", vec![]),
+        CommitError::DuplicateSigner => tagged("commit", "duplicate_signer", vec![]),
     }
 }
 
@@ -1476,6 +1484,7 @@ fn commit_err_from(j: &Json) -> Result<CommitError, WireError> {
             total: as_u128(field(j, "total")?, "total")?,
         }),
         "set_too_large" => Ok(CommitError::SetTooLarge),
+        "duplicate_signer" => Ok(CommitError::DuplicateSigner),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }
@@ -1876,6 +1885,7 @@ fn gateway_err_json(e: &GatewayError) -> Json {
         GatewayError::WatchdogWithoutClock => {
             tagged("gateway", "watchdog_without_clock", Vec::new())
         }
+        GatewayError::WatchdogCooldown => tagged("gateway", "watchdog_cooldown", Vec::new()),
         GatewayError::NotPaused(c) => {
             tagged("gateway", "not_paused", vec![("source_chain", u32j(*c))])
         }
@@ -1952,6 +1962,7 @@ fn gateway_err_from(j: &Json) -> Result<GatewayError, WireError> {
             now: as_u64(field(j, "now")?, "now")?,
         }),
         "watchdog_without_clock" => Ok(GatewayError::WatchdogWithoutClock),
+        "watchdog_cooldown" => Ok(GatewayError::WatchdogCooldown),
         "insufficient_finality" => Ok(GatewayError::InsufficientFinality {
             got: as_u32(field(j, "got")?, "got")?,
             need: as_u32(field(j, "need")?, "need")?,
@@ -2053,6 +2064,7 @@ mod tests {
         round_request(Request::ReportReorg(ReportReorgRequest {
             source_chain: 7,
             fork_depth: 12,
+            at_height: 4_200,
             signatures: vec![
                 SignerSig {
                     operator_id: 1,
@@ -2253,6 +2265,7 @@ mod tests {
         let deposit = EthDepositProof {
             ancestry: Vec::new(),
             receipt_index: 3,
+            log_index: 0,
             receipt_proof: vec![vec![0x01, 0x02], vec![0x03, 0x04, 0x05]],
         };
         round_request(Request::SubmitDeposit(DepositRequest {

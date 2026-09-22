@@ -14,6 +14,7 @@ pub const BEACON_SEED_BYTES: usize = 32;
 pub struct MemberConfig {
     pub id: u64,
     pub weight: u64,
+    pub stake: u64,
     pub root_digest: [u8; 32],
     pub root_slots: u64,
     pub attest_pk: Vec<u8>,
@@ -51,6 +52,7 @@ impl QuantovaAnchor {
             keys.push(MemberKey {
                 id: member.id,
                 weight: member.weight,
+                stake: member.stake,
                 root: Root {
                     digest: member.root_digest,
                     slots: member.root_slots,
@@ -99,6 +101,7 @@ mod tests {
         MemberConfig {
             id: 1,
             weight: 100,
+            stake: 100,
             root_digest: [0x11; 32],
             root_slots: 64,
             attest_pk: vec![0u8; ATTEST_PK_BYTES],

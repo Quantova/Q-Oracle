@@ -227,4 +227,19 @@ mod shared_ids {
             );
         }
     }
+
+    #[test]
+    fn every_registry_network_is_an_oracle_network_or_named_as_unserved() {
+        const UNSERVED: [u32; 2] = [38, 44];
+        for registered in qlc_registry::all_network_ids() {
+            let id = registered as u32;
+            assert!(
+                Network::from_id(id).is_some() || UNSERVED.contains(&id),
+                "registry id {id} has no oracle network and is not named as unserved"
+            );
+        }
+        for id in UNSERVED {
+            assert!(Network::from_id(id).is_none());
+        }
+    }
 }

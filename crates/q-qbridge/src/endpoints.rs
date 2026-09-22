@@ -105,6 +105,7 @@ pub struct DepositStatusRequest {
 pub struct ReportReorgRequest {
     pub source_chain: u32,
     pub fork_depth: u32,
+    pub at_height: u64,
     pub signatures: Vec<SignerSig>,
 }
 
@@ -223,7 +224,7 @@ pub fn precheck(state: &BridgeState, request: &Request) -> Result<(), ApiError> 
         Request::ReportReorg(r) => {
             state
                 .gateway
-                .precheck_reorg(r.source_chain, r.fork_depth, &r.signatures)
+                .precheck_reorg(r.source_chain, r.fork_depth, r.at_height, &r.signatures)
         }
         Request::ResumeSource(r) => {
             state
@@ -329,6 +330,7 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
             match state.gateway.report_reorg(
                 request.source_chain,
                 request.fork_depth,
+                request.at_height,
                 &request.signatures,
             ) {
                 Ok(()) => Response::SourcePaused {
@@ -438,7 +440,13 @@ pub fn verify_deposit(
 ) -> Result<DepositPlan, ApiError> {
     let (tier, network, corridor) = resolve_corridor(state, &request.proof)?;
     let kind = match (tier, network, &request.proof) {
-        (Tier::Federated, _, DepositProof::Federated(env)) => PlanKind::Federated(env.clone()),
+        (Tier::Federated, _, DepositProof::Federated(env)) => {
+            state
+                .gateway
+                .precheck_deposit(env)
+                .map_err(ApiError::Gateway)?;
+            PlanKind::Federated(env.clone())
+        }
         (Tier::ProofBacked, Network::Bitcoin, DepositProof::Bitcoin { material, fact }) => {
             let (params, checkpoint, bridge_script) = {
                 let anchor = state
@@ -1279,7 +1287,7 @@ mod tests {
         let source = Network::Ethereum.id();
         state.gateway.register_corridor(source, 6);
 
-        let message = q_gateway::reorg_message(source, 9, DEST_ID, &[0u8; 32]);
+        let message = q_gateway::reorg_message(source, 9, 0, DEST_ID, &[0u8; 32]);
         let sign = |op: &Op| SignerSig {
             operator_id: op.id,
             signature: ml_dsa::sign(&op.sk, &message, q_gateway::REORG_DOMAIN, &[0u8; 32])
@@ -1293,6 +1301,7 @@ mod tests {
             Request::ReportReorg(ReportReorgRequest {
                 source_chain: source,
                 fork_depth: 9,
+                at_height: 0,
                 signatures: ops[0..2].iter().map(sign).collect(),
             }),
         );
@@ -1307,6 +1316,7 @@ mod tests {
             Request::ReportReorg(ReportReorgRequest {
                 source_chain: source,
                 fork_depth: 9,
+                at_height: 0,
                 signatures: ops[0..3].iter().map(sign).collect(),
             }),
         );
@@ -1725,6 +1735,7 @@ mod tests {
         let deposit = EthDepositProof {
             ancestry: Vec::new(),
             receipt_index: 3,
+            log_index: 0,
             receipt_proof,
         };
         (store, update, deposit)

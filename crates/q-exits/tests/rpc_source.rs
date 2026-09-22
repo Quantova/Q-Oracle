@@ -51,6 +51,7 @@ fn member_configs(members: &[Attester]) -> Vec<MemberConfig> {
         .map(|a| MemberConfig {
             id: a.id(),
             weight: a.weight(),
+            stake: a.weight(),
             root_digest: a.root().digest,
             root_slots: a.root().slots,
             attest_pk: a.attest_public_key().to_vec(),

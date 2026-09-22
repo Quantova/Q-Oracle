@@ -17,7 +17,7 @@ use q_exits::{
 use q_federated::SourceEndpoint;
 use q_gateway::{Gateway, OperatorSet};
 use q_qbridge::BridgeState;
-use qlc_bitcoin::{double_sha256, Checkpoint, NetworkParams, U256};
+use qlc_bitcoin::{Checkpoint, NetworkParams, U256};
 
 use crate::exits::{load_exit_config, ExitConfigError, ExitTrustConfig};
 use crate::http::{serve, SharedState};
@@ -72,10 +72,15 @@ pub struct SettleInputs {
     confirmation_depth: u32,
     queue: ReleaseQueue,
     held: Vec<BitcoinReleaseProof>,
+    expected: ExpectedReleases,
 }
 
 /// Release proofs cross from the RPC thread to the exit thread through this.
 pub type ReleaseQueue = Arc<Mutex<Vec<BitcoinReleaseProof>>>;
+
+pub type ExpectedReleases = Arc<Mutex<std::collections::BTreeMap<[u8; 32], ([u8; 32], u128)>>>;
+
+const MAX_SEEN_RELEASES: usize = 4096;
 
 /// What a submitted proof is checked against before it is held: the corridor's network,
 /// its pinned checkpoint and the depth a payout must be buried under.
@@ -84,6 +89,8 @@ pub struct ReleaseGate {
     params: NetworkParams,
     checkpoint: Checkpoint,
     confirmation_depth: u32,
+    expected: ExpectedReleases,
+    seen: Mutex<std::collections::VecDeque<[u8; 32]>>,
 }
 
 /// One exit desk per process, so one gate. Set when the exit service is built; absent
@@ -98,6 +105,7 @@ pub fn release_gate_if_running() -> Option<&'static ReleaseGate> {
 pub enum ReleaseRefusal {
     Unproven,
     AlreadyHeld,
+    Unmatched,
 }
 
 /// Accept a submitted release proof only if it proves a payout against the checkpoint.
@@ -107,20 +115,35 @@ pub fn submit_release(
     gate: &ReleaseGate,
     proof: BitcoinReleaseProof,
 ) -> Result<(), ReleaseRefusal> {
+    let expected = {
+        let expected = gate.expected.lock().unwrap_or_else(|e| e.into_inner());
+        if expected.is_empty() {
+            return Err(ReleaseRefusal::Unmatched);
+        }
+        expected.clone()
+    };
     let proven = proof
         .verify(&gate.params, &gate.checkpoint, gate.confirmation_depth)
         .map_err(|_| ReleaseRefusal::Unproven)?;
-    let mut held = gate.queue.lock().unwrap_or_else(|e| e.into_inner());
-    if held
-        .iter()
-        .any(|p| double_sha256(&p.raw_tx) == proven.foreign_ref)
-    {
+    let matches = proven.burn_ref.is_some_and(|burn_ref| {
+        expected.get(&burn_ref) == Some(&(proven.beneficiary, proven.amount))
+    });
+    if !matches {
+        return Err(ReleaseRefusal::Unmatched);
+    }
+    let mut seen = gate.seen.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.contains(&proven.foreign_ref) {
         return Err(ReleaseRefusal::AlreadyHeld);
     }
+    let mut held = gate.queue.lock().unwrap_or_else(|e| e.into_inner());
     if held.len() >= MAX_PENDING_RELEASES {
         held.remove(0);
     }
     held.push(proof);
+    if seen.len() >= MAX_SEEN_RELEASES {
+        seen.pop_front();
+    }
+    seen.push_back(proven.foreign_ref);
     Ok(())
 }
 
@@ -145,11 +168,14 @@ impl ExitService {
                 min_work: U256::from_be_bytes(&checkpoint.min_work),
             };
             let queue: ReleaseQueue = Arc::new(Mutex::new(Vec::new()));
+            let expected: ExpectedReleases = Arc::new(Mutex::new(Default::default()));
             let gate = RELEASE_GATE.get_or_init(|| ReleaseGate {
                 queue: queue.clone(),
                 params: qlc_bitcoin::BITCOIN,
                 checkpoint: pinned.clone(),
                 confirmation_depth: checkpoint.confirmations,
+                expected: expected.clone(),
+                seen: Mutex::new(Default::default()),
             });
             SettleInputs {
                 corridor: cfg.corridor,
@@ -159,6 +185,7 @@ impl ExitService {
                 confirmation_depth: checkpoint.confirmations,
                 queue: gate.queue.clone(),
                 held: Vec::new(),
+                expected: gate.expected.clone(),
             }
         });
         Ok(ExitService {
@@ -225,6 +252,20 @@ impl ExitService {
             return Vec::new();
         };
         {
+            let open: std::collections::BTreeMap<[u8; 32], ([u8; 32], u128)> = self
+                .desk
+                .settleable(now)
+                .into_iter()
+                .filter_map(|id| self.desk.exit(id))
+                .map(|exit| {
+                    let statement = &exit.statement;
+                    (
+                        statement.burn_ref,
+                        (statement.destination, statement.amount),
+                    )
+                })
+                .collect();
+            *settle.expected.lock().unwrap_or_else(|e| e.into_inner()) = open;
             let mut queued = settle.queue.lock().unwrap_or_else(|e| e.into_inner());
             settle.held.append(&mut queued);
         }
@@ -1286,6 +1327,7 @@ mod tests {
             members: vec![MemberConfig {
                 id: 1,
                 weight: 100,
+                stake: 100,
                 root_digest: [0x11; 32],
                 root_slots: 64,
                 attest_pk: vec![0u8; ATTEST_PK_BYTES],
@@ -1417,6 +1459,10 @@ mod tests {
                 min_work: U256::ONE,
             },
             confirmation_depth: 6,
+            expected: Arc::new(Mutex::new(
+                [([0x42; 32], ([0x43; 32], 1u128))].into_iter().collect(),
+            )),
+            seen: Mutex::new(Default::default()),
         };
         let junk = BitcoinReleaseProof {
             headers: vec![qlc_bitcoin::BlockHeader {
