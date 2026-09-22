@@ -161,10 +161,7 @@ impl RateLimiter {
     }
 }
 
-/// The proxies whose word on the client address is taken, as a comma separated list of
-/// addresses. Unset, no proxy is trusted: a loopback peer is limited like any other.
 pub const TRUSTED_PROXY_ENV: &str = "Q_ORACLE_TRUSTED_PROXY";
-/// The header a trusted proxy names the client in. x-real-ip unless set.
 pub const CLIENT_IP_HEADER_ENV: &str = "Q_ORACLE_CLIENT_IP_HEADER";
 
 #[derive(Clone, Debug, Default)]
@@ -220,14 +217,6 @@ pub fn serve_with(
                 .peer_addr()
                 .map(|addr| addr.ip())
                 .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-            // Behind the reverse proxy every connection carries the proxy's own
-            // address, so a per address limit applied here would pool every real
-            // client into one bucket and let a single caller exhaust it for all of
-            // them. For a proxied connection the limit is applied once the request
-            // headers name the real client instead.
-            // Only a proxy named in the configuration speaks for its clients. Any other
-            // peer, loopback included, is limited as itself: a local process is not a proxy
-            // just because it connects from 127.0.0.1.
             let proxied = trust.trusts(ip);
             if !proxied
                 && !rate.allow(
@@ -247,11 +236,6 @@ pub fn serve_with(
                 );
                 continue;
             }
-            // Behind a reverse proxy every peer is loopback, so a per address connection
-            // cap on the PEER pools every real client into one bucket and a few dozen
-            // sockets lock out everyone. The real client is only known once the head is
-            // read, and the rate limiter above already applies per client limits there,
-            // so the proxy itself is bounded by the global cap alone.
             let per_ip = if proxied {
                 MAX_CONNECTIONS
             } else {
@@ -377,8 +361,6 @@ fn handle_connection(
     }
 
     if client_header.is_some() {
-        // A trusted proxy that did not name the client would pool every caller into one
-        // bucket, so one of them could spend it for all.
         let Some(client) = forwarded else {
             return write_error(
                 &mut stream,

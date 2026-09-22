@@ -12,47 +12,47 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           path: Q-Oracle
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/q-prover
-          ref: 1235894a35f1c85c9afbeceda41fb2cc625775b7
+          ref: fcb670d61be5b6b7dd036b5ebf002ec7f215882b
           path: q-prover
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/Q-Lightclient
-          ref: 80ae126b143b0805c1fc36d1b2d32ae2eab0760d
+          ref: 06aa0644b617251d4784a0c8acf25b75d8e35bea
           path: Q-Lightclient
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/QRC-CONSENSUS
-          ref: c5ef950ff64d87ce9c0ac4960bf2aaadfe42bff1
+          ref: f6f0802e96fc2df3568bd81b1c003cc382733042
           path: QRC-CONSENSUS
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/Quantova-Chain
-          ref: c8831279ebf817eb349ccb561ba49c1bae9dd6e8
+          ref: 4681364131c46c33e2c84d5fc501d5acc01b2be8
           path: Quantova-Chain
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/QCore.rs
-          ref: b412bf7f10d551918ccad2d28fe79fc670d942b8
+          ref: 9e1b3499367c7b3365825c507606538cd2d00c2b
           path: QCore.rs
           persist-credentials: false
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/QVM
-          ref: 0026c817d09da828b458d2d82b89ae1c7afc151c
+          ref: 62fadd4ced98c4c4eb5042391aba54dabac51431
           path: QVM
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: stable
           components: rustfmt, clippy

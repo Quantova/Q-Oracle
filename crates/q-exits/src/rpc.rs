@@ -125,8 +125,6 @@ impl QuantovaBurnSource for RpcBurnSource {
     }
 }
 
-/// The finalized head together with the chain's bridge epoch. The epoch is optional so a
-/// node that does not report it still gives the head.
 pub fn decode_finalized_head_epoch(body: &str) -> Result<(u64, Option<u64>), BurnWatchError> {
     let value = parse_json(body)?;
     let head = value
@@ -177,10 +175,6 @@ pub fn decode_finalized_block(body: &str) -> Result<FinalizedBlock, BurnWatchErr
         .ok_or_else(|| BurnWatchError::Rpc("burn_block has no certificate field".to_string()))?;
     let certificate = decode_certificate(&decode_hex(cert_hex)?)?;
 
-    // The chain caps the event array it serves. An inclusion proof built over a
-    // truncated leaf list cannot match the header's event root, so every burn in that
-    // block would be refused and skipped for good. Refuse the block instead, so the
-    // watcher retries rather than walking past it.
     if value
         .get("truncated")
         .and_then(Json::as_bool)

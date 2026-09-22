@@ -485,8 +485,6 @@ mod duplicate_signature_tests {
     use super::tests::{build, keyed, precommit, CHAIN_ID};
     use super::*;
 
-    // Without the counted set, one validator repeating its precommit adds its power once
-    // per copy, which is how a minority walks itself over the two thirds line.
     #[test]
     fn a_repeated_validator_counts_once_and_cannot_reach_the_threshold() {
         let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];

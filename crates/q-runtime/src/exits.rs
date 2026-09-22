@@ -20,7 +20,6 @@ pub const SLOT_ENV: &str = "Q_ORACLE_EXITS_SLOT";
 pub const BUDGET_ENV: &str = "Q_ORACLE_EXITS_BUDGET";
 pub const DEST_CHAIN_ENV: &str = "Q_ORACLE_EXITS_DEST_CHAIN";
 pub const CORRIDOR_ENV: &str = "Q_ORACLE_EXITS_CORRIDOR";
-/// Fewer confirmations than this and a payout proof is a cheap private fork away.
 pub const MIN_PAYOUT_CONFIRMATIONS: u32 = 6;
 pub const START_HEIGHT_ENV: &str = "Q_ORACLE_EXITS_START_HEIGHT";
 pub const BEACON_SEED_ENV: &str = "Q_ORACLE_EXITS_BEACON_SEED";
@@ -70,7 +69,6 @@ pub struct VaultSeed {
 pub struct BitcoinCheckpointConfig {
     pub height: u32,
     pub hash: [u8; 32],
-    // Big endian, 32 bytes: a u64 floor is less than the work of one mainnet block.
     pub min_work: [u8; 32],
     pub confirmations: u32,
 }
@@ -91,12 +89,8 @@ pub struct ExitTrustConfig {
     pub rpc_port: u16,
     pub ledger_path: PathBuf,
     pub bitcoin: Option<BitcoinCheckpointConfig>,
-    // The assets this corridor's vault backs, and the ceiling on one exit. Empty serves
-    // nothing, so a desk that was never told its assets refuses every exit.
     pub assets: Vec<[u8; 16]>,
     pub max_exit_amount: u128,
-    // Escrow held on the foreign side, per asset, which the reserve shortfall circuit
-    // breaker audits the minted total against. Absent, that breaker cannot run at all.
     pub reserves: Vec<([u8; 16], u128)>,
 }
 
@@ -247,8 +241,6 @@ fn parse_committee<E: EnvSource>(env: &E) -> Result<Vec<MemberConfig>, ExitConfi
     Ok(members)
 }
 
-// A desk serves only the assets named here. Absent means it serves none and refuses
-// every exit, which is the safe reading of an unconfigured corridor.
 fn parse_assets<E: EnvSource>(env: &E) -> Result<Vec<[u8; 16]>, ExitConfigError> {
     let Some(raw) = env.get(ASSETS_ENV) else {
         return Ok(Vec::new());
@@ -265,8 +257,6 @@ fn parse_assets<E: EnvSource>(env: &E) -> Result<Vec<[u8; 16]>, ExitConfigError>
     Ok(assets)
 }
 
-// asset:amount pairs. The watchtower audits minted against these, so exits cannot run
-// without them: a circuit breaker with no input is not a circuit breaker.
 fn parse_reserves<E: EnvSource>(env: &E) -> Result<Vec<([u8; 16], u128)>, ExitConfigError> {
     let Some(raw) = env.get(RESERVES_ENV) else {
         return Ok(Vec::new());
@@ -397,7 +387,6 @@ pub fn parse_exit_config<E: EnvSource>(
     let bitcoin = parse_bitcoin(env)?;
     let assets = parse_assets(env)?;
     let reserves = parse_reserves(env)?;
-    // No ceiling is not a setting: a desk with none opens exits of any size.
     let max_exit_amount = opt_u128(env, MAX_AMOUNT_ENV, 0)?;
     if max_exit_amount == 0 {
         return Err(ExitConfigError::Missing("exit ceiling"));
@@ -430,9 +419,6 @@ pub fn load_exit_config() -> Result<Option<ExitTrustConfig>, ExitConfigError> {
     parse_exit_config(&ProcessEnv)
 }
 
-/// The foreign escrow figures, read on their own. They bound the deposit mint path, which
-/// serves whether or not exits are enabled, so they cannot live only inside the exit
-/// configuration.
 pub fn load_reserves() -> Result<Vec<([u8; 16], u128)>, ExitConfigError> {
     parse_reserves(&ProcessEnv)
 }

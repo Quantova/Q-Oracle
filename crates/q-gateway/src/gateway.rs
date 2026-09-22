@@ -11,7 +11,6 @@ use crate::operators::{verify_quorum, OperatorSet};
 
 pub const REORG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/REORG/v1";
 pub const RESUME_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/RESUME/v1";
-/// How long a signed resume stays good, and how far ahead of this clock its height may be.
 pub const RESUME_WINDOW: u64 = 600;
 pub const RESUME_SKEW: u64 = 16;
 pub const TIER_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/TIER/v1";
@@ -23,7 +22,7 @@ pub const MAX_PENDING_EXITS: usize = 65_536;
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
 pub const WATCHDOG_COOLDOWN: u64 = 8 * WATCHDOG_MAX_WINDOW;
-const GUARD_SNAPSHOT_VERSION: u8 = 6;
+const GUARD_SNAPSHOT_VERSION: u8 = 7;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
@@ -65,9 +64,6 @@ pub struct Gateway {
     used_refs: BTreeSet<(u32, [u8; 32])>,
     refs_any_chain: BTreeSet<[u8; 32]>,
     per_asset_minted: BTreeMap<[u8; 16], u128>,
-    // Foreign escrow per asset. Minting more than is held on the far side is the one
-    // conservation break a bridge must never commit, and until this nothing checked it
-    // before the mint.
     escrowed: BTreeMap<[u8; 16], u128>,
     per_asset_cap: BTreeMap<[u8; 16], u128>,
     per_asset_epoch_cap: BTreeMap<[u8; 16], u128>,
@@ -78,8 +74,6 @@ pub struct Gateway {
     corridors: BTreeMap<u32, CorridorConfig>,
     corridor_cursor: BTreeMap<u32, u64>,
     paused_sources: BTreeSet<u32>,
-    // The height each pause took effect. Not persisted: after a restart it is the restored
-    // height, so a resume signed before the restart does not lift the pause.
     paused_since: BTreeMap<u32, u64>,
     resumed_at: BTreeMap<u32, u64>,
     watchdog_last: BTreeMap<u32, u64>,
@@ -248,8 +242,6 @@ impl Gateway {
         self.per_asset_epoch_cap.insert(asset_id, cap);
     }
 
-    /// Declare the escrow held on the far side for one asset. Absent, that asset has no
-    /// escrow bound and only the caps apply.
     pub fn set_escrow(&mut self, asset_id: [u8; 16], escrowed: u128) {
         self.escrowed.insert(asset_id, escrowed);
     }
@@ -258,12 +250,16 @@ impl Gateway {
         self.escrowed.get(asset_id).copied()
     }
 
-    /// Minted must never exceed escrowed. Checked before the mint, not audited after it.
     fn charge_asset_escrow(&self, asset_id: &[u8; 16], amount: u128) -> Result<(), GatewayError> {
         let Some(&escrowed) = self.escrowed.get(asset_id) else {
             return Ok(());
         };
-        let minted = *self.per_asset_minted.get(asset_id).unwrap_or(&0);
+        let minted = self
+            .per_asset_minted
+            .get(asset_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(self.pending_exit_of(asset_id));
         let after = minted
             .checked_add(amount)
             .ok_or(GatewayError::EscrowExceeded {
@@ -343,8 +339,6 @@ impl Gateway {
         self.touch_guard();
     }
 
-    /// Follow the chain's bridge epoch. Moving forward resets the epoch caps once, however
-    /// many epochs were skipped; an older or equal epoch changes nothing.
     pub fn advance_epoch_to(&mut self, epoch: u64) {
         if epoch > self.current_epoch {
             self.current_epoch = epoch;
@@ -374,9 +368,6 @@ impl Gateway {
         &self.per_asset_minted
     }
 
-    // Minted counters survive a restart in the guard snapshot but caps are re-registered
-    // from the pool set, so a restored counter with no cap means its pool is gone.
-    /// Every asset a pool is registered for.
     pub fn registered_assets(&self) -> Vec<[u8; 16]> {
         self.per_asset_cap.keys().copied().collect()
     }
@@ -471,9 +462,6 @@ impl Gateway {
         Ok(())
     }
 
-    /// The signature checks of the quorum requests alone, read only. A caller runs these
-    /// under a shared lock first, so a flood of forged requests is refused without ever
-    /// holding the exclusive one a deposit waits on.
     pub fn precheck_reorg(
         &self,
         source_chain: u32,
@@ -516,6 +504,12 @@ impl Gateway {
         until_height: u64,
         sig: &SignerSig,
     ) -> Result<(), GatewayError> {
+        if until_height <= self.current_height {
+            return Err(GatewayError::WatchdogExpired {
+                until: until_height,
+                now: self.current_height,
+            });
+        }
         let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
         if verify_quorum(
             &message,
@@ -530,9 +524,6 @@ impl Gateway {
         Ok(())
     }
 
-    /// Lift a reorg pause. The quorum signs the height it resumes at, and only a recent
-    /// height at or after the pause counts, so neither an old resume nor one signed before
-    /// a later pause can lift it.
     pub fn resume_source(
         &mut self,
         source_chain: u32,
@@ -547,9 +538,11 @@ impl Gateway {
             .get(&source_chain)
             .copied()
             .unwrap_or(self.current_height);
+        let resumed = self.resumed_at.get(&source_chain).copied();
         if at_height < since
             || at_height > self.current_height.saturating_add(RESUME_SKEW)
             || self.current_height > at_height.saturating_add(RESUME_WINDOW)
+            || resumed.is_some_and(|resumed| at_height <= resumed)
         {
             return Err(GatewayError::ResumeOutOfWindow {
                 at: at_height,
@@ -639,11 +632,14 @@ impl Gateway {
         until_height: u64,
         sig: &SignerSig,
     ) -> Result<(), GatewayError> {
-        // One operator's freeze is meant to be short. Measured against a height that has
-        // never been observed it is not bounded at all: the window never elapses, so a
-        // single key would halt minting for good.
         if self.current_height == 0 {
             return Err(GatewayError::WatchdogWithoutClock);
+        }
+        if until_height <= self.current_height {
+            return Err(GatewayError::WatchdogExpired {
+                until: until_height,
+                now: self.current_height,
+            });
         }
         let ceiling = self.current_height.saturating_add(WATCHDOG_MAX_WINDOW);
         if until_height > ceiling {
@@ -1017,8 +1013,6 @@ impl Gateway {
         let mut w = Writer::new();
         w.u8(GUARD_SNAPSHOT_VERSION);
         w.u8(self.global_pause as u8);
-        // A freeze is a window of heights. Persisting the window without the clock it is
-        // measured against makes it permanent across a restart.
         w.u64(self.current_height);
         w.u64(self.frozen_until);
         w.u64(self.deposit_frozen_until);
@@ -1065,6 +1059,16 @@ impl Gateway {
             w.u8(corridor.tier);
             w.u8(corridor.active as u8);
         }
+        w.u32(self.resumed_at.len() as u32);
+        for (source_chain, at_height) in &self.resumed_at {
+            w.u32(*source_chain);
+            w.u64(*at_height);
+        }
+        w.u32(self.watchdog_last.len() as u32);
+        for (operator, height) in &self.watchdog_last {
+            w.u32(*operator);
+            w.u64(*height);
+        }
         w.finish()
     }
 
@@ -1089,10 +1093,8 @@ impl Gateway {
         self.per_asset_epoch_minted = state.per_asset_epoch_minted;
         self.next_exit_id = state.next_exit_id;
         self.pending_exits = state.pending_exits;
-        // The corridors the code registers are the ones that exist. A snapshot restores the
-        // stricter of each setting, a deeper confirmation, a larger quorum, the tier
-        // governance ratcheted to, and inactive if either side says so; it cannot revive a
-        // corridor the code no longer registers or loosen one the code tightened.
+        self.resumed_at = state.resumed_at;
+        self.watchdog_last = state.watchdog_last;
         for (source_chain, saved) in state.corridors {
             if let Some(current) = self.corridors.get_mut(&source_chain) {
                 current.confirmation_depth =
@@ -1121,6 +1123,8 @@ struct GuardState {
     next_exit_id: u64,
     pending_exits: BTreeMap<u64, ExitTicket>,
     corridors: BTreeMap<u32, CorridorConfig>,
+    resumed_at: BTreeMap<u32, u64>,
+    watchdog_last: BTreeMap<u32, u64>,
 }
 
 fn bounded_count(r: &mut Reader, item_size: usize) -> Result<usize, CodecError> {
@@ -1232,6 +1236,22 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         );
     }
 
+    let count = bounded_count(&mut r, 12)?;
+    let mut resumed_at = BTreeMap::new();
+    for _ in 0..count {
+        let source_chain = r.u32()?;
+        let at_height = r.u64()?;
+        resumed_at.insert(source_chain, at_height);
+    }
+
+    let count = bounded_count(&mut r, 12)?;
+    let mut watchdog_last = BTreeMap::new();
+    for _ in 0..count {
+        let operator = r.u32()?;
+        let height = r.u64()?;
+        watchdog_last.insert(operator, height);
+    }
+
     r.finish()?;
     Ok(GuardState {
         current_height,
@@ -1248,6 +1268,8 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         next_exit_id,
         pending_exits,
         corridors,
+        resumed_at,
+        watchdog_last,
     })
 }
 
@@ -1255,8 +1277,6 @@ pub fn attestation_message(fact: &BridgeFact, dest_chain_id: u64) -> Vec<u8> {
     fact.attest_preimage(dest_chain_id)
 }
 
-// Every quorum message carries the era, as the freeze does, so a body signed before a
-// relaunch cannot be replayed after it under the same operator keys.
 pub fn reorg_message(
     source_chain: u32,
     fork_depth: u32,
@@ -1305,8 +1325,6 @@ pub fn freeze_message(until_height: u64, dest_chain_id: u64) -> Vec<u8> {
     freeze_message_for_era(until_height, dest_chain_id, &[0u8; 32])
 }
 
-/// Era bound. Without it one observed watchdog body is replayable for ever, including
-/// across a restart and a wipe.
 pub fn freeze_message_for_era(until_height: u64, dest_chain_id: u64, era: &[u8; 32]) -> Vec<u8> {
     let mut w = Writer::new();
     w.u64(until_height);
@@ -1345,8 +1363,6 @@ mod tests {
             "a minted asset that still has its cap is consistent"
         );
 
-        // A restart rebuilds caps from the pool set, so a pool that is gone leaves the
-        // counter behind with nothing to bound it.
         let snapshot = gw.encode_guard();
         let mut fresh = Gateway::new(9000, 0x2a, OperatorSet::new(1), 1_000_000);
         fresh.rehydrate_guard(&snapshot).expect("rehydrates");
@@ -2308,6 +2324,194 @@ mod tests {
         assert!(
             restored.rehydrate_guard(&[0xff, 0xff, 0xff, 0xff]).is_err(),
             "garbage bytes are refused"
+        );
+    }
+
+    fn three_op_gateway() -> (Vec<(u32, ml_dsa::PublicKey, ml_dsa::SecretKey)>, Gateway) {
+        let s: Vec<_> = (0..3).map(signer).collect();
+        let mut set = OperatorSet::new(3);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        gw.register_asset_cap([0xa1; 16], 1_000);
+        (s, gw)
+    }
+
+    fn quorum(
+        s: &[(u32, ml_dsa::PublicKey, ml_dsa::SecretKey)],
+        message: &[u8],
+        domain: &[u8],
+    ) -> Vec<SignerSig> {
+        s.iter()
+            .map(|(id, _, sk)| SignerSig {
+                operator_id: *id,
+                signature: ml_dsa::sign(sk, message, domain, &[0u8; 32])
+                    .unwrap()
+                    .to_vec(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_replayed_resume_cannot_lift_a_later_pause() {
+        let (s, mut gw) = three_op_gateway();
+        gw.advance_to(1_000);
+        let reorg = quorum(
+            &s,
+            &reorg_message(1, 3, 1_000, DEST_ID, &[0u8; 32]),
+            REORG_DOMAIN,
+        );
+        gw.report_reorg(1, 3, 1_000, &reorg)
+            .expect("a quorum pauses");
+        let resume = quorum(
+            &s,
+            &resume_message(1, 1_010, DEST_ID, &[0u8; 32]),
+            RESUME_DOMAIN,
+        );
+        gw.resume_source(1, 1_010, &resume)
+            .expect("a quorum resumes");
+
+        let again = quorum(
+            &s,
+            &reorg_message(1, 5, 1_012, DEST_ID, &[0u8; 32]),
+            REORG_DOMAIN,
+        );
+        gw.report_reorg(1, 5, 1_012, &again)
+            .expect("a fresh reorg pauses again");
+        assert_eq!(
+            gw.resume_source(1, 1_010, &resume),
+            Err(GatewayError::ResumeOutOfWindow {
+                at: 1_010,
+                now: 1_000
+            }),
+            "the old resume signatures must not lift the new pause"
+        );
+        assert!(gw.is_source_paused(1));
+    }
+
+    #[test]
+    fn a_resume_replay_is_refused_after_a_snapshot_restart() {
+        let (s, mut gw) = three_op_gateway();
+        gw.advance_to(1_000);
+        let reorg = quorum(
+            &s,
+            &reorg_message(1, 3, 1_000, DEST_ID, &[0u8; 32]),
+            REORG_DOMAIN,
+        );
+        gw.report_reorg(1, 3, 1_000, &reorg)
+            .expect("a quorum pauses");
+        let resume = quorum(
+            &s,
+            &resume_message(1, 1_010, DEST_ID, &[0u8; 32]),
+            RESUME_DOMAIN,
+        );
+        gw.resume_source(1, 1_010, &resume)
+            .expect("a quorum resumes");
+        let again = quorum(
+            &s,
+            &reorg_message(1, 5, 1_012, DEST_ID, &[0u8; 32]),
+            REORG_DOMAIN,
+        );
+        gw.report_reorg(1, 5, 1_012, &again)
+            .expect("a fresh reorg pauses again");
+
+        let snapshot = gw.encode_guard();
+        let (_, mut restored) = three_op_gateway();
+        restored
+            .rehydrate_guard(&snapshot)
+            .expect("a clean snapshot rehydrates");
+        assert!(restored.resume_source(1, 1_010, &resume).is_err());
+        assert!(restored.is_source_paused(1));
+    }
+
+    #[test]
+    fn an_expired_watchdog_replay_cannot_start_an_operator_cooldown() {
+        let (s, mut gw) = three_op_gateway();
+        gw.advance_to(1_000);
+        let stale = SignerSig {
+            operator_id: s[0].0,
+            signature: ml_dsa::sign(
+                &s[0].2,
+                &freeze_message(900, DEST_ID),
+                WATCHDOG_DOMAIN,
+                &[0u8; 32],
+            )
+            .unwrap()
+            .to_vec(),
+        };
+        assert_eq!(
+            gw.watchdog_freeze(900, &stale),
+            Err(GatewayError::WatchdogExpired {
+                until: 900,
+                now: 1_000
+            })
+        );
+        assert!(gw.precheck_watchdog(900, &stale).is_err());
+
+        let live = SignerSig {
+            operator_id: s[0].0,
+            signature: ml_dsa::sign(
+                &s[0].2,
+                &freeze_message(1_500, DEST_ID),
+                WATCHDOG_DOMAIN,
+                &[0u8; 32],
+            )
+            .unwrap()
+            .to_vec(),
+        };
+        gw.watchdog_freeze(1_500, &live)
+            .expect("the operator's real alarm still lands");
+    }
+
+    #[test]
+    fn a_watchdog_cooldown_survives_a_snapshot_restart() {
+        let (s, mut gw) = three_op_gateway();
+        gw.advance_to(1_000);
+        let alarm = |until: u64| SignerSig {
+            operator_id: s[0].0,
+            signature: ml_dsa::sign(
+                &s[0].2,
+                &freeze_message(until, DEST_ID),
+                WATCHDOG_DOMAIN,
+                &[0u8; 32],
+            )
+            .unwrap()
+            .to_vec(),
+        };
+        gw.watchdog_freeze(1_100, &alarm(1_100))
+            .expect("the first alarm lands");
+        gw.advance_to(1_200);
+
+        let snapshot = gw.encode_guard();
+        let (_, mut restored) = three_op_gateway();
+        restored
+            .rehydrate_guard(&snapshot)
+            .expect("a clean snapshot rehydrates");
+        assert_eq!(
+            restored.watchdog_freeze(1_300, &alarm(1_300)),
+            Err(GatewayError::WatchdogCooldown),
+            "a restart must not hand one operator a fresh alarm"
+        );
+    }
+
+    #[test]
+    fn the_escrow_bound_counts_units_still_pending_exit() {
+        let (_, mut gw) = three_op_gateway();
+        gw.set_escrow([0xa1; 16], 400);
+        gw.admit_trustless([0xa1; 16], [0x01; 32], 400, 1)
+            .expect("mint up to the escrow");
+        gw.request_exit([0xa1; 16], 300, [0x22; 32])
+            .expect("an exit burns the bridged units");
+        assert_eq!(
+            gw.admit_trustless([0xa1; 16], [0x02; 32], 300, 1),
+            Err(GatewayError::EscrowExceeded {
+                minted: 400,
+                escrowed: 400,
+                add: 300
+            }),
+            "the escrow still holds the pending exit, so it cannot back a new mint"
         );
     }
 }

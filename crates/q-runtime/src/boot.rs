@@ -23,18 +23,12 @@ use crate::exits::{load_exit_config, ExitConfigError, ExitTrustConfig};
 use crate::http::{serve, SharedState};
 use crate::persist::GuardStore;
 
-/// Set to 1 on the first boot only, when there is genuinely no snapshot yet.
 pub const INIT_SNAPSHOT_ENV: &str = "Q_ORACLE_INIT_SNAPSHOT";
 
-/// The only corridor with a working payout verifier. q_assets::Network::Bitcoin.
 const BITCOIN_CORRIDOR: u32 = 43;
 
-/// Whether settle and slash decisions are signed by the operator quorum and submitted to
-/// the chain. They are not, so exits stay refused; this flips only with that leg.
 const EXIT_ACK_PATH_WIRED: bool = false;
 
-/// Submitted release proofs waiting to be matched against a pending exit. Bounded so a
-/// stream of unmatched proofs cannot grow the queue without limit; the oldest go first.
 const MAX_PENDING_RELEASES: usize = 1024;
 
 const EXIT_POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -55,17 +49,11 @@ pub struct ExitService {
     source: RpcBurnSource,
     vault_id: u32,
     dest_chain: u32,
-    // Everything the settle sweep needs: the corridor's checkpoint and assets, and the
-    // queue the RPC surface drops submitted release proofs onto. Absent when no
-    // checkpoint is configured, in which case nothing can be proven and the sweep is a
-    // no-op; `start_exits_inner` refuses to serve in that state rather than slash.
     settle: Option<SettleInputs>,
 }
 
 pub struct SettleInputs {
     corridor: u32,
-    // One watcher is bound to one asset, so a corridor backing several needs one each.
-    // Building only for the first would silently slash every exit of the others.
     assets: Vec<[u8; 16]>,
     params: NetworkParams,
     checkpoint: Checkpoint,
@@ -75,15 +63,12 @@ pub struct SettleInputs {
     expected: ExpectedReleases,
 }
 
-/// Release proofs cross from the RPC thread to the exit thread through this.
 pub type ReleaseQueue = Arc<Mutex<Vec<BitcoinReleaseProof>>>;
 
 pub type ExpectedReleases = Arc<Mutex<std::collections::BTreeMap<[u8; 32], ([u8; 32], u128)>>>;
 
 const MAX_SEEN_RELEASES: usize = 4096;
 
-/// What a submitted proof is checked against before it is held: the corridor's network,
-/// its pinned checkpoint and the depth a payout must be buried under.
 pub struct ReleaseGate {
     queue: ReleaseQueue,
     params: NetworkParams,
@@ -93,8 +78,6 @@ pub struct ReleaseGate {
     seen: Mutex<std::collections::VecDeque<[u8; 32]>>,
 }
 
-/// One exit desk per process, so one gate. Set when the exit service is built; absent
-/// means exits are not running and a submitted proof has nowhere to go.
 static RELEASE_GATE: OnceLock<ReleaseGate> = OnceLock::new();
 
 pub fn release_gate_if_running() -> Option<&'static ReleaseGate> {
@@ -108,9 +91,6 @@ pub enum ReleaseRefusal {
     Unmatched,
 }
 
-/// Accept a submitted release proof only if it proves a payout against the checkpoint.
-/// Anything else is refused at the door, so a flood of junk cannot push a vault's real
-/// proof out of the queue before the sweep reaches it.
 pub fn submit_release(
     gate: &ReleaseGate,
     proof: BitcoinReleaseProof,
@@ -245,8 +225,6 @@ impl ExitService {
         Ok(ExitDecision::settle(&statement, self.dest_chain))
     }
 
-    /// Settle every pending exit whose foreign payout has been proven. Runs before the
-    /// slash sweep so a proof that lands inside the window settles rather than slashes.
     pub fn sweep_settle(&mut self, now: u64) -> Vec<ExitDecision> {
         let Some(settle) = self.settle.as_mut() else {
             return Vec::new();
@@ -275,9 +253,6 @@ impl ExitService {
         if settle.held.is_empty() {
             return Vec::new();
         }
-        // A watcher owns its proofs for the length of the sweep, so each gets a clone and
-        // the held set survives to the next tick. A proof that matched is consumed by the
-        // desk's own replay set, so re-offering it settles nothing twice.
         let watchers: Vec<BitcoinPayoutWatcher> = settle
             .assets
             .iter()
@@ -329,8 +304,6 @@ impl ExitService {
                     let head = self.feed.scanned_through();
                     let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
                     guard.gateway.advance_to(head);
-                    // The independent over mint check, run against the configured escrow.
-                    // Any breach pauses the gateway rather than serving another deposit.
                     let breaches =
                         q_watchtower::Watchtower::enforce(&mut guard.gateway, &self.reserves);
                     for breach in &breaches {
@@ -383,9 +356,6 @@ pub(crate) fn start_exits_inner(
     match loaded {
         Ok(None) => Ok(None),
         Ok(Some(cfg)) => {
-            // The reserve shortfall breaker audits minted totals against foreign escrow.
-            // With no escrow figures it cannot run, and exits would be served with the one
-            // independent check on over minting absent, so refuse to start instead.
             if cfg.reserves.is_empty() {
                 return Err(std::io::Error::new(
                     ErrorKind::InvalidInput,
@@ -393,12 +363,6 @@ pub(crate) fn start_exits_inner(
                      shortfall breaker cannot run; refusing to serve exits",
                 ));
             }
-            // An exit only leaves the desk two ways: settled against a proven foreign
-            // payout, or slashed at the deadline. Settlement needs a payout verifier for
-            // the corridor, and only Bitcoin has one. EvmReleaseProof::verify is a stub
-            // that always returns EvmCorridorDisabled, so on any other corridor every
-            // exit would run to its deadline and slash, destroying the user's funds on
-            // this side with no payout on the far side. Refuse rather than serve that.
             if cfg.corridor != BITCOIN_CORRIDOR {
                 return Err(std::io::Error::new(
                     ErrorKind::InvalidInput,
@@ -413,12 +377,6 @@ pub(crate) fn start_exits_inner(
                      can be proven and every exit would slash; refusing to serve exits",
                 ));
             }
-            // A settled or slashed exit only resolves on chain through a quorum signed exit
-            // acknowledgement submitted to the bridge settle address. Nothing signs one or
-            // submits one: the decisions this service reaches are dropped. The chain then
-            // keeps every burn outstanding, and a slash, which pays the holder nothing here
-            // because the chain's own slash is what restores the burned tokens, leaves the
-            // holder with neither the tokens nor a payout. Refuse until that path exists.
             if !EXIT_ACK_PATH_WIRED {
                 return Err(std::io::Error::new(
                     ErrorKind::InvalidInput,
@@ -463,8 +421,6 @@ pub enum BootConfigError {
     QuorumAboveSize { got: usize, size: usize },
 }
 
-/// An operator set and a quorum read from configuration. An empty set leaves every
-/// quorum gated control unsatisfiable while still serving, so this refuses instead.
 pub fn boot_from_env() -> Result<BridgeState, BootConfigError> {
     let mut state = boot_from_config(
         std::env::var(OPERATORS_ENV).ok().as_deref(),
@@ -476,9 +432,6 @@ pub fn boot_from_env() -> Result<BridgeState, BootConfigError> {
     Ok(state)
 }
 
-/// corridor:operator:endpoint triples. The federated admission gate refuses any signer
-/// that is not declared here, and nothing else populates the registry, so without this
-/// every federated corridor is closed and the failure reads as `undeclared_source`.
 pub fn declare_sources_from(
     state: &mut BridgeState,
     raw: Option<&str>,
@@ -547,9 +500,6 @@ pub fn boot_from_config(
         .trim()
         .parse()
         .map_err(|_| BootConfigError::Malformed(DEST_CHAIN_ID_ENV))?;
-    // An all zero era separates nothing: it is the same era before and after every restart
-    // and every wipe, so an accepted attestation stays replayable for ever. It is one of
-    // only two controls against a second mint, so it has to be set, and set to a value.
     let era: [u8; 32] = decode_hex(era_raw.ok_or(BootConfigError::Missing(ERA_ENV))?)
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or(BootConfigError::Malformed(ERA_ENV))?;
@@ -584,7 +534,6 @@ fn decode_hex(input: &str) -> Option<Vec<u8>> {
 mod boot_config_tests {
     use super::*;
 
-    // Distinct keys: one key under two ids is refused, which is its own protection.
     fn key(tag: u8) -> String {
         format!("{tag:02x}").repeat(qtv_crypto::ml_dsa::PUBLIC_KEY_BYTES)
     }
@@ -593,8 +542,6 @@ mod boot_config_tests {
         format!("1:{},2:{},3:{}", key(0xa1), key(0xb2), key(0xc3))
     }
 
-    // Serving with no operators leaves every quorum gated control unsatisfiable while the
-    // gateway still answers. Refusing to come up is the only safe reading of that config.
     #[test]
     fn an_empty_operator_set_refuses_to_boot() {
         let Err(err) = boot_from_config(Some(""), Some("3"), Some("9000"), Some(&"ab".repeat(32)))
@@ -613,7 +560,6 @@ mod boot_config_tests {
         assert!(matches!(err, BootConfigError::Missing(_)), "{err:?}");
     }
 
-    // A quorum under the supermajority floor is a minority that can mint on its own.
     #[test]
     fn a_quorum_below_the_supermajority_floor_refuses_to_boot() {
         let operators = three();
@@ -631,7 +577,6 @@ mod boot_config_tests {
         );
     }
 
-    // An all zero era separates nothing, so it is refused like a missing one.
     #[test]
     fn an_all_zero_era_is_refused() {
         let operators = three();
@@ -714,8 +659,6 @@ pub fn shared(state: BridgeState) -> SharedState {
     Arc::new(RwLock::new(state))
 }
 
-/// Whether this boot starts the snapshot from nothing. Only when the file is absent AND
-/// the operator said this is the first boot; an absent file otherwise is refused.
 pub(crate) fn snapshot_is_first_boot(
     path: &std::path::Path,
     init_requested: bool,
@@ -736,9 +679,6 @@ pub(crate) fn snapshot_is_first_boot(
     Ok(true)
 }
 
-/// Once reserves are given at all, they must cover every pool and name only real ones.
-/// A mistyped asset id would otherwise leave the real asset with no escrow bound while the
-/// configuration looks complete.
 pub(crate) fn reserves_cover(
     registered: &[[u8; 16]],
     reserves: &[([u8; 16], u128)],
@@ -771,8 +711,6 @@ pub(crate) fn reserves_cover(
     Ok(())
 }
 
-/// Bound the deposit mint path by the foreign escrow. Minting past what is held on the far
-/// side is refused before the mint rather than detected after it.
 pub(crate) fn apply_reserves(state: &SharedState, reserves: &[([u8; 16], u128)]) {
     let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
     for (asset, escrowed) in reserves {
@@ -781,12 +719,6 @@ pub(crate) fn apply_reserves(state: &SharedState, reserves: &[([u8; 16], u128)])
 }
 
 pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Result<()> {
-    // The state comes up first so the exit loop can carry the destination chain height
-    // into the gateway. Without a clock every height relative control, the deposit freeze
-    // included, is measured against zero and never elapses.
-    // The replay set and the minted ledger live in memory. Without a snapshot they are
-    // lost on restart and an already accepted attestation mints a second time, so the
-    // snapshot is not optional for a serving oracle.
     let Some(path) = snapshot else {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
@@ -794,9 +726,6 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
              restart and an accepted attestation could mint twice; refusing to serve",
         ));
     };
-    // A snapshot that is simply not there, a volume not mounted, a path changed in a
-    // redeploy, would otherwise boot an empty replay set and admit every envelope accepted
-    // before it a second time. Only a first boot, said so explicitly, starts from nothing.
     let first_boot = snapshot_is_first_boot(
         &path,
         std::env::var(INIT_SNAPSHOT_ENV).as_deref() == Ok("1"),
@@ -833,8 +762,6 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
         reserves_cover(&registered, &reserves)?;
     }
     apply_reserves(&state, &reserves);
-    // Without a chain head the gateway clock stands at zero: a watchdog freeze never lifts,
-    // a fact never expires, and the epoch caps never roll. Refuse rather than serve on it.
     let chain_rpc = std::env::var(crate::clock::CHAIN_RPC_ENV).map_err(|_| {
         std::io::Error::new(
             ErrorKind::InvalidInput,
@@ -854,8 +781,6 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
 }
 
 pub(crate) fn restore(store: &Option<GuardStore>) -> std::io::Result<BridgeState> {
-    // Serving with an empty operator set makes every quorum gated control permanently
-    // unsatisfiable while the gateway still answers, so refuse to come up instead.
     let state = boot_from_env().map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1415,8 +1340,6 @@ mod tests {
             min_work: [0x01; 32],
             confirmations: 6,
         });
-        // Corridor 1 is not Bitcoin, and EvmReleaseProof::verify is a disabled stub, so
-        // no exit on this corridor could ever settle. Serving would slash every one.
         assert_ne!(cfg.corridor, BITCOIN_CORRIDOR);
         let refused = start_exits_inner(Ok(Some(cfg)), None);
         assert!(refused.is_err(), "a corridor that cannot settle is refused");

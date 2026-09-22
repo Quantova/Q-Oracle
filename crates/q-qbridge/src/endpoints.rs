@@ -217,8 +217,6 @@ pub enum Response {
     Error(ApiError),
 }
 
-/// The signature checks a quorum request needs, run read only. Nothing is changed; a
-/// request that fails here never reaches the write path.
 pub fn precheck(state: &BridgeState, request: &Request) -> Result<(), ApiError> {
     let checked = match request {
         Request::ReportReorg(r) => {
@@ -325,7 +323,6 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
             Err(err) => Response::Error(err),
         },
         Request::DepositStatus(request) => Response::Status(deposit_status(state, &request)),
-        // Quorum gated inside report_reorg, so reaching it needs no separate gate here.
         Request::ReportReorg(request) => {
             match state.gateway.report_reorg(
                 request.source_chain,
@@ -340,7 +337,6 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
                 Err(err) => Response::Error(ApiError::Gateway(err)),
             }
         }
-        // Quorum gated inside resume_source.
         Request::ResumeSource(request) => {
             match state.gateway.resume_source(
                 request.source_chain,
@@ -353,8 +349,6 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
                 Err(err) => Response::Error(ApiError::Gateway(err)),
             }
         }
-        // Both freezes are quorum gated inside the gateway and only ever extend, so
-        // neither can be used to lift a freeze that is already running.
         Request::EmergencyFreeze(request) => {
             match state
                 .gateway
@@ -1295,7 +1289,6 @@ mod tests {
                 .to_vec(),
         };
 
-        // Two of four is below the floor, so it must not pause.
         let thin = handle(
             &mut state,
             Request::ReportReorg(ReportReorgRequest {
@@ -1341,7 +1334,6 @@ mod tests {
             set.register(op.id, op.pk);
         }
         let mut state = BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000));
-        // A watchdog freeze is measured against a live clock, so give it one.
         state.gateway.advance_to(10);
 
         let until = 100u64;
@@ -1366,7 +1358,6 @@ mod tests {
             }
         );
 
-        // A window past the watchdog ceiling is refused even with a good signature.
         let far = q_gateway::WATCHDOG_MAX_WINDOW + 1_000;
         let far_msg = q_gateway::freeze_message(far, DEST_ID);
         let far_sig = SignerSig {
@@ -2150,7 +2141,6 @@ mod tier_downgrade_tests {
     use q_federated::SourceEndpoint;
     use q_gateway::OperatorSet;
 
-    // A quorum envelope on a proof backed corridor would downgrade it to operator trust.
     fn bridge_state() -> (Vec<Op>, BridgeState) {
         let ops: Vec<Op> = (0..4).map(mk).collect();
         let mut set = OperatorSet::new(3);
@@ -2179,7 +2169,6 @@ mod tier_downgrade_tests {
                 SourceEndpoint([0x10 + op.id as u8; 32]),
             );
         }
-        // Match the pool network or the earlier check fires instead.
         let mut fact = federated_fact(view.asset_id, [0x11; 32]);
         fact.source_chain = network.id();
         let env = AttestationEnvelope {

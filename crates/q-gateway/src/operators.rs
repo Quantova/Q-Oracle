@@ -47,9 +47,6 @@ impl OperatorSet {
         self.threshold
     }
 
-    /// Raise the threshold. It cannot be lowered below the two thirds floor for the set
-    /// as it stands: every quorum check already floors what it reads, so a set carrying a
-    /// smaller number was only ever a misleading one.
     pub fn set_threshold(&mut self, threshold: usize) {
         self.threshold = threshold.max(crate::gateway::supermajority_floor(self.pubkeys.len()));
     }
@@ -133,9 +130,6 @@ pub fn verify_quorum(
     set: &OperatorSet,
 ) -> BTreeSet<u32> {
     let mut distinct: BTreeSet<u32> = BTreeSet::new();
-    // Every id is tried at most once, and the whole run is bounded by the operator count.
-    // Keyed on successes alone, a repeated id whose signature fails buys another verify
-    // each time, and this runs under the gateway's write lock.
     let mut attempted: BTreeSet<u32> = BTreeSet::new();
     for s in sigs {
         if attempted.len() >= set.size() {

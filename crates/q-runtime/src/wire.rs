@@ -269,13 +269,8 @@ fn signer_sigs_from(j: &Json) -> Result<Vec<SignerSig>, WireError> {
     Ok(out)
 }
 
-/// A Bitcoin header chain long enough to bury any honest confirmation depth. Anything
-/// longer is a submitter making the verifier work, not a payout proof.
 const MAX_RELEASE_HEADERS: usize = 4096;
-/// A Merkle branch is log2 of the block's transaction count; 64 is far past any real
-/// block and keeps a crafted branch from spinning the hasher.
 const MAX_RELEASE_BRANCH: usize = 64;
-/// Bitcoin's own consensus limit on a serialised transaction.
 const MAX_RELEASE_TX_BYTES: usize = 1_000_000;
 const BITCOIN_HEADER_BYTES: usize = 80;
 
@@ -291,9 +286,6 @@ fn merkle_step_from(j: &Json) -> Result<MerkleStep, WireError> {
     })
 }
 
-/// Decode a submitted Bitcoin release proof. Nothing here trusts the submitter: every
-/// bound is a cost ceiling, and the proof itself is verified against the corridor's
-/// checkpoint when the settle sweep runs.
 pub fn decode_release_proof(body: &Json) -> Result<BitcoinReleaseProof, WireError> {
     let header_items = field(body, "headers")?
         .as_array()
@@ -1890,6 +1882,11 @@ fn gateway_err_json(e: &GatewayError) -> Json {
         GatewayError::WatchdogWithoutClock => {
             tagged("gateway", "watchdog_without_clock", Vec::new())
         }
+        GatewayError::WatchdogExpired { until, now } => tagged(
+            "gateway",
+            "watchdog_expired",
+            vec![("until", Json::Int(*until)), ("now", Json::Int(*now))],
+        ),
         GatewayError::WatchdogCooldown => tagged("gateway", "watchdog_cooldown", Vec::new()),
         GatewayError::NotPaused(c) => {
             tagged("gateway", "not_paused", vec![("source_chain", u32j(*c))])
@@ -1967,6 +1964,10 @@ fn gateway_err_from(j: &Json) -> Result<GatewayError, WireError> {
             now: as_u64(field(j, "now")?, "now")?,
         }),
         "watchdog_without_clock" => Ok(GatewayError::WatchdogWithoutClock),
+        "watchdog_expired" => Ok(GatewayError::WatchdogExpired {
+            until: as_u64(field(j, "until")?, "until")?,
+            now: as_u64(field(j, "now")?, "now")?,
+        }),
         "watchdog_cooldown" => Ok(GatewayError::WatchdogCooldown),
         "insufficient_finality" => Ok(GatewayError::InsufficientFinality {
             got: as_u32(field(j, "got")?, "got")?,

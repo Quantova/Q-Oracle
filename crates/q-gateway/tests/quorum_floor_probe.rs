@@ -34,7 +34,6 @@ fn sign_ctx(op: &Op, message: &[u8], context: &[u8]) -> SignerSig {
     }
 }
 
-// Era bound, like the gateway builds it.
 fn freeze_msg(until: u64, dest: u64) -> Vec<u8> {
     let mut w = Writer::new();
     w.u64(until);
@@ -205,8 +204,6 @@ fn a_threshold_left_below_the_floor_cannot_admit_a_short_quorum() {
         "nine operators need six, or the case below is not short"
     );
 
-    // The set is built with a threshold far under the floor, which is what a
-    // misconfiguration or the unvalidated raw setter would leave behind.
     let mut gw = gateway(1, &ops);
     let until = 10_000u64;
     let msg = freeze_msg(until, DEST_ID);

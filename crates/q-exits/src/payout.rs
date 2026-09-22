@@ -164,9 +164,6 @@ impl BitcoinReleaseProof {
         checkpoint: &Checkpoint,
         confirmation_depth: u32,
     ) -> Result<VerifiedPayout, PayoutProofError> {
-        // One hash before the walk: a run that does not carry the pinned block at the
-        // checkpoint height cannot anchor, so it is refused before thousands of headers
-        // are checked.
         let pinned = checkpoint
             .height
             .checked_sub(self.start_height)

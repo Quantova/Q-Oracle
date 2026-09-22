@@ -106,7 +106,6 @@ fn decode_item(bytes: &[u8], depth: usize) -> Result<(Rlp, usize), RlpError> {
         if end > bytes.len() {
             return Err(RlpError::Truncated);
         }
-        // a single byte below 0x80 encodes as itself, never as a one byte string
         if len == 1 && bytes[1] < 0x80 {
             return Err(RlpError::NonCanonicalLength);
         }
@@ -114,7 +113,6 @@ fn decode_item(bytes: &[u8], depth: usize) -> Result<(Rlp, usize), RlpError> {
     } else if prefix < 0xc0 {
         let of_len = (prefix - 0xb7) as usize;
         let len = read_length(&bytes[1..], of_len)?;
-        // a payload under 56 bytes uses the short form
         if len < 56 {
             return Err(RlpError::NonCanonicalLength);
         }
@@ -136,7 +134,6 @@ fn decode_item(bytes: &[u8], depth: usize) -> Result<(Rlp, usize), RlpError> {
     } else {
         let of_len = (prefix - 0xf7) as usize;
         let len = read_length(&bytes[1..], of_len)?;
-        // a list body under 56 bytes uses the short form
         if len < 56 {
             return Err(RlpError::NonCanonicalLength);
         }

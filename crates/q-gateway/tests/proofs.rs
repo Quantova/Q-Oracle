@@ -339,7 +339,6 @@ fn a_quorum_resume_lifts_a_reorg_pause_and_nothing_older_can() {
     let mut gw = build_gateway(&ops, 3, 1_000_000);
     pause_at(&mut gw, &ops, 100);
 
-    // Signed for a height before the pause: it cannot have been meant for this pause.
     assert!(matches!(
         gw.resume_source(SOURCE_BTC, 90, &resume_sigs(&ops, 90)),
         Err(GatewayError::ResumeOutOfWindow { .. })
@@ -349,7 +348,6 @@ fn a_quorum_resume_lifts_a_reorg_pause_and_nothing_older_can() {
         .expect("a quorum resumes");
     assert!(!gw.is_source_paused(SOURCE_BTC));
 
-    // Paused again: the resume that lifted the first pause does not lift this one.
     pause_at(&mut gw, &ops, 150);
     assert!(matches!(
         gw.resume_source(SOURCE_BTC, 101, &fresh),
@@ -357,7 +355,6 @@ fn a_quorum_resume_lifts_a_reorg_pause_and_nothing_older_can() {
     ));
     assert!(gw.is_source_paused(SOURCE_BTC));
 
-    // Nor does a resume long since signed.
     let later = resume_sigs(&ops, 150);
     gw.advance_to(150 + q_gateway::gateway::RESUME_WINDOW + 1);
     assert!(matches!(
@@ -365,7 +362,6 @@ fn a_quorum_resume_lifts_a_reorg_pause_and_nothing_older_can() {
         Err(GatewayError::ResumeOutOfWindow { .. })
     ));
 
-    // Two operators are not a quorum.
     let now = gw.current_height();
     let short: Vec<SignerSig> = resume_sigs(&ops, now).into_iter().take(2).collect();
     assert!(matches!(

@@ -56,8 +56,6 @@ fn escrow_overflow_is_refused_not_wrapped() {
     gw.advance_to(10_000);
     gw.set_escrow(ASSET, u128::MAX);
     assert!(admit(&mut gw, 1, u128::MAX).is_ok());
-    // Refused, and the minted total is untouched. Which guard speaks first does not
-    // matter; what matters is that the addition never wraps to a small number.
     assert!(admit(&mut gw, 2, 1).is_err());
     assert_eq!(gw.minted_of_asset(&ASSET), u128::MAX);
 }

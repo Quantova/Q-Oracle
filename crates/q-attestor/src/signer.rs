@@ -37,7 +37,6 @@ impl ZeroizingSecretKey {
         ZeroizingSecretKey { bytes }
     }
 
-    // derives into place so the key is never carried back by value
     fn derive(seed: &[u8; SEED_BYTES]) -> (PublicKey, ZeroizingSecretKey) {
         let mut held = ZeroizingSecretKey {
             bytes: [0u8; ml_dsa::SECRET_KEY_BYTES],

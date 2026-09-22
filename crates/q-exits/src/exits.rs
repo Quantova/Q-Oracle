@@ -58,10 +58,7 @@ pub struct DeskConfig {
     pub secure_bps: u32,
     pub premium_bps: u32,
     pub window: u64,
-    // The assets this desk's vault actually backs. A desk that serves none serves every
-    // asset, which is how a burn of unrelated paper reaches a corridor's collateral.
     pub assets: Vec<[u8; 16]>,
-    // The most one exit may draw, so a single burn cannot reach the whole vault.
     pub max_amount: u128,
 }
 
@@ -290,8 +287,6 @@ impl ExitDesk {
         self.exits.len()
     }
 
-    /// Exits still inside their window, in the order they were opened. The settle sweep
-    /// walks these; anything left when the deadline passes falls to `slashable`.
     pub fn settleable(&self, now: u64) -> Vec<ExitId> {
         self.exits
             .iter()
@@ -323,10 +318,6 @@ impl ExitDesk {
                 expected: self.cfg.dest_chain,
             });
         }
-        // A desk backs one corridor's assets. Without this any bridged asset draws on
-        // this vault, and the dest_chain gate above is a constant against a constant.
-        // A desk backs one corridor's assets. Without this any bridged asset draws on
-        // this vault, and the dest_chain gate above is a constant against a constant.
         if !self.cfg.serves(&burn.asset_id) {
             return Err(ExitError::UnservedAsset { got: burn.asset_id });
         }
@@ -453,10 +444,6 @@ impl ExitDesk {
         let holder = exit.statement.holder;
         let locked = exit.locked;
         let amount = exit.statement.amount;
-        // The chain's own slash restores the burned tokens to this holder, so paying a
-        // premium here as well pays for one failed exit twice and breaks conservation the
-        // moment the settlement leg is wired. The seized collateral is the penalty against
-        // the defaulting operator, not a second payment to a holder already made whole.
         let _ = self.user_premium(amount)?;
         let user_payout = 0u128;
         let remainder = locked;

@@ -10,16 +10,10 @@ use q_exits::RpcBurnSource;
 
 use crate::http::SharedState;
 
-/// Where the Quantova node answers `finalized_head`, as `host:port`. Every height relative
-/// control in the gateway, the watchdog window, freeze expiry and fact expiry, is measured
-/// against the height this feeds in; without it the clock stands at zero for good.
 pub const CHAIN_RPC_ENV: &str = "Q_ORACLE_CHAIN_RPC";
 
 const CLOCK_POLL: Duration = Duration::from_secs(5);
 const CLOCK_SLICE: Duration = Duration::from_millis(100);
-// A node that reports a height far past what real time allows is not believed at once:
-// the clock moves at most this fast, so a lying endpoint cannot lift every freeze and
-// expire every fact in one answer. An honest chain far ahead is caught up over time.
 const MAX_BLOCKS_PER_SEC: u64 = 4;
 const CLOCK_SLACK_SECS: u64 = 60;
 const MIN_EPOCH_GAP: Duration = Duration::from_secs(6 * 60 * 60);
@@ -47,7 +41,6 @@ pub fn parse_chain_rpc(raw: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-/// The height the clock may move to, given the last height it accepted and how long ago.
 pub fn bounded_head(last: Option<(u64, Duration)>, reported: u64) -> u64 {
     match last {
         None => reported,

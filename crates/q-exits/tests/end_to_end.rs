@@ -183,7 +183,6 @@ fn proof_of_asset(
     }
 }
 
-// A desk backs one corridor. A burn of unrelated paper must not reach its collateral.
 #[test]
 fn a_burn_of_an_unserved_asset_cannot_lock_the_corridor_vault() {
     let members = attesters();
@@ -503,8 +502,6 @@ fn the_window_elapsing_then_slash_leaves_the_holder_to_the_chain_re_mint() {
         .unwrap();
 
     let outcome = desk.slash(id, 200).unwrap();
-    // The chain's own slash restores the burned tokens to this holder. Paying collateral
-    // here as well would make a failed exit profitable, which is an incentive to fail one.
     assert_eq!(
         outcome.user_payout, 0,
         "the desk pays a holder the chain has already made whole"
@@ -763,9 +760,6 @@ fn the_settle_sweep_order_takes_an_exit_off_the_slash_list() {
         &BURN_REF,
     )));
 
-    // What the daemon loop does: settle first, then slash. Without the settle pass this
-    // exit reaches its deadline pending and is slashed, which burns the user's funds on
-    // this side with the payout already made on the far side.
     for pending in desk.settleable(60) {
         desk.settle(pending, &watcher, 60).unwrap();
     }

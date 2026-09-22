@@ -58,10 +58,6 @@ impl OutboundEnvelope {
     }
 }
 
-/// The era MUST be the corridor's, not a literal zero. Signed under a zero era this
-/// either separates nothing, when the deployment leaves the era unset, or fails every
-/// verification with `below_threshold` once a real era is configured, which reads as a
-/// quorum problem rather than a context mismatch.
 pub fn attest<S: AttestationSigner>(
     fact: &BridgeFact,
     signer: &S,
