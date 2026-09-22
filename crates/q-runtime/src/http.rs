@@ -761,9 +761,11 @@ fn reason(code: u16) -> &'static str {
         202 => "Accepted",
         204 => "No Content",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         408 => "Request Timeout",
+        409 => "Conflict",
         413 => "Payload Too Large",
         429 => "Too Many Requests",
         431 => "Request Header Fields Too Large",
@@ -776,6 +778,18 @@ fn reason(code: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_status_the_oracle_sends_carries_its_own_reason() {
+        for code in [
+            200u16, 202, 204, 400, 403, 404, 405, 408, 409, 413, 429, 431, 500, 503,
+        ] {
+            assert!(
+                code == 200 || reason(code) != "OK",
+                "status {code} was sent as OK"
+            );
+        }
+    }
 
     const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use q_gateway::{Gateway, OperatorSet};

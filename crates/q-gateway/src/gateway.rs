@@ -203,6 +203,7 @@ impl Gateway {
     pub fn set_corridor_active(&mut self, source_chain: u32, active: bool) {
         if let Some(c) = self.corridors.get_mut(&source_chain) {
             c.active = active;
+            self.touch_guard();
         }
     }
 
@@ -220,6 +221,7 @@ impl Gateway {
             .get_mut(&source_chain)
             .ok_or(GatewayError::CorridorNotOpen(source_chain))?;
         corridor.quorum = quorum;
+        self.touch_guard();
         Ok(())
     }
 
@@ -600,6 +602,7 @@ impl Gateway {
             });
         }
         corridor.tier = proposed;
+        self.touch_guard();
         Ok(())
     }
 
@@ -1723,6 +1726,30 @@ mod tests {
         gw.register_corridor(7, 6);
         assert_eq!(gw.admit_trustless([0xa1; 16], [0x01; 32], 100, 7), Ok(()));
         assert_eq!(gw.minted_of_asset(&[0xa1; 16]), 100);
+    }
+
+    #[test]
+    fn a_corridor_setting_change_marks_the_guard_for_persistence() {
+        let s: Vec<_> = (0..5).map(signer).collect();
+        let mut set = OperatorSet::new(5);
+        for (id, pk, _) in &s {
+            set.register(*id, *pk);
+        }
+        let mut gw = Gateway::new(9000, DEST_ID, set, 1_000_000);
+        gw.register_corridor(1, 6);
+        let before = gw.guard_revision();
+        gw.set_corridor_quorum(1, 4).expect("a two thirds quorum");
+        assert_ne!(gw.guard_revision(), before, "a quorum change is persisted");
+        let before = gw.guard_revision();
+        gw.set_corridor_active(1, false);
+        assert_ne!(gw.guard_revision(), before, "a deactivation is persisted");
+        let mut restored = Gateway::new(9000, DEST_ID, OperatorSet::new(5), 1_000_000);
+        restored.register_corridor(1, 6);
+        restored.rehydrate_guard(&gw.encode_guard()).unwrap();
+        assert_eq!(
+            restored.admit_trustless([0xa1; 16], [0x01; 32], 1, 1),
+            Err(GatewayError::CorridorInactive(1))
+        );
     }
 
     #[test]

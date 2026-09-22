@@ -291,9 +291,10 @@ impl Parser {
             self.next();
         }
         let text: String = self.chars[start..self.pos].iter().collect();
+        let shown: String = text.chars().take(32).collect();
         text.parse::<u64>()
             .map(Json::Int)
-            .map_err(|_| format!("'{text}' is not a whole number the wire accepts"))
+            .map_err(|_| format!("'{shown}' is not a whole number the wire accepts"))
     }
 
     fn boolean(&mut self) -> Result<Json, String> {
@@ -363,6 +364,13 @@ fn hex_nibble(c: u8) -> Result<u8, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_oversized_number_is_not_echoed_back_whole() {
+        let digits = "9".repeat(100_000);
+        let err = parse(&digits).expect_err("the number overflows");
+        assert!(err.len() < 200, "the refusal echoed {} bytes", err.len());
+    }
 
     #[test]
     fn deeply_nested_json_is_refused_rather_than_overflowing_the_stack() {
