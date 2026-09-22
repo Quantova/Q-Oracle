@@ -1734,6 +1734,7 @@ mod tests {
         };
         let deposit = EthDepositProof {
             ancestry: Vec::new(),
+            historical_branch: Vec::new(),
             receipt_index: 3,
             log_index: 0,
             receipt_proof,

@@ -482,6 +482,7 @@ fn encode_proof(proof: &DepositProof) -> Json {
                 "ancestry",
                 Json::Array(deposit.ancestry.iter().map(header_json).collect()),
             ),
+            ("historical_branch", roots_json(&deposit.historical_branch)),
             ("fact", hexs(&fact.encode())),
         ]),
         DepositProof::Cosmos {
@@ -669,6 +670,10 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                     .map_err(|_| WireError::BadField("log_index"))?,
                 receipt_proof,
                 ancestry,
+                historical_branch: match j.get("historical_branch") {
+                    None => Vec::new(),
+                    Some(branch) => roots_from(branch, "historical_branch", MAX_BRANCH)?,
+                },
             };
             Ok(DepositProof::Ethereum {
                 update,
@@ -2264,6 +2269,7 @@ mod tests {
         };
         let deposit = EthDepositProof {
             ancestry: Vec::new(),
+            historical_branch: Vec::new(),
             receipt_index: 3,
             log_index: 0,
             receipt_proof: vec![vec![0x01, 0x02], vec![0x03, 0x04, 0x05]],
