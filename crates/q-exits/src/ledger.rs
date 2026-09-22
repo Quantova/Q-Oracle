@@ -152,7 +152,10 @@ impl ReplayLedger for PersistentLedger {
         if self.released.len() >= MAX_LEDGER_ENTRIES as usize {
             return Err(ExitError::LedgerFull);
         }
-        match self.store.append(&frame_of(&burn_ref)) {
+        match self
+            .store
+            .append_frame(&frame_of(&burn_ref), HEADER_LEN as u64)
+        {
             Ok(()) => {
                 self.released.insert(burn_ref);
                 Ok(())
@@ -271,6 +274,23 @@ mod tests {
             PersistentLedger::open(ReplayStore::new(path.clone())).err(),
             Some(ExitError::PersistFailed)
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_record_after_a_torn_write_keeps_every_later_frame_aligned() {
+        let path = temp_path("tornrecord");
+        let mut ledger = PersistentLedger::open(ReplayStore::new(path.clone())).unwrap();
+        ledger.record([0x01; 32]).unwrap();
+        let mut raw = std::fs::read(&path).unwrap();
+        raw.extend_from_slice(&[0xab; 20]);
+        std::fs::write(&path, &raw).unwrap();
+        ledger.record([0x02; 32]).unwrap();
+        drop(ledger);
+        let reopened = PersistentLedger::open(ReplayStore::new(path.clone()))
+            .expect("a torn write never misaligns the frames recorded after it");
+        assert!(reopened.is_released(&[0x01; 32]));
+        assert!(reopened.is_released(&[0x02; 32]));
         std::fs::remove_file(&path).ok();
     }
 

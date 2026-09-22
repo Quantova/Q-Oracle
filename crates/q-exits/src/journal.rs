@@ -233,7 +233,7 @@ impl ExitJournal for PersistentJournal {
         if self.events.len() >= MAX_JOURNAL_ENTRIES as usize {
             return Err(ExitError::LedgerFull);
         }
-        match self.store.append(&frame_of(event)) {
+        match self.store.append_frame(&frame_of(event), HEADER_LEN as u64) {
             Ok(()) => {
                 self.events.push(event.clone());
                 Ok(())
@@ -361,6 +361,27 @@ mod tests {
             HEADER_LEN + 2 * FRAME_LEN,
             "open compacts the torn tail away"
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn an_append_after_a_torn_write_keeps_every_later_frame_aligned() {
+        let path = temp_path("tornappend");
+        let mut j = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+        j.append(&ExitEvent::Open {
+            index: 0,
+            exit: an_exit(),
+        })
+        .unwrap();
+        let mut raw = std::fs::read(&path).unwrap();
+        raw.extend_from_slice(&[0xab; 40]);
+        std::fs::write(&path, &raw).unwrap();
+        j.append(&ExitEvent::Slash { index: 0 }).unwrap();
+        drop(j);
+        let reopened = PersistentJournal::open(ReplayStore::new(path.clone()))
+            .expect("a torn write never misaligns the frames appended after it");
+        assert_eq!(reopened.len(), 2);
+        assert_eq!(reopened.events()[1], ExitEvent::Slash { index: 0 });
         std::fs::remove_file(&path).ok();
     }
 

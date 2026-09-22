@@ -55,6 +55,25 @@ impl ReplayStore {
         file.sync_all()?;
         Ok(())
     }
+
+    pub fn append_frame(&self, frame: &[u8], header_len: u64) -> io::Result<()> {
+        let mut file = fs::OpenOptions::new().append(true).open(&self.path)?;
+        let len = file.metadata()?.len();
+        let step = frame.len() as u64;
+        if len < header_len || step == 0 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "the record file is shorter than its header",
+            ));
+        }
+        let whole = header_len + (len - header_len) / step * step;
+        if whole != len {
+            file.set_len(whole)?;
+        }
+        file.write_all(frame)?;
+        file.sync_all()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

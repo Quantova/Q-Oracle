@@ -181,7 +181,7 @@ pub fn decode_finalized_block(body: &str) -> Result<FinalizedBlock, BurnWatchErr
         .unwrap_or(false)
     {
         return Err(BurnWatchError::Rpc(
-            "burn_block truncated its event array, so an inclusion proof cannot be built              against the header event root"
+            "burn_block truncated its event array, so an inclusion proof cannot be built against the header event root"
                 .to_string(),
         ));
     }

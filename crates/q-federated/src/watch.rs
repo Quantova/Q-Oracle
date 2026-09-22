@@ -1,6 +1,8 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::collections::BTreeMap;
+
 use q_attestor::{Aggregator, AttestationSigner, Operator, WatcherSet};
 use q_gateway::{Gateway, MintReceipt};
 
@@ -37,24 +39,30 @@ pub fn watch_and_admit<S: AttestationSigner>(
     sources: &SourceRegistry,
     threshold: usize,
     feeds: &mut [OperatorFeed<S>],
-) -> Result<MintReceipt, WatchError> {
-    let mut agg = Aggregator::new(threshold);
+) -> Vec<Result<MintReceipt, WatchError>> {
+    let mut groups: BTreeMap<[u8; 32], Aggregator> = BTreeMap::new();
     let dest_height = gateway.current_height();
     for feed in feeds.iter_mut() {
         let locks = feed.watchers.poll(corridor.chain_id).unwrap_or_default();
         for lock in locks {
             if let Ok(signed) = feed.operator.observe_and_sign(&lock, dest_height) {
-                let _ = agg.add(&signed.fact, signed.sig);
+                let _ = groups
+                    .entry(lock.source_ref)
+                    .or_insert_with(|| Aggregator::new(threshold))
+                    .add(&signed.fact, signed.sig);
             }
         }
     }
-    match agg.try_finalize() {
-        Some(envelope) => Ok(admit(gateway, corridor, sources, &envelope)?),
-        None => Err(WatchError::NoQuorumObserved {
-            distinct: agg.distinct(),
-            threshold,
-        }),
-    }
+    groups
+        .into_values()
+        .map(|agg| match agg.try_finalize() {
+            Some(envelope) => Ok(admit(gateway, corridor, sources, &envelope)?),
+            None => Err(WatchError::NoQuorumObserved {
+                distinct: agg.distinct(),
+                threshold,
+            }),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -175,9 +183,36 @@ mod tests {
             .collect();
 
         let receipt = watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds)
+            .remove(0)
             .expect("three independent watchers reach quorum and mint");
         assert_eq!(receipt.amount, 500);
         assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 500);
+    }
+
+    #[test]
+    fn every_deposit_seen_in_one_poll_reaches_its_own_quorum() {
+        let c = find(BNB_CHAIN).unwrap();
+        let ids = [0u32, 1, 2];
+        let mut gw = gateway(&ids, 3);
+        let sources = independent_sources(BNB_CHAIN, &ids);
+        let mut feeds: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                let mut feed = feed_for(*id, &c, [0x84; 32], 500);
+                let mut set = WatcherSet::new();
+                set.attach(Box::new(NodeView {
+                    chain: c.chain_id,
+                    locks: vec![lock_for(&c, [0x84; 32], 500), lock_for(&c, [0x85; 32], 700)],
+                }));
+                feed.watchers = set;
+                feed
+            })
+            .collect();
+
+        let results = watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.is_ok()), "{results:?}");
+        assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 1_200);
     }
 
     #[test]
@@ -192,7 +227,7 @@ mod tests {
             .collect();
 
         assert_eq!(
-            watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds),
+            watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds).remove(0),
             Err(WatchError::NoQuorumObserved {
                 distinct: 2,
                 threshold: 3
@@ -216,7 +251,7 @@ mod tests {
             .collect();
 
         assert_eq!(
-            watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds),
+            watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds).remove(0),
             Err(WatchError::Admission(FederatedError::CorrelatedSources {
                 independent: 2,
                 signers: 3

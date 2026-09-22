@@ -123,6 +123,7 @@ fn a_distinct_signer_quorum_watching_its_own_rpc_source_mints_for_each_new_corri
             .collect();
 
         let receipt = watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds)
+            .remove(0)
             .unwrap_or_else(|e| panic!("{} watchers reach quorum and mint, got {:?}", c.name, e));
         assert_eq!(receipt.amount, 500);
         assert_eq!(gw.minted_of_asset(&c.origin_asset.0), 500);
@@ -143,7 +144,7 @@ fn a_sub_quorum_of_watchers_never_mints_for_each_new_corridor() {
             .collect();
 
         assert_eq!(
-            watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds),
+            watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds).remove(0),
             Err(WatchError::NoQuorumObserved {
                 distinct: 2,
                 threshold: 3
@@ -171,7 +172,7 @@ fn a_correlated_rpc_source_quorum_is_refused_through_the_live_path_for_each_new_
             .collect();
 
         assert_eq!(
-            watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds),
+            watch_and_admit(&mut gw, &c, &sources, 3, &mut feeds).remove(0),
             Err(WatchError::Admission(FederatedError::CorrelatedSources {
                 independent: 2,
                 signers: 3
