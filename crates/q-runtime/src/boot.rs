@@ -475,6 +475,9 @@ pub fn boot_from_config(
             .parse()
             .map_err(|_| BootConfigError::Malformed("operator id"))?;
         let key = decode_hex(key).ok_or(BootConfigError::Malformed("operator key"))?;
+        if operators.iter().any(|(seen, _)| *seen == id) {
+            return Err(BootConfigError::Malformed("duplicate operator id"));
+        }
         operators.push((id, key));
     }
     if operators.is_empty() {
@@ -533,6 +536,15 @@ fn decode_hex(input: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod boot_config_tests {
     use super::*;
+
+    #[test]
+    fn an_operator_id_listed_twice_is_refused() {
+        let raw = format!("1:{},1:{},2:{}", key(0xa1), key(0xb2), key(0xc3));
+        assert!(matches!(
+            boot_from_config(Some(&raw), Some("3"), Some("1"), Some(&"11".repeat(32))),
+            Err(BootConfigError::Malformed("duplicate operator id"))
+        ));
+    }
 
     #[test]
     fn hex_with_a_multibyte_character_is_refused_without_a_panic() {
