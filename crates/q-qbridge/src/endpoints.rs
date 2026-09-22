@@ -107,6 +107,13 @@ pub struct ReportReorgRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeSourceRequest {
+    pub source_chain: u32,
+    pub at_height: u64,
+    pub signatures: Vec<SignerSig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmergencyFreezeRequest {
     pub until_height: u64,
     pub signatures: Vec<SignerSig>,
@@ -127,6 +134,7 @@ pub enum Request {
     SubmitDeposit(DepositRequest),
     DepositStatus(DepositStatusRequest),
     ReportReorg(ReportReorgRequest),
+    ResumeSource(ResumeSourceRequest),
     EmergencyFreeze(EmergencyFreezeRequest),
     WatchdogFreeze(WatchdogFreezeRequest),
 }
@@ -201,8 +209,32 @@ pub enum Response {
     DepositAdmitted(DepositOutcome),
     Status(DepositStatusView),
     SourcePaused { source_chain: u32, fork_depth: u32 },
+    SourceResumed { source_chain: u32 },
     Frozen { until_height: u64 },
     Error(ApiError),
+}
+
+/// The signature checks a quorum request needs, run read only. Nothing is changed; a
+/// request that fails here never reaches the write path.
+pub fn precheck(state: &BridgeState, request: &Request) -> Result<(), ApiError> {
+    let checked = match request {
+        Request::ReportReorg(r) => {
+            state
+                .gateway
+                .precheck_reorg(r.source_chain, r.fork_depth, &r.signatures)
+        }
+        Request::ResumeSource(r) => {
+            state
+                .gateway
+                .precheck_resume(r.source_chain, r.at_height, &r.signatures)
+        }
+        Request::EmergencyFreeze(r) => state.gateway.precheck_freeze(r.until_height, &r.signatures),
+        Request::WatchdogFreeze(r) => state
+            .gateway
+            .precheck_watchdog(r.until_height, &r.signature),
+        _ => Ok(()),
+    };
+    checked.map_err(ApiError::Gateway)
 }
 
 pub struct BridgeState {
@@ -300,6 +332,19 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
                 Ok(()) => Response::SourcePaused {
                     source_chain: request.source_chain,
                     fork_depth: request.fork_depth,
+                },
+                Err(err) => Response::Error(ApiError::Gateway(err)),
+            }
+        }
+        // Quorum gated inside resume_source.
+        Request::ResumeSource(request) => {
+            match state.gateway.resume_source(
+                request.source_chain,
+                request.at_height,
+                &request.signatures,
+            ) {
+                Ok(()) => Response::SourceResumed {
+                    source_chain: request.source_chain,
                 },
                 Err(err) => Response::Error(ApiError::Gateway(err)),
             }
@@ -1186,7 +1231,7 @@ mod tests {
         let source = Network::Ethereum.id();
         state.gateway.register_corridor(source, 6);
 
-        let message = q_gateway::reorg_message(source, 9, DEST_ID);
+        let message = q_gateway::reorg_message(source, 9, DEST_ID, &[0u8; 32]);
         let sign = |op: &Op| SignerSig {
             operator_id: op.id,
             signature: ml_dsa::sign(&op.sk, &message, q_gateway::REORG_DOMAIN, &[0u8; 32])
@@ -1238,6 +1283,8 @@ mod tests {
             set.register(op.id, op.pk);
         }
         let mut state = BridgeState::new(Gateway::new(DEST, DEST_ID, set, 1_000_000_000_000));
+        // A watchdog freeze is measured against a live clock, so give it one.
+        state.gateway.advance_to(10);
 
         let until = 100u64;
         let message = q_gateway::freeze_message(until, DEST_ID);

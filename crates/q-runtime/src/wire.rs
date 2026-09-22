@@ -12,7 +12,8 @@ use q_gateway::{GatewayError, MintReceipt};
 use q_qbridge::{
     ApiError, BitcoinProofMaterial, DepositOutcome, DepositProof, DepositRequest,
     DepositStatusRequest, DepositStatusView, EmergencyFreezeRequest, GetPoolRequest,
-    ListPoolsRequest, PoolView, ReportReorgRequest, Request, Response, WatchdogFreezeRequest,
+    ListPoolsRequest, PoolView, ReportReorgRequest, Request, Response, ResumeSourceRequest,
+    WatchdogFreezeRequest,
 };
 use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
 use qlc_cosmos::commit::{BlockIdFlag, Commit, CommitError, CommitSig, Header};
@@ -188,6 +189,7 @@ pub fn method_of(req: &Request) -> &'static str {
         Request::SubmitDeposit(_) => "submit_deposit",
         Request::DepositStatus(_) => "deposit_status",
         Request::ReportReorg(_) => "report_reorg",
+        Request::ResumeSource(_) => "resume_source",
         Request::EmergencyFreeze(_) => "emergency_freeze",
         Request::WatchdogFreeze(_) => "watchdog_freeze",
     }
@@ -218,6 +220,11 @@ pub fn encode_request(req: &Request) -> Json {
         Request::ReportReorg(r) => object(vec![
             ("source_chain", u32j(r.source_chain)),
             ("fork_depth", u32j(r.fork_depth)),
+            ("signatures", signer_sigs_json(&r.signatures)),
+        ]),
+        Request::ResumeSource(r) => object(vec![
+            ("source_chain", u32j(r.source_chain)),
+            ("at_height", Json::Int(r.at_height)),
             ("signatures", signer_sigs_json(&r.signatures)),
         ]),
         Request::EmergencyFreeze(r) => object(vec![
@@ -346,6 +353,11 @@ pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
         "report_reorg" => Ok(Request::ReportReorg(ReportReorgRequest {
             source_chain: as_u32(field(body, "source_chain")?, "source_chain")?,
             fork_depth: as_u32(field(body, "fork_depth")?, "fork_depth")?,
+            signatures: signer_sigs_from(field(body, "signatures")?)?,
+        })),
+        "resume_source" => Ok(Request::ResumeSource(ResumeSourceRequest {
+            source_chain: as_u32(field(body, "source_chain")?, "source_chain")?,
+            at_height: as_u64(field(body, "at_height")?, "at_height")?,
             signatures: signer_sigs_from(field(body, "signatures")?)?,
         })),
         "emergency_freeze" => Ok(Request::EmergencyFreeze(EmergencyFreezeRequest {
@@ -943,6 +955,10 @@ pub fn encode_response(resp: &Response) -> Json {
             ("source_chain", u32j(*source_chain)),
             ("fork_depth", u32j(*fork_depth)),
         ]),
+        Response::SourceResumed { source_chain } => object(vec![
+            ("result", Json::str("source_resumed")),
+            ("source_chain", u32j(*source_chain)),
+        ]),
         Response::DepositAdmitted(outcome) => object(vec![
             ("result", Json::str("deposit_admitted")),
             ("outcome", outcome_json(outcome)),
@@ -991,6 +1007,9 @@ pub fn decode_response(j: &Json) -> Result<Response, WireError> {
         "source_paused" => Ok(Response::SourcePaused {
             source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
             fork_depth: as_u32(field(j, "fork_depth")?, "fork_depth")?,
+        }),
+        "source_resumed" => Ok(Response::SourceResumed {
+            source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
         }),
         "status" => Ok(Response::Status(DepositStatusView {
             source_ref: hex_array::<32>(field(j, "source_ref")?, "source_ref")?,
@@ -1773,6 +1792,14 @@ fn gateway_err_json(e: &GatewayError) -> Json {
         GatewayError::WatchdogWithoutClock => {
             tagged("gateway", "watchdog_without_clock", Vec::new())
         }
+        GatewayError::NotPaused(c) => {
+            tagged("gateway", "not_paused", vec![("source_chain", u32j(*c))])
+        }
+        GatewayError::ResumeOutOfWindow { at, now } => tagged(
+            "gateway",
+            "resume_out_of_window",
+            vec![("at", Json::Int(*at)), ("now", Json::Int(*now))],
+        ),
         GatewayError::StaleBatch { got, expected } => tagged(
             "gateway",
             "stale_batch",
@@ -1832,6 +1859,15 @@ fn gateway_err_from(j: &Json) -> Result<GatewayError, WireError> {
             field(j, "source_chain")?,
             "source_chain",
         )?)),
+        "not_paused" => Ok(GatewayError::NotPaused(as_u32(
+            field(j, "source_chain")?,
+            "source_chain",
+        )?)),
+        "resume_out_of_window" => Ok(GatewayError::ResumeOutOfWindow {
+            at: as_u64(field(j, "at")?, "at")?,
+            now: as_u64(field(j, "now")?, "now")?,
+        }),
+        "watchdog_without_clock" => Ok(GatewayError::WatchdogWithoutClock),
         "insufficient_finality" => Ok(GatewayError::InsufficientFinality {
             got: as_u32(field(j, "got")?, "got")?,
             need: as_u32(field(j, "need")?, "need")?,

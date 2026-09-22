@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::SignerSig;
-use q_codec::Writer;
 use q_gateway::gateway::TIER_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -27,11 +26,7 @@ fn mk(id: u32, salt: u8) -> Signer {
 }
 
 fn tier_message(source: u32, proposed: u8) -> Vec<u8> {
-    let mut w = Writer::new();
-    w.u32(source);
-    w.u8(proposed);
-    w.u64(DEST_ID);
-    w.finish()
+    q_gateway::gateway::tier_message(source, proposed, DEST_ID, &[0u8; 32])
 }
 
 fn sign_tier(op: &Signer, source: u32, proposed: u8) -> SignerSig {

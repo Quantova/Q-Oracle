@@ -171,10 +171,24 @@ impl VerifiedChain {
         if header.block_hash() != checkpoint.hash {
             return Err(SpvError::CheckpointMismatch);
         }
-        if self.work < checkpoint.min_work {
+        // Only the work built after the checkpoint measures a fork from it. Headers before
+        // it are public history anyone can prepend, so counting them lets a short private
+        // fork meet any floor.
+        if self.work_above(checkpoint.height) < checkpoint.min_work {
             return Err(SpvError::InsufficientWork);
         }
         Ok(())
+    }
+
+    pub fn work_above(&self, height: u32) -> U256 {
+        let mut work = U256::ZERO;
+        for (i, header) in self.headers.iter().enumerate() {
+            let at = self.start_height.saturating_add(i as u32);
+            if at > height {
+                work = work.wrapping_add(&block_work(header.bits));
+            }
+        }
+        work
     }
 
     pub fn header_at(&self, height: u32) -> Option<&BlockHeader> {

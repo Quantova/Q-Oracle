@@ -5,6 +5,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 pub mod boot;
+pub mod clock;
 pub mod exits;
 pub mod http;
 pub mod json;

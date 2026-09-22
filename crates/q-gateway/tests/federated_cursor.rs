@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_airlock::SignerSig;
-use q_codec::Writer;
 use q_gateway::gateway::BATCH_DOMAIN;
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey};
@@ -27,11 +26,7 @@ fn mk(id: u32) -> Op {
 }
 
 fn batch_message(source: u32, index: u64) -> Vec<u8> {
-    let mut w = Writer::new();
-    w.u32(source);
-    w.u64(index);
-    w.u64(DEST_ID);
-    w.finish()
+    q_gateway::gateway::batch_message(source, index, DEST_ID, &[0u8; 32])
 }
 
 fn sign_batch(op: &Op, source: u32, index: u64) -> SignerSig {

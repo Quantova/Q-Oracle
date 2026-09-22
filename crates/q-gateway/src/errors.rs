@@ -53,6 +53,11 @@ pub enum GatewayError {
         max: u64,
     },
     WatchdogWithoutClock,
+    NotPaused(u32),
+    ResumeOutOfWindow {
+        at: u64,
+        now: u64,
+    },
     EscrowExceeded {
         minted: u128,
         escrowed: u128,

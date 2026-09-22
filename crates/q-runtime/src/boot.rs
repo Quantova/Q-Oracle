@@ -17,11 +17,14 @@ use q_exits::{
 use q_federated::SourceEndpoint;
 use q_gateway::{Gateway, OperatorSet};
 use q_qbridge::BridgeState;
-use qlc_bitcoin::{Checkpoint, NetworkParams, U256};
+use qlc_bitcoin::{double_sha256, Checkpoint, NetworkParams, U256};
 
 use crate::exits::{load_exit_config, ExitConfigError, ExitTrustConfig};
 use crate::http::{serve, SharedState};
 use crate::persist::GuardStore;
+
+/// Set to 1 on the first boot only, when there is genuinely no snapshot yet.
+pub const INIT_SNAPSHOT_ENV: &str = "Q_ORACLE_INIT_SNAPSHOT";
 
 /// The only corridor with a working payout verifier. q_assets::Network::Bitcoin.
 const BITCOIN_CORRIDOR: u32 = 43;
@@ -74,27 +77,51 @@ pub struct SettleInputs {
 /// Release proofs cross from the RPC thread to the exit thread through this.
 pub type ReleaseQueue = Arc<Mutex<Vec<BitcoinReleaseProof>>>;
 
-/// One exit desk per process, so one queue. Set when the exit service is built; absent
+/// What a submitted proof is checked against before it is held: the corridor's network,
+/// its pinned checkpoint and the depth a payout must be buried under.
+pub struct ReleaseGate {
+    queue: ReleaseQueue,
+    params: NetworkParams,
+    checkpoint: Checkpoint,
+    confirmation_depth: u32,
+}
+
+/// One exit desk per process, so one gate. Set when the exit service is built; absent
 /// means exits are not running and a submitted proof has nowhere to go.
-static RELEASE_QUEUE: OnceLock<ReleaseQueue> = OnceLock::new();
+static RELEASE_GATE: OnceLock<ReleaseGate> = OnceLock::new();
 
-pub fn release_queue() -> &'static ReleaseQueue {
-    RELEASE_QUEUE.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+pub fn release_gate_if_running() -> Option<&'static ReleaseGate> {
+    RELEASE_GATE.get()
 }
 
-pub fn release_queue_if_running() -> Option<&'static ReleaseQueue> {
-    RELEASE_QUEUE.get()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseRefusal {
+    Unproven,
+    AlreadyHeld,
 }
 
-/// Accept a submitted release proof. Verification is not done here: the proof is checked
-/// against the checkpoint when the sweep runs, and an unprovable one simply never settles
-/// anything. The only thing enforced at the door is the queue bound.
-pub fn submit_release(queue: &ReleaseQueue, proof: BitcoinReleaseProof) {
-    let mut held = queue.lock().unwrap_or_else(|e| e.into_inner());
+/// Accept a submitted release proof only if it proves a payout against the checkpoint.
+/// Anything else is refused at the door, so a flood of junk cannot push a vault's real
+/// proof out of the queue before the sweep reaches it.
+pub fn submit_release(
+    gate: &ReleaseGate,
+    proof: BitcoinReleaseProof,
+) -> Result<(), ReleaseRefusal> {
+    let proven = proof
+        .verify(&gate.params, &gate.checkpoint, gate.confirmation_depth)
+        .map_err(|_| ReleaseRefusal::Unproven)?;
+    let mut held = gate.queue.lock().unwrap_or_else(|e| e.into_inner());
+    if held
+        .iter()
+        .any(|p| double_sha256(&p.raw_tx) == proven.foreign_ref)
+    {
+        return Err(ReleaseRefusal::AlreadyHeld);
+    }
     if held.len() >= MAX_PENDING_RELEASES {
         held.remove(0);
     }
     held.push(proof);
+    Ok(())
 }
 
 impl ExitService {
@@ -111,18 +138,28 @@ impl ExitService {
         for (asset, escrowed) in &cfg.reserves {
             reserves.set(*asset, *escrowed);
         }
-        let settle = cfg.bitcoin.as_ref().map(|checkpoint| SettleInputs {
-            corridor: cfg.corridor,
-            assets: cfg.assets.clone(),
-            params: qlc_bitcoin::BITCOIN,
-            checkpoint: Checkpoint {
+        let settle = cfg.bitcoin.as_ref().map(|checkpoint| {
+            let pinned = Checkpoint {
                 height: checkpoint.height,
                 hash: checkpoint.hash,
-                min_work: U256::from_u64(checkpoint.min_work),
-            },
-            confirmation_depth: checkpoint.confirmations,
-            queue: release_queue().clone(),
-            held: Vec::new(),
+                min_work: U256::from_be_bytes(&checkpoint.min_work),
+            };
+            let queue: ReleaseQueue = Arc::new(Mutex::new(Vec::new()));
+            let gate = RELEASE_GATE.get_or_init(|| ReleaseGate {
+                queue: queue.clone(),
+                params: qlc_bitcoin::BITCOIN,
+                checkpoint: pinned.clone(),
+                confirmation_depth: checkpoint.confirmations,
+            });
+            SettleInputs {
+                corridor: cfg.corridor,
+                assets: cfg.assets.clone(),
+                params: qlc_bitcoin::BITCOIN,
+                checkpoint: pinned,
+                confirmation_depth: checkpoint.confirmations,
+                queue: gate.queue.clone(),
+                held: Vec::new(),
+            }
         });
         Ok(ExitService {
             gateway: None,
@@ -636,6 +673,63 @@ pub fn shared(state: BridgeState) -> SharedState {
     Arc::new(RwLock::new(state))
 }
 
+/// Whether this boot starts the snapshot from nothing. Only when the file is absent AND
+/// the operator said this is the first boot; an absent file otherwise is refused.
+pub(crate) fn snapshot_is_first_boot(
+    path: &std::path::Path,
+    init_requested: bool,
+) -> std::io::Result<bool> {
+    if path.exists() {
+        return Ok(false);
+    }
+    if !init_requested {
+        return Err(std::io::Error::new(
+            ErrorKind::NotFound,
+            format!(
+                "no guard snapshot at {}, so the replay set would start empty; set \
+                 {INIT_SNAPSHOT_ENV}=1 only for the very first boot",
+                path.display()
+            ),
+        ));
+    }
+    Ok(true)
+}
+
+/// Once reserves are given at all, they must cover every pool and name only real ones.
+/// A mistyped asset id would otherwise leave the real asset with no escrow bound while the
+/// configuration looks complete.
+pub(crate) fn reserves_cover(
+    registered: &[[u8; 16]],
+    reserves: &[([u8; 16], u128)],
+) -> std::io::Result<()> {
+    if let Some((unknown, _)) = reserves
+        .iter()
+        .find(|(asset, _)| !registered.contains(asset))
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "a foreign reserve names asset {} which no pool registers, refusing to start",
+                hex16(unknown)
+            ),
+        ));
+    }
+    if let Some(bare) = registered
+        .iter()
+        .find(|asset| !reserves.iter().any(|(a, _)| a == *asset))
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "pool {} has no foreign reserve, so it would mint with no escrow bound; \
+                 refusing to start",
+                hex16(bare)
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Bound the deposit mint path by the foreign escrow. Minting past what is held on the far
 /// side is refused before the mint rather than detected after it.
 pub(crate) fn apply_reserves(state: &SharedState, reserves: &[([u8; 16], u128)]) {
@@ -659,8 +753,25 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
              restart and an accepted attestation could mint twice; refusing to serve",
         ));
     };
+    // A snapshot that is simply not there, a volume not mounted, a path changed in a
+    // redeploy, would otherwise boot an empty replay set and admit every envelope accepted
+    // before it a second time. Only a first boot, said so explicitly, starts from nothing.
+    let first_boot = snapshot_is_first_boot(
+        &path,
+        std::env::var(INIT_SNAPSHOT_ENV).as_deref() == Ok("1"),
+    )?;
     let store = Some(GuardStore::new(path));
     let state = shared(restore(&store)?);
+    if first_boot {
+        if let Some(store) = store.as_ref() {
+            let encoded = state
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .gateway
+                .encode_guard();
+            store.save(&encoded)?;
+        }
+    }
     let reserves = crate::exits::load_reserves().map_err(|e| {
         std::io::Error::new(
             ErrorKind::InvalidInput,
@@ -672,8 +783,31 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
             "q-oracle: no foreign reserves are configured, so deposits mint against the \
              asset caps alone with no escrow bound"
         );
+    } else {
+        let registered = state
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .gateway
+            .registered_assets();
+        reserves_cover(&registered, &reserves)?;
     }
     apply_reserves(&state, &reserves);
+    // Without a chain head the gateway clock stands at zero: a watchdog freeze never lifts,
+    // a fact never expires, and the epoch caps never roll. Refuse rather than serve on it.
+    let chain_rpc = std::env::var(crate::clock::CHAIN_RPC_ENV).map_err(|_| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "no chain head endpoint is configured, so every height bound control would \
+             stand still; refusing to serve",
+        )
+    })?;
+    let (host, port) = crate::clock::parse_chain_rpc(&chain_rpc).ok_or_else(|| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "the chain head endpoint is not host:port, refusing to start",
+        )
+    })?;
+    let _clock = crate::clock::spawn_clock(state.clone(), RpcBurnSource::new(host, port));
     let _exits = start_exits_for(Some(state.clone()))?;
     run_with(addr, state, store.map(Arc::new))
 }
@@ -1194,7 +1328,7 @@ mod tests {
         cfg.bitcoin = Some(BitcoinCheckpointConfig {
             height: 1,
             hash: [0x11; 32],
-            min_work: 0,
+            min_work: [0x01; 32],
             confirmations: 6,
         });
         // Corridor 1 is not Bitcoin, and EvmReleaseProof::verify is a disabled stub, so
@@ -1231,6 +1365,79 @@ mod tests {
     }
 
     #[test]
+    fn a_release_proof_that_proves_nothing_never_enters_the_queue() {
+        let gate = ReleaseGate {
+            queue: Arc::new(Mutex::new(Vec::new())),
+            params: qlc_bitcoin::BITCOIN,
+            checkpoint: Checkpoint {
+                height: 100,
+                hash: [0x11; 32],
+                min_work: U256::ONE,
+            },
+            confirmation_depth: 6,
+        };
+        let junk = BitcoinReleaseProof {
+            headers: vec![qlc_bitcoin::BlockHeader {
+                version: 1,
+                prev_block: [0; 32],
+                merkle_root: [0; 32],
+                timestamp: 0,
+                bits: 0,
+                nonce: 0,
+            }],
+            start_height: 100,
+            release_height: 100,
+            branch: Vec::new(),
+            raw_tx: vec![0u8; 60],
+        };
+        for _ in 0..(MAX_PENDING_RELEASES + 1) {
+            assert_eq!(
+                submit_release(&gate, junk.clone()),
+                Err(ReleaseRefusal::Unproven)
+            );
+        }
+        assert!(
+            gate.queue.lock().unwrap().is_empty(),
+            "a flood of junk cannot push a real proof out of the queue"
+        );
+    }
+
+    #[test]
+    fn reserves_must_cover_every_pool_and_name_only_real_ones() {
+        let pools = [[0xa1; 16], [0xb2; 16]];
+        assert!(reserves_cover(&pools, &[([0xa1; 16], 10), ([0xb2; 16], 20)]).is_ok());
+        assert!(
+            reserves_cover(&pools, &[([0xa1; 16], 10)]).is_err(),
+            "a pool left out would mint with no escrow bound"
+        );
+        assert!(
+            reserves_cover(
+                &pools,
+                &[([0xa1; 16], 10), ([0xb2; 16], 20), ([0xc3; 16], 5)]
+            )
+            .is_err(),
+            "a reserve for an asset no pool registers is a typo, not a bound"
+        );
+    }
+
+    #[test]
+    fn a_missing_snapshot_is_refused_unless_this_is_the_first_boot() {
+        let path = temp_ledger("nosnapshot").with_extension("guard");
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            snapshot_is_first_boot(&path, false).is_err(),
+            "an absent snapshot would boot an empty replay set"
+        );
+        assert!(snapshot_is_first_boot(&path, true).unwrap());
+        std::fs::write(&path, b"x").unwrap();
+        assert!(
+            !snapshot_is_first_boot(&path, true).unwrap(),
+            "a snapshot that exists is never treated as a first boot"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
     fn reserves_bound_the_deposit_mint_with_exits_off() {
         let asset = [0xa1; 16];
         let state = shared(boot_configured());
@@ -1263,7 +1470,7 @@ mod tests {
         cfg.bitcoin = Some(BitcoinCheckpointConfig {
             height: 1,
             hash: [0x11; 32],
-            min_work: 0,
+            min_work: [0x01; 32],
             confirmations: 6,
         });
         let refused = start_exits_inner(Ok(Some(cfg)), None);

@@ -43,6 +43,16 @@ impl RpcBurnSource {
         }
     }
 
+    pub fn finalized_head_and_epoch(&self) -> Result<(u64, Option<u64>), BurnWatchError> {
+        let (status, text) = self.request("finalized_head", "{}")?;
+        if status != 200 {
+            return Err(BurnWatchError::Rpc(format!(
+                "finalized_head returned status {status}"
+            )));
+        }
+        decode_finalized_head_epoch(&text)
+    }
+
     pub fn burn_heights_after(&self, cursor: u64) -> Result<Vec<u64>, BurnWatchError> {
         let body = format!("{{\"cursor\":{cursor}}}");
         let (status, text) = self.request("burn_heights_after", &body)?;
@@ -113,6 +123,18 @@ impl QuantovaBurnSource for RpcBurnSource {
             ))),
         }
     }
+}
+
+/// The finalized head together with the chain's bridge epoch. The epoch is optional so a
+/// node that does not report it still gives the head.
+pub fn decode_finalized_head_epoch(body: &str) -> Result<(u64, Option<u64>), BurnWatchError> {
+    let value = parse_json(body)?;
+    let head = value
+        .get("head")
+        .and_then(Json::as_u64)
+        .ok_or_else(|| BurnWatchError::Rpc("finalized_head has no head field".to_string()))?;
+    let epoch = value.get("bridge_epoch").and_then(Json::as_u64);
+    Ok((head, epoch))
 }
 
 pub fn decode_finalized_head(body: &str) -> Result<u64, BurnWatchError> {

@@ -20,6 +20,8 @@ pub const SLOT_ENV: &str = "Q_ORACLE_EXITS_SLOT";
 pub const BUDGET_ENV: &str = "Q_ORACLE_EXITS_BUDGET";
 pub const DEST_CHAIN_ENV: &str = "Q_ORACLE_EXITS_DEST_CHAIN";
 pub const CORRIDOR_ENV: &str = "Q_ORACLE_EXITS_CORRIDOR";
+/// Fewer confirmations than this and a payout proof is a cheap private fork away.
+pub const MIN_PAYOUT_CONFIRMATIONS: u32 = 6;
 pub const START_HEIGHT_ENV: &str = "Q_ORACLE_EXITS_START_HEIGHT";
 pub const BEACON_SEED_ENV: &str = "Q_ORACLE_EXITS_BEACON_SEED";
 pub const COMMITTEE_ENV: &str = "Q_ORACLE_EXITS_COMMITTEE";
@@ -68,7 +70,8 @@ pub struct VaultSeed {
 pub struct BitcoinCheckpointConfig {
     pub height: u32,
     pub hash: [u8; 32],
-    pub min_work: u64,
+    // Big endian, 32 bytes: a u64 floor is less than the work of one mainnet block.
+    pub min_work: [u8; 32],
     pub confirmations: u32,
 }
 
@@ -335,14 +338,20 @@ fn parse_bitcoin<E: EnvSource>(
         .as_slice()
         .try_into()
         .map_err(|_| ExitConfigError::Malformed("bitcoin hash"))?;
-    let min_work = fields[2]
-        .trim()
-        .parse()
-        .map_err(|_| ExitConfigError::Malformed("bitcoin work floor"))?;
-    let confirmations = fields[3]
+    let work_bytes =
+        decode_hex(fields[2]).ok_or(ExitConfigError::Malformed("bitcoin work floor"))?;
+    if work_bytes.is_empty() || work_bytes.len() > 32 || work_bytes.iter().all(|b| *b == 0) {
+        return Err(ExitConfigError::Malformed("bitcoin work floor"));
+    }
+    let mut min_work = [0u8; 32];
+    min_work[32 - work_bytes.len()..].copy_from_slice(&work_bytes);
+    let confirmations: u32 = fields[3]
         .trim()
         .parse()
         .map_err(|_| ExitConfigError::Malformed("bitcoin confirmations"))?;
+    if confirmations < MIN_PAYOUT_CONFIRMATIONS {
+        return Err(ExitConfigError::Malformed("bitcoin confirmations"));
+    }
     Ok(Some(BitcoinCheckpointConfig {
         height,
         hash,
@@ -380,7 +389,11 @@ pub fn parse_exit_config<E: EnvSource>(
     let bitcoin = parse_bitcoin(env)?;
     let assets = parse_assets(env)?;
     let reserves = parse_reserves(env)?;
+    // No ceiling is not a setting: a desk with none opens exits of any size.
     let max_exit_amount = opt_u128(env, MAX_AMOUNT_ENV, 0)?;
+    if max_exit_amount == 0 {
+        return Err(ExitConfigError::Missing("exit ceiling"));
+    }
 
     let config = ExitTrustConfig {
         chain_id,
@@ -457,6 +470,7 @@ mod tests {
         map.insert(DEST_CHAIN_ENV.into(), "9000".into());
         map.insert(CORRIDOR_ENV.into(), "1".into());
         map.insert(START_HEIGHT_ENV.into(), "4199999".into());
+        map.insert(MAX_AMOUNT_ENV.into(), "1000000".into());
         map.insert(BEACON_SEED_ENV.into(), "5a".repeat(BEACON_SEED_BYTES));
         map.insert(
             COMMITTEE_ENV.into(),
@@ -494,7 +508,10 @@ mod tests {
         assert_eq!(config.members.len(), 1);
         assert_eq!(config.vaults.len(), 2);
         assert_eq!(config.active_vault(), 1);
-        assert_eq!(config.desk_config(), DeskConfig::aligned(1, 9000));
+        assert_eq!(
+            config.desk_config(),
+            DeskConfig::aligned(1, 9000).serving(Vec::new(), 1_000_000)
+        );
         config
             .build_anchor()
             .expect("the loaded anchor is well formed");
@@ -572,10 +589,33 @@ mod tests {
     fn the_optional_bitcoin_checkpoint_loads_when_present() {
         let mut env = full_env();
         env.0
-            .insert(BITCOIN_ENV.into(), format!("100,{},1,6", "cc".repeat(32)));
+            .insert(BITCOIN_ENV.into(), format!("100,{},01,6", "cc".repeat(32)));
         let config = parse_exit_config(&env).unwrap().unwrap();
         let checkpoint = config.bitcoin.expect("the checkpoint loads");
         assert_eq!(checkpoint.height, 100);
         assert_eq!(checkpoint.confirmations, 6);
+        assert_eq!(checkpoint.min_work[31], 1);
+    }
+
+    #[test]
+    fn a_zero_work_floor_or_a_shallow_payout_depth_is_refused() {
+        for bad in [
+            format!("100,{},00,6", "cc".repeat(32)),
+            format!("100,{},01,5", "cc".repeat(32)),
+        ] {
+            let mut env = full_env();
+            env.0.insert(BITCOIN_ENV.into(), bad);
+            assert!(parse_exit_config(&env).is_err());
+        }
+    }
+
+    #[test]
+    fn exits_without_a_ceiling_are_refused() {
+        let mut env = full_env();
+        env.0.remove(MAX_AMOUNT_ENV);
+        assert!(matches!(
+            parse_exit_config(&env),
+            Err(ExitConfigError::Missing("exit ceiling"))
+        ));
     }
 }

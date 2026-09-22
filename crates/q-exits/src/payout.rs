@@ -162,6 +162,21 @@ impl BitcoinReleaseProof {
         checkpoint: &Checkpoint,
         confirmation_depth: u32,
     ) -> Result<VerifiedPayout, PayoutProofError> {
+        // One hash before the walk: a run that does not carry the pinned block at the
+        // checkpoint height cannot anchor, so it is refused before thousands of headers
+        // are checked.
+        let pinned = checkpoint
+            .height
+            .checked_sub(self.start_height)
+            .and_then(|index| self.headers.get(index as usize))
+            .ok_or(PayoutProofError::Spv(
+                qlc_bitcoin::SpvError::CheckpointNotInChain,
+            ))?;
+        if pinned.block_hash() != checkpoint.hash {
+            return Err(PayoutProofError::Spv(
+                qlc_bitcoin::SpvError::CheckpointMismatch,
+            ));
+        }
         let chain = verify_chain(&self.headers, self.start_height, params)
             .map_err(PayoutProofError::Spv)?;
         chain

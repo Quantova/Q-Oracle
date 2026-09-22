@@ -10,6 +10,10 @@ use crate::errors::GatewayError;
 use crate::operators::{verify_quorum, OperatorSet};
 
 pub const REORG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/REORG/v1";
+pub const RESUME_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/RESUME/v1";
+/// How long a signed resume stays good, and how far ahead of this clock its height may be.
+pub const RESUME_WINDOW: u64 = 600;
+pub const RESUME_SKEW: u64 = 16;
 pub const TIER_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/TIER/v1";
 pub const FREEZE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/FREEZE/v1";
 pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
@@ -73,6 +77,9 @@ pub struct Gateway {
     corridors: BTreeMap<u32, CorridorConfig>,
     corridor_cursor: BTreeMap<u32, u64>,
     paused_sources: BTreeSet<u32>,
+    // The height each pause took effect. Not persisted: after a restart it is the restored
+    // height, so a resume signed before the restart does not lift the pause.
+    paused_since: BTreeMap<u32, u64>,
     global_pause: bool,
     current_height: u64,
     frozen_until: u64,
@@ -109,6 +116,7 @@ impl Gateway {
             corridors: BTreeMap::new(),
             corridor_cursor: BTreeMap::new(),
             paused_sources: BTreeSet::new(),
+            paused_since: BTreeMap::new(),
             global_pause: false,
             current_height: 0,
             frozen_until: 0,
@@ -319,6 +327,7 @@ impl Gateway {
 
     pub fn unpause_source(&mut self, source_chain: u32) {
         self.paused_sources.remove(&source_chain);
+        self.paused_since.remove(&source_chain);
         self.touch_guard();
     }
 
@@ -327,6 +336,17 @@ impl Gateway {
         self.epoch_minted = 0;
         self.per_asset_epoch_minted.clear();
         self.touch_guard();
+    }
+
+    /// Follow the chain's bridge epoch. Moving forward resets the epoch caps once, however
+    /// many epochs were skipped; an older or equal epoch changes nothing.
+    pub fn advance_epoch_to(&mut self, epoch: u64) {
+        if epoch > self.current_epoch {
+            self.current_epoch = epoch;
+            self.epoch_minted = 0;
+            self.per_asset_epoch_minted.clear();
+            self.touch_guard();
+        }
     }
 
     pub fn current_epoch(&self) -> u64 {
@@ -351,6 +371,11 @@ impl Gateway {
 
     // Minted counters survive a restart in the guard snapshot but caps are re-registered
     // from the pool set, so a restored counter with no cap means its pool is gone.
+    /// Every asset a pool is registered for.
+    pub fn registered_assets(&self) -> Vec<[u8; 16]> {
+        self.per_asset_cap.keys().copied().collect()
+    }
+
     pub fn minted_assets_without_a_cap(&self) -> Vec<[u8; 16]> {
         self.per_asset_minted
             .iter()
@@ -379,7 +404,7 @@ impl Gateway {
         fork_depth: u32,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
-        let message = reorg_message(source_chain, fork_depth, self.dest_chain_id);
+        let message = reorg_message(source_chain, fork_depth, self.dest_chain_id, &self.era);
         let distinct = verify_quorum(&message, REORG_DOMAIN, sigs, &self.operators);
         let need = self
             .operators
@@ -392,6 +417,122 @@ impl Gateway {
             });
         }
         self.paused_sources.insert(source_chain);
+        self.paused_since.insert(source_chain, self.current_height);
+        self.touch_guard();
+        Ok(())
+    }
+
+    fn quorum_met(
+        &self,
+        message: &[u8],
+        domain: &[u8],
+        sigs: &[SignerSig],
+    ) -> Result<(), GatewayError> {
+        let distinct = verify_quorum(message, domain, sigs, &self.operators);
+        let need = self
+            .operators
+            .threshold()
+            .max(supermajority_floor(self.operators.size()));
+        if distinct.len() < need {
+            return Err(GatewayError::BelowThreshold {
+                got: distinct.len(),
+                need,
+            });
+        }
+        Ok(())
+    }
+
+    /// The signature checks of the quorum requests alone, read only. A caller runs these
+    /// under a shared lock first, so a flood of forged requests is refused without ever
+    /// holding the exclusive one a deposit waits on.
+    pub fn precheck_reorg(
+        &self,
+        source_chain: u32,
+        fork_depth: u32,
+        sigs: &[SignerSig],
+    ) -> Result<(), GatewayError> {
+        let message = reorg_message(source_chain, fork_depth, self.dest_chain_id, &self.era);
+        self.quorum_met(&message, REORG_DOMAIN, sigs)
+    }
+
+    pub fn precheck_resume(
+        &self,
+        source_chain: u32,
+        at_height: u64,
+        sigs: &[SignerSig],
+    ) -> Result<(), GatewayError> {
+        let message = resume_message(source_chain, at_height, self.dest_chain_id, &self.era);
+        self.quorum_met(&message, RESUME_DOMAIN, sigs)
+    }
+
+    pub fn precheck_freeze(
+        &self,
+        until_height: u64,
+        sigs: &[SignerSig],
+    ) -> Result<(), GatewayError> {
+        let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
+        self.quorum_met(&message, FREEZE_DOMAIN, sigs)
+    }
+
+    pub fn precheck_watchdog(
+        &self,
+        until_height: u64,
+        sig: &SignerSig,
+    ) -> Result<(), GatewayError> {
+        let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
+        if verify_quorum(
+            &message,
+            WATCHDOG_DOMAIN,
+            std::slice::from_ref(sig),
+            &self.operators,
+        )
+        .is_empty()
+        {
+            return Err(GatewayError::BelowThreshold { got: 0, need: 1 });
+        }
+        Ok(())
+    }
+
+    /// Lift a reorg pause. The quorum signs the height it resumes at, and only a recent
+    /// height at or after the pause counts, so neither an old resume nor one signed before
+    /// a later pause can lift it.
+    pub fn resume_source(
+        &mut self,
+        source_chain: u32,
+        at_height: u64,
+        sigs: &[SignerSig],
+    ) -> Result<(), GatewayError> {
+        if !self.paused_sources.contains(&source_chain) {
+            return Err(GatewayError::NotPaused(source_chain));
+        }
+        let since = self
+            .paused_since
+            .get(&source_chain)
+            .copied()
+            .unwrap_or(self.current_height);
+        if at_height < since
+            || at_height > self.current_height.saturating_add(RESUME_SKEW)
+            || self.current_height > at_height.saturating_add(RESUME_WINDOW)
+        {
+            return Err(GatewayError::ResumeOutOfWindow {
+                at: at_height,
+                now: self.current_height,
+            });
+        }
+        let message = resume_message(source_chain, at_height, self.dest_chain_id, &self.era);
+        let distinct = verify_quorum(&message, RESUME_DOMAIN, sigs, &self.operators);
+        let need = self
+            .operators
+            .threshold()
+            .max(supermajority_floor(self.operators.size()));
+        if distinct.len() < need {
+            return Err(GatewayError::BelowThreshold {
+                got: distinct.len(),
+                need,
+            });
+        }
+        self.paused_sources.remove(&source_chain);
+        self.paused_since.remove(&source_chain);
         self.touch_guard();
         Ok(())
     }
@@ -405,7 +546,7 @@ impl Gateway {
         if self.governance.size() == 0 {
             return Err(GatewayError::NoGovernanceSet);
         }
-        let message = tier_message(source_chain, proposed, self.dest_chain_id);
+        let message = tier_message(source_chain, proposed, self.dest_chain_id, &self.era);
         let distinct = verify_quorum(&message, TIER_DOMAIN, sigs, &self.governance);
         let need = self
             .governance
@@ -460,6 +601,12 @@ impl Gateway {
         until_height: u64,
         sig: &SignerSig,
     ) -> Result<(), GatewayError> {
+        // One operator's freeze is meant to be short. Measured against a height that has
+        // never been observed it is not bounded at all: the window never elapses, so a
+        // single key would halt minting for good.
+        if self.current_height == 0 {
+            return Err(GatewayError::WatchdogWithoutClock);
+        }
         let ceiling = self.current_height.saturating_add(WATCHDOG_MAX_WINDOW);
         if until_height > ceiling {
             return Err(GatewayError::WatchdogWindowTooWide {
@@ -507,7 +654,7 @@ impl Gateway {
                 .threshold()
                 .max(supermajority_floor(self.operators.size()))
         };
-        let message = batch_message(source_chain, batch_index, self.dest_chain_id);
+        let message = batch_message(source_chain, batch_index, self.dest_chain_id, &self.era);
         let distinct = verify_quorum(&message, BATCH_DOMAIN, sigs, &self.operators);
         if distinct.len() < required {
             return Err(GatewayError::BelowThreshold {
@@ -880,13 +1027,28 @@ impl Gateway {
         self.refs_any_chain = self.used_refs.iter().map(|(_, r)| *r).collect();
         self.per_asset_minted = state.per_asset_minted;
         self.paused_sources = state.paused_sources;
+        self.paused_since = self
+            .paused_sources
+            .iter()
+            .map(|source| (*source, state.current_height))
+            .collect();
         self.corridor_cursor = state.corridor_cursor;
         self.current_epoch = state.current_epoch;
         self.per_asset_epoch_minted = state.per_asset_epoch_minted;
         self.next_exit_id = state.next_exit_id;
         self.pending_exits = state.pending_exits;
-        for (source_chain, corridor) in state.corridors {
-            self.corridors.insert(source_chain, corridor);
+        // The corridors the code registers are the ones that exist. A snapshot restores the
+        // stricter of each setting, a deeper confirmation, a larger quorum, the tier
+        // governance ratcheted to, and inactive if either side says so; it cannot revive a
+        // corridor the code no longer registers or loosen one the code tightened.
+        for (source_chain, saved) in state.corridors {
+            if let Some(current) = self.corridors.get_mut(&source_chain) {
+                current.confirmation_depth =
+                    current.confirmation_depth.max(saved.confirmation_depth);
+                current.quorum = current.quorum.max(saved.quorum);
+                current.tier = current.tier.max(saved.tier);
+                current.active = current.active && saved.active;
+            }
         }
         Ok(())
     }
@@ -1041,19 +1203,47 @@ pub fn attestation_message(fact: &BridgeFact, dest_chain_id: u64) -> Vec<u8> {
     fact.attest_preimage(dest_chain_id)
 }
 
-pub fn reorg_message(source_chain: u32, fork_depth: u32, dest_chain_id: u64) -> Vec<u8> {
+// Every quorum message carries the era, as the freeze does, so a body signed before a
+// relaunch cannot be replayed after it under the same operator keys.
+pub fn reorg_message(
+    source_chain: u32,
+    fork_depth: u32,
+    dest_chain_id: u64,
+    era: &[u8; 32],
+) -> Vec<u8> {
     let mut w = Writer::new();
     w.u32(source_chain);
     w.u32(fork_depth);
     w.u64(dest_chain_id);
+    w.fixed(era);
     w.finish()
 }
 
-pub fn tier_message(source_chain: u32, proposed: u8, dest_chain_id: u64) -> Vec<u8> {
+pub fn resume_message(
+    source_chain: u32,
+    at_height: u64,
+    dest_chain_id: u64,
+    era: &[u8; 32],
+) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u32(source_chain);
+    w.u64(at_height);
+    w.u64(dest_chain_id);
+    w.fixed(era);
+    w.finish()
+}
+
+pub fn tier_message(
+    source_chain: u32,
+    proposed: u8,
+    dest_chain_id: u64,
+    era: &[u8; 32],
+) -> Vec<u8> {
     let mut w = Writer::new();
     w.u32(source_chain);
     w.u8(proposed);
     w.u64(dest_chain_id);
+    w.fixed(era);
     w.finish()
 }
 
@@ -1071,11 +1261,17 @@ pub fn freeze_message_for_era(until_height: u64, dest_chain_id: u64, era: &[u8; 
     w.finish()
 }
 
-pub fn batch_message(source_chain: u32, batch_index: u64, dest_chain_id: u64) -> Vec<u8> {
+pub fn batch_message(
+    source_chain: u32,
+    batch_index: u64,
+    dest_chain_id: u64,
+    era: &[u8; 32],
+) -> Vec<u8> {
     let mut w = Writer::new();
     w.u32(source_chain);
     w.u64(batch_index);
     w.u64(dest_chain_id);
+    w.fixed(era);
     w.finish()
 }
 

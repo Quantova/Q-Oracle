@@ -31,13 +31,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/QRC-CONSENSUS
-          ref: 213f177951f8d470dff13966f9e8753a3836dcc5
+          ref: 7f48fca9b7bd6b6f8b558fd587683a851c235f92
           path: QRC-CONSENSUS
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: Quantova/Quantova-Chain
-          ref: 9d4dda908fbe65155451d483435ca69dc48ad00b
+          ref: 7bb1d9d573b91134ca40d3478cb856c38976b3c7
           path: Quantova-Chain
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

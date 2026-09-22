@@ -161,7 +161,56 @@ impl RateLimiter {
     }
 }
 
+/// The proxies whose word on the client address is taken, as a comma separated list of
+/// addresses. Unset, no proxy is trusted: a loopback peer is limited like any other.
+pub const TRUSTED_PROXY_ENV: &str = "Q_ORACLE_TRUSTED_PROXY";
+/// The header a trusted proxy names the client in. x-real-ip unless set.
+pub const CLIENT_IP_HEADER_ENV: &str = "Q_ORACLE_CLIENT_IP_HEADER";
+
+#[derive(Clone, Debug, Default)]
+pub struct ProxyTrust {
+    proxies: Vec<IpAddr>,
+    header: String,
+}
+
+impl ProxyTrust {
+    pub fn from_env() -> ProxyTrust {
+        ProxyTrust::parse(
+            std::env::var(TRUSTED_PROXY_ENV).ok().as_deref(),
+            std::env::var(CLIENT_IP_HEADER_ENV).ok().as_deref(),
+        )
+    }
+
+    pub fn parse(proxies: Option<&str>, header: Option<&str>) -> ProxyTrust {
+        let proxies = proxies
+            .unwrap_or("")
+            .split(',')
+            .filter_map(|item| item.trim().parse().ok())
+            .collect();
+        let header = header
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .unwrap_or("x-real-ip")
+            .to_ascii_lowercase();
+        ProxyTrust { proxies, header }
+    }
+
+    pub fn trusts(&self, peer: IpAddr) -> bool {
+        self.proxies.contains(&peer)
+    }
+}
+
 pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardStore>>) {
+    serve_with(listener, state, store, ProxyTrust::from_env())
+}
+
+pub fn serve_with(
+    listener: TcpListener,
+    state: SharedState,
+    store: Option<Arc<GuardStore>>,
+    trust: ProxyTrust,
+) {
+    let trust = Arc::new(trust);
     thread::spawn(move || {
         let limiter = Arc::new(Limiter::default());
         let rate = Arc::new(RateLimiter::default());
@@ -176,7 +225,10 @@ pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardS
             // client into one bucket and let a single caller exhaust it for all of
             // them. For a proxied connection the limit is applied once the request
             // headers name the real client instead.
-            let proxied = ip.is_loopback();
+            // Only a proxy named in the configuration speaks for its clients. Any other
+            // peer, loopback included, is limited as itself: a local process is not a proxy
+            // just because it connects from 127.0.0.1.
+            let proxied = trust.trusts(ip);
             if !proxied
                 && !rate.allow(
                     ip,
@@ -200,7 +252,7 @@ pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardS
             // sockets lock out everyone. The real client is only known once the head is
             // read, and the rate limiter above already applies per client limits there,
             // so the proxy itself is bounded by the global cap alone.
-            let per_ip = if ip.is_loopback() {
+            let per_ip = if proxied {
                 MAX_CONNECTIONS
             } else {
                 MAX_CONNECTIONS_PER_IP
@@ -232,9 +284,10 @@ pub fn serve(listener: TcpListener, state: SharedState, store: Option<Arc<GuardS
             let limiter = limiter.clone();
             let store = store.clone();
             let rate = rate.clone();
+            let header = proxied.then(|| trust.header.clone());
             thread::spawn(move || {
                 let _slot = SlotGuard { limiter, ip };
-                let _ = handle_connection(stream, state, store, rate, proxied);
+                let _ = handle_connection(stream, state, store, rate, header);
             });
         }
     });
@@ -256,7 +309,7 @@ fn handle_connection(
     state: SharedState,
     store: Option<Arc<GuardStore>>,
     rate: Arc<RateLimiter>,
-    proxied: bool,
+    client_header: Option<String>,
 ) -> IoResult<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
     stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
@@ -316,13 +369,24 @@ fn handle_connection(
                 "transfer-encoding is not supported, send a content-length body",
             );
         }
-        if let Some(value) = header_value(trimmed, "x-real-ip") {
-            forwarded = value.trim().parse().ok();
+        if let Some(name) = client_header.as_deref() {
+            if let Some(value) = header_value(trimmed, name) {
+                forwarded = value.trim().parse().ok();
+            }
         }
     }
 
-    if proxied {
-        let client = forwarded.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    if client_header.is_some() {
+        // A trusted proxy that did not name the client would pool every caller into one
+        // bucket, so one of them could spend it for all.
+        let Some(client) = forwarded else {
+            return write_error(
+                &mut stream,
+                400,
+                "bad_request",
+                "the proxy did not name the client",
+            );
+        };
         if !rate.allow(
             client,
             Instant::now(),
@@ -464,7 +528,7 @@ fn handle_connection(
     };
 
     if method == "submit_release" {
-        let Some(queue) = crate::boot::release_queue_if_running() else {
+        let Some(gate) = crate::boot::release_gate_if_running() else {
             return write_error(
                 &mut stream,
                 404,
@@ -479,9 +543,22 @@ fn handle_connection(
                 return write_error(&mut stream, code, error, &message);
             }
         };
-        crate::boot::submit_release(queue, proof);
-        let body = object(vec![("accepted", Json::Bool(true))]).render();
-        return write_response(&mut stream, 202, &body);
+        return match crate::boot::submit_release(gate, proof) {
+            Ok(()) => {
+                let body = object(vec![("accepted", Json::Bool(true))]).render();
+                write_response(&mut stream, 202, &body)
+            }
+            Err(crate::boot::ReleaseRefusal::AlreadyHeld) => {
+                let body = object(vec![("accepted", Json::Bool(true))]).render();
+                write_response(&mut stream, 200, &body)
+            }
+            Err(crate::boot::ReleaseRefusal::Unproven) => write_error(
+                &mut stream,
+                400,
+                "unproven",
+                "the proof does not show a payout buried under the pinned checkpoint",
+            ),
+        };
     }
 
     let request = match decode_request(method, &parsed) {
@@ -576,6 +653,12 @@ fn route(
             }
         }
         other => {
+            {
+                let guard = state.read().unwrap_or_else(|e| e.into_inner());
+                if let Err(err) = q_qbridge::precheck(&guard, &other) {
+                    return Ok(Response::Error(err));
+                }
+            }
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             let rev_before = guard.gateway.guard_revision();
             let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
