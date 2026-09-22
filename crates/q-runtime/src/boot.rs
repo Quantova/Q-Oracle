@@ -521,7 +521,7 @@ pub fn boot_from_config(
 
 fn decode_hex(input: &str) -> Option<Vec<u8>> {
     let text = input.trim();
-    if text.len() % 2 != 0 {
+    if text.len() % 2 != 0 || !text.is_ascii() {
         return None;
     }
     (0..text.len())
@@ -533,6 +533,12 @@ fn decode_hex(input: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod boot_config_tests {
     use super::*;
+
+    #[test]
+    fn hex_with_a_multibyte_character_is_refused_without_a_panic() {
+        assert_eq!(decode_hex("aé"), None);
+        assert_eq!(decode_hex("0aff"), Some(vec![0x0a, 0xff]));
+    }
 
     fn key(tag: u8) -> String {
         format!("{tag:02x}").repeat(qtv_crypto::ml_dsa::PUBLIC_KEY_BYTES)
