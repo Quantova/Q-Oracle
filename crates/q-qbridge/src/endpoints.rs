@@ -30,6 +30,8 @@ pub struct BitcoinProofMaterial {
     pub deposit_height: u32,
     pub branch: Vec<MerkleStep>,
     pub raw_tx: Vec<u8>,
+    pub coinbase_tx: Vec<u8>,
+    pub coinbase_branch: Vec<MerkleStep>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -461,6 +463,10 @@ pub fn verify_deposit(
                 material.deposit_height,
                 &material.branch,
                 &material.raw_tx,
+                &qlc_bitcoin::CoinbaseProof {
+                    raw_tx: &material.coinbase_tx,
+                    branch: &material.coinbase_branch,
+                },
                 &bridge_script,
             )
             .map_err(ApiError::BitcoinSpv)?;
@@ -602,6 +608,45 @@ fn deposit_status(state: &BridgeState, request: &DepositStatusRequest) -> Deposi
 mod tests {
     use super::*;
 
+    fn with_coinbase(
+        txid: [u8; 32],
+    ) -> (
+        [u8; 32],
+        Vec<u8>,
+        Vec<qlc_bitcoin::MerkleStep>,
+        Vec<qlc_bitcoin::MerkleStep>,
+    ) {
+        let mut coinbase = Vec::new();
+        coinbase.extend_from_slice(&1u32.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.extend_from_slice(&[0u8; 32]);
+        coinbase.extend_from_slice(&[0xff; 4]);
+        coinbase.push(0x04);
+        coinbase.extend_from_slice(&[0x03, 0x01, 0x00, 0x00]);
+        coinbase.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.extend_from_slice(&5_000_000_000u64.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.push(0x51);
+        coinbase.extend_from_slice(&0u32.to_le_bytes());
+        let coinbase_id = qlc_bitcoin::double_sha256(&coinbase);
+        let mut pair = [0u8; 64];
+        pair[..32].copy_from_slice(&coinbase_id);
+        pair[32..].copy_from_slice(&txid);
+        (
+            qlc_bitcoin::double_sha256(&pair),
+            coinbase,
+            vec![qlc_bitcoin::MerkleStep {
+                hash: coinbase_id,
+                sibling_on_left: true,
+            }],
+            vec![qlc_bitcoin::MerkleStep {
+                hash: txid,
+                sibling_on_left: false,
+            }],
+        )
+    }
+
     pub(super) const DEST_ID: u64 = 0x0000_002a_0000_2328;
     use q_airlock::SignerSig;
     use q_codec::{attest_context, AssetId, Direction, Recipient, SourceRef, FACT_VERSION};
@@ -742,7 +787,8 @@ mod tests {
     ) -> (BitcoinProofMaterial, BitcoinAnchor, [u8; 32]) {
         let raw = raw_deposit_tx(&[(amount, bridge.to_vec()), (0, op_return(recipient))]);
         let txid = Transaction::parse(&raw).unwrap().txid();
-        let mut headers = vec![mine([0u8; 32], txid)];
+        let (root, coinbase_tx, branch, coinbase_branch) = with_coinbase(txid);
+        let mut headers = vec![mine([0u8; 32], root)];
         let mut prev = headers[0].block_hash();
         for i in 0..5u8 {
             let block = mine(prev, [i + 1; 32]);
@@ -758,8 +804,10 @@ mod tests {
             headers,
             start_height: 0,
             deposit_height: 0,
-            branch: vec![],
+            branch,
             raw_tx: raw,
+            coinbase_tx,
+            coinbase_branch,
         };
         (
             material,
@@ -1670,11 +1718,12 @@ mod tests {
             signature_slot: ETH_SIG_SLOT,
             execution: ExecutionCommit {
                 receipts_root,
-                block_number: 20_000_000,
+                block_number: ETH_PERIOD * ETH_PERIOD_SLOTS + 40,
                 execution_branch,
             },
         };
         let deposit = EthDepositProof {
+            ancestry: Vec::new(),
             receipt_index: 3,
             receipt_proof,
         };

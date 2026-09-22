@@ -60,6 +60,45 @@ fn raw_deposit_tx(outputs: &[(u64, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+fn with_coinbase(
+    txid: [u8; 32],
+) -> (
+    [u8; 32],
+    Vec<u8>,
+    Vec<qlc_bitcoin::MerkleStep>,
+    Vec<qlc_bitcoin::MerkleStep>,
+) {
+    let mut coinbase = Vec::new();
+    coinbase.extend_from_slice(&1u32.to_le_bytes());
+    coinbase.push(0x01);
+    coinbase.extend_from_slice(&[0u8; 32]);
+    coinbase.extend_from_slice(&[0xff; 4]);
+    coinbase.push(0x04);
+    coinbase.extend_from_slice(&[0x03, 0x01, 0x00, 0x00]);
+    coinbase.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+    coinbase.push(0x01);
+    coinbase.extend_from_slice(&5_000_000_000u64.to_le_bytes());
+    coinbase.push(0x01);
+    coinbase.push(0x51);
+    coinbase.extend_from_slice(&0u32.to_le_bytes());
+    let coinbase_id = qlc_bitcoin::double_sha256(&coinbase);
+    let mut pair = [0u8; 64];
+    pair[..32].copy_from_slice(&coinbase_id);
+    pair[32..].copy_from_slice(&txid);
+    (
+        qlc_bitcoin::double_sha256(&pair),
+        coinbase,
+        vec![qlc_bitcoin::MerkleStep {
+            hash: coinbase_id,
+            sibling_on_left: true,
+        }],
+        vec![qlc_bitcoin::MerkleStep {
+            hash: txid,
+            sibling_on_left: false,
+        }],
+    )
+}
+
 fn mined_block(txid: [u8; 32]) -> BlockHeader {
     let mut header = BlockHeader {
         version: 1,
@@ -95,14 +134,27 @@ fn prove_crafted_deposit(
 ) -> (TrustlessDeposit, Vec<u8>) {
     let raw = raw_deposit_tx(&[(amount, bridge.to_vec()), (0, op_return(recipient))]);
     let txid = Transaction::parse(&raw).unwrap().txid();
-    let chain = verify_chain(&[mined_block(txid)], 0, &EASY).unwrap();
+    let (root, coinbase_tx, branch, coinbase_branch) = with_coinbase(txid);
+    let chain = verify_chain(&[mined_block(root)], 0, &EASY).unwrap();
     let checkpoint = Checkpoint {
         height: chain.start_height,
         hash: chain.header_at(chain.start_height).unwrap().block_hash(),
         min_work: U256::ZERO,
     };
-    let proven =
-        verify_trustless_deposit(&chain, &EASY, &checkpoint, 0, &[], &raw, bridge).unwrap();
+    let proven = verify_trustless_deposit(
+        &chain,
+        &EASY,
+        &checkpoint,
+        0,
+        &branch,
+        &raw,
+        &qlc_bitcoin::CoinbaseProof {
+            raw_tx: &coinbase_tx,
+            branch: &coinbase_branch,
+        },
+        bridge,
+    )
+    .unwrap();
     (proven, raw)
 }
 

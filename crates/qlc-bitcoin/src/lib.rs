@@ -15,7 +15,7 @@ pub use chain::{
     bits_expectation, check_retarget_boundary, heavier, verify_chain, Checkpoint, ConfirmedDeposit,
     VerifiedChain,
 };
-pub use deposit::{verify_trustless_deposit, TrustlessDeposit};
+pub use deposit::{confirmations_for, verify_trustless_deposit, CoinbaseProof, TrustlessDeposit};
 pub use params::{network_params, Network, NetworkParams, BITCOIN, BITCOIN_CASH};
 pub use retarget::compute_retarget;
 pub use sha256::{double_sha256, sha256};
@@ -49,12 +49,13 @@ pub enum SpvError {
     CheckpointNotInChain,
     CheckpointMismatch,
     InsufficientWork,
+    UnverifiableRetarget { index: usize },
     CheckpointNotArmed,
     MalformedTransaction,
     TransactionMismatch,
     MerkleBranchTooLong,
-    NonCanonicalBits { index: usize },
     MedianTimePast { index: usize },
+    NonCanonicalBits { index: usize },
 }
 
 pub const MAX_MERKLE_BRANCH: usize = 64;

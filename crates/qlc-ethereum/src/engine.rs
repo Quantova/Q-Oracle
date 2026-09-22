@@ -35,6 +35,7 @@ pub enum EthError {
         attested_slot: u64,
     },
     BadFinalityProof,
+    BadAncestry,
     BadExecutionProof,
     BadSyncCommitteeProof,
     BadSignature,
@@ -68,6 +69,8 @@ pub struct LightClientUpdate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncCommitteeUpdate {
     pub attested_header: BeaconBlockHeader,
+    pub finalized_header: BeaconBlockHeader,
+    pub finality_branch: Vec<[u8; 32]>,
     pub next_sync_committee: SyncCommittee,
     pub next_sync_committee_branch: Vec<[u8; 32]>,
     pub sync_aggregate: SyncAggregate,
@@ -78,6 +81,15 @@ pub struct SyncCommitteeUpdate {
 pub struct DepositProof {
     pub receipt_index: u64,
     pub receipt_proof: Vec<Vec<u8>>,
+    pub ancestry: Vec<BeaconBlockHeader>,
+}
+
+pub const MAX_DEPOSIT_ANCESTRY: usize = 64;
+
+impl DepositProof {
+    pub fn deposit_block<'a>(&'a self, finalized: &'a BeaconBlockHeader) -> &'a BeaconBlockHeader {
+        self.ancestry.last().unwrap_or(finalized)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +172,6 @@ impl LightClientStore {
         self.next_sync_committee.as_ref()
     }
 
-    #[cfg(any(test, feature = "test-util"))]
     pub fn from_trusted_committee(
         config: EvmChainConfig,
         period: u64,
@@ -206,6 +217,23 @@ pub fn bootstrap(
         next_sync_committee: None,
         finalized_header: checkpoint_header,
     })
+}
+
+fn slots_are_consistent(
+    store: &LightClientStore,
+    signature_slot: u64,
+    attested_slot: u64,
+) -> Result<(), EthError> {
+    if signature_slot < attested_slot
+        || store.config.sync_committee_period(signature_slot)
+            != store.config.sync_committee_period(attested_slot)
+    {
+        return Err(EthError::InconsistentSlots {
+            signature_slot,
+            attested_slot,
+        });
+    }
+    Ok(())
 }
 
 fn select_committee(
@@ -279,13 +307,33 @@ fn verify_finality(update: &LightClientUpdate, electra: bool) -> Result<(), EthE
     Ok(())
 }
 
-fn verify_execution(update: &LightClientUpdate) -> Result<(), EthError> {
+fn verify_ancestry<'a>(
+    finalized: &'a BeaconBlockHeader,
+    ancestry: &'a [BeaconBlockHeader],
+) -> Result<&'a BeaconBlockHeader, EthError> {
+    if ancestry.len() > MAX_DEPOSIT_ANCESTRY {
+        return Err(EthError::BadAncestry);
+    }
+    let mut child = finalized;
+    for parent in ancestry {
+        if parent.hash_tree_root() != child.parent_root || parent.slot >= child.slot {
+            return Err(EthError::BadAncestry);
+        }
+        child = parent;
+    }
+    Ok(child)
+}
+
+fn verify_execution(
+    execution: &ExecutionCommit,
+    block: &BeaconBlockHeader,
+) -> Result<(), EthError> {
     if !ssz::is_valid_merkle_branch(
-        &update.execution.receipts_root,
-        &update.execution.execution_branch,
+        &execution.receipts_root,
+        &execution.execution_branch,
         EXECUTION_RECEIPTS_DEPTH,
         EXECUTION_RECEIPTS_INDEX,
-        &update.finalized_header.body_root,
+        &block.body_root,
     ) {
         return Err(EthError::BadExecutionProof);
     }
@@ -309,17 +357,7 @@ fn verify_deposit_core(
     if !store.config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
-    if update.signature_slot < update.attested_header.slot
-        || store.config.sync_committee_period(update.signature_slot)
-            != store
-                .config
-                .sync_committee_period(update.attested_header.slot)
-    {
-        return Err(EthError::InconsistentSlots {
-            signature_slot: update.signature_slot,
-            attested_slot: update.attested_header.slot,
-        });
-    }
+    slots_are_consistent(store, update.signature_slot, update.attested_header.slot)?;
     verify_sync_aggregate(
         store,
         &update.attested_header,
@@ -327,9 +365,10 @@ fn verify_deposit_core(
         update.signature_slot,
         verifier,
     )?;
-    let electra = store.config.is_electra_at_slot(update.signature_slot);
+    let electra = store.config.is_electra_at_slot(update.attested_header.slot);
     verify_finality(update, electra)?;
-    verify_execution(update)?;
+    let block = verify_ancestry(&update.finalized_header, &deposit.ancestry)?;
+    verify_execution(&update.execution, block)?;
 
     let key = rlp::encode_uint(deposit.receipt_index);
     let value = mpt::verify_proof(
@@ -351,13 +390,19 @@ fn verify_deposit_core(
         });
     }
 
-    let anchor = update.finalized_header.hash_tree_root();
+    if update.execution.block_number != block.slot {
+        return Err(EthError::InconsistentSlots {
+            signature_slot: update.execution.block_number,
+            attested_slot: block.slot,
+        });
+    }
+    let anchor = block.hash_tree_root();
     let source_ref = deposit_source_ref(&anchor, &key, raw.log_index);
     Ok(CoreDeposit {
         anchor,
         source_ref,
         raw,
-        block_number: update.finalized_header.slot,
+        block_number: block.slot,
     })
 }
 
@@ -441,6 +486,7 @@ pub fn apply_sync_committee_update(
     {
         return Err(EthError::WrongPeriod);
     }
+    slots_are_consistent(store, update.signature_slot, update.attested_header.slot)?;
     verify_sync_aggregate(
         store,
         &update.attested_header,
@@ -449,6 +495,23 @@ pub fn apply_sync_committee_update(
         verifier,
     )?;
     let electra = store.config.is_electra_at_slot(update.attested_header.slot);
+    let (fin_index, fin_depth) = finalized_root_layout(electra);
+    if !ssz::is_valid_merkle_branch(
+        &update.finalized_header.hash_tree_root(),
+        &update.finality_branch,
+        fin_depth,
+        fin_index,
+        &update.attested_header.state_root,
+    ) {
+        return Err(EthError::BadFinalityProof);
+    }
+    if store
+        .config
+        .sync_committee_period(update.finalized_header.slot)
+        != store.period
+    {
+        return Err(EthError::WrongPeriod);
+    }
     let (index, depth) = next_sync_committee_layout(electra);
     let leaf = update.next_sync_committee.hash_tree_root();
     if !ssz::is_valid_merkle_branch(
@@ -687,12 +750,13 @@ mod tests {
             signature_slot: SIG_SLOT,
             execution: ExecutionCommit {
                 receipts_root,
-                block_number: 20_000_000,
+                block_number: PERIOD * PERIOD_SLOTS + 40,
                 execution_branch,
             },
         };
 
         let deposit = DepositProof {
+            ancestry: Vec::new(),
             receipt_index: 3,
             receipt_proof,
         };
@@ -706,6 +770,92 @@ mod tests {
             asset_id,
             finalized_root,
         }
+    }
+
+    fn finalize_above(f: &mut Fixture, links: usize) {
+        let deposit_block = f.update.finalized_header;
+        let mut ancestry = vec![deposit_block];
+        let mut child = deposit_block;
+        for i in 0..links {
+            let next = BeaconBlockHeader {
+                slot: child.slot + 1,
+                proposer_index: 200 + i as u64,
+                parent_root: child.hash_tree_root(),
+                state_root: [0x30 + i as u8; 32],
+                body_root: [0x40 + i as u8; 32],
+            };
+            ancestry.push(next);
+            child = next;
+        }
+        let finalized = ancestry.pop().expect("the new finalized header");
+        ancestry.reverse();
+        let attested_state_root = ssz::merkle_root_from_branch(
+            &finalized.hash_tree_root(),
+            &f.update.finality_branch,
+            FINALIZED_ROOT_INDEX,
+        );
+        f.update.attested_header.state_root = attested_state_root;
+        f.update.finalized_header = finalized;
+        let (committee, _) = committee(0xaa);
+        f.update.sync_aggregate.signature = sign_header(
+            &committee,
+            &f.update.sync_aggregate.participation,
+            &f.update.attested_header,
+            &f.store.config,
+        );
+        f.deposit.ancestry = ancestry;
+    }
+
+    #[test]
+    fn a_deposit_in_an_ancestor_of_the_finalized_block_proves_to_the_same_reference() {
+        let direct = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        let at_block = verify_trustless_deposit(
+            &direct.store,
+            &direct.update,
+            &direct.deposit,
+            &HashCommitmentBls,
+        )
+        .expect("the deposit proves in its own block");
+        let mut later = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        finalize_above(&mut later, 5);
+        assert_eq!(later.deposit.ancestry.len(), 5);
+        let through = verify_trustless_deposit(
+            &later.store,
+            &later.update,
+            &later.deposit,
+            &HashCommitmentBls,
+        )
+        .expect("the deposit proves through the finalized block's ancestry");
+        assert_eq!(
+            through.source_ref(),
+            at_block.source_ref(),
+            "one deposit, one reference"
+        );
+        assert_eq!(through.block_number(), at_block.block_number());
+
+        let mut broken = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        finalize_above(&mut broken, 3);
+        broken.deposit.ancestry[1].proposer_index ^= 1;
+        assert_eq!(
+            verify_trustless_deposit(
+                &broken.store,
+                &broken.update,
+                &broken.deposit,
+                &HashCommitmentBls
+            ),
+            Err(EthError::BadAncestry)
+        );
+
+        let mut unanchored = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        finalize_above(&mut unanchored, 2);
+        unanchored.deposit.ancestry.clear();
+        assert!(verify_trustless_deposit(
+            &unanchored.store,
+            &unanchored.update,
+            &unanchored.deposit,
+            &HashCommitmentBls
+        )
+        .is_err());
     }
 
     #[test]
@@ -871,19 +1021,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_sync_committee_period_rotation_verifies() {
+    fn committee_update(
+        signers: &SyncCommittee,
+        next: &SyncCommittee,
+        finalized_slot: u64,
+    ) -> SyncCommitteeUpdate {
         let cfg = config::ethereum();
-        let (current, _) = committee(0xaa);
-        let (next, _) = committee(0xbb);
-
-        let next_branch: Vec<[u8; 32]> = (0..NEXT_SYNC_COMMITTEE_DEPTH)
-            .map(|i| [0xc0 + i as u8; 32])
-            .collect();
-        let next_leaf = next.hash_tree_root();
-        let attested_state_root =
-            ssz::merkle_root_from_branch(&next_leaf, &next_branch, NEXT_SYNC_COMMITTEE_INDEX);
-
+        let finalized_header = BeaconBlockHeader {
+            slot: finalized_slot,
+            proposer_index: 99,
+            parent_root: [0x01; 32],
+            state_root: [0x02; 32],
+            body_root: [0x05; 32],
+        };
+        let (attested_state_root, finality_branch, next_branch) = ssz::two_leaf_tree(
+            (
+                finalized_header.hash_tree_root(),
+                FINALIZED_ROOT_INDEX,
+                FINALIZED_ROOT_DEPTH,
+            ),
+            (
+                next.hash_tree_root(),
+                NEXT_SYNC_COMMITTEE_INDEX,
+                NEXT_SYNC_COMMITTEE_DEPTH,
+            ),
+        );
         let attested_header = BeaconBlockHeader {
             slot: PERIOD * PERIOD_SLOTS + 60,
             proposer_index: 100,
@@ -891,12 +1053,25 @@ mod tests {
             state_root: attested_state_root,
             body_root: [0x04; 32],
         };
-
         let participation = full_participation();
-        let signature = sign_header(&current, &participation, &attested_header, &cfg);
+        let signature = sign_header(signers, &participation, &attested_header, &cfg);
+        SyncCommitteeUpdate {
+            attested_header,
+            finalized_header,
+            finality_branch,
+            next_sync_committee: next.clone(),
+            next_sync_committee_branch: next_branch,
+            sync_aggregate: SyncAggregate {
+                participation,
+                signature,
+            },
+            signature_slot: SIG_SLOT,
+        }
+    }
 
-        let mut store = LightClientStore {
-            config: cfg,
+    fn committee_store(current: SyncCommittee) -> LightClientStore {
+        LightClientStore {
+            config: config::ethereum(),
             period: PERIOD,
             current_sync_committee: current,
             next_sync_committee: None,
@@ -907,24 +1082,39 @@ mod tests {
                 state_root: [0x02; 32],
                 body_root: [0x05; 32],
             },
-        };
+        }
+    }
 
-        let update = SyncCommitteeUpdate {
-            attested_header,
-            next_sync_committee: next.clone(),
-            next_sync_committee_branch: next_branch,
-            sync_aggregate: SyncAggregate {
-                participation,
-                signature,
-            },
-            signature_slot: SIG_SLOT,
-        };
-
+    #[test]
+    fn a_sync_committee_period_rotation_verifies() {
+        let (current, _) = committee(0xaa);
+        let (next, _) = committee(0xbb);
+        let mut store = committee_store(current.clone());
+        let update = committee_update(&current, &next, PERIOD * PERIOD_SLOTS + 40);
         assert!(apply_sync_committee_update(&mut store, &update, &HashCommitmentBls).is_ok());
         assert_eq!(store.next_sync_committee, Some(next.clone()));
         assert!(advance_period(&mut store).is_ok());
         assert_eq!(store.period, PERIOD + 1);
         assert_eq!(store.current_sync_committee, next);
+    }
+
+    #[test]
+    fn a_next_committee_is_learned_only_behind_a_finalized_header_of_the_same_period() {
+        let (current, _) = committee(0xaa);
+        let (next, _) = committee(0xbb);
+        let mut store = committee_store(current.clone());
+        let stale = committee_update(&current, &next, (PERIOD - 1) * PERIOD_SLOTS + 40);
+        assert_eq!(
+            apply_sync_committee_update(&mut store, &stale, &HashCommitmentBls),
+            Err(EthError::WrongPeriod)
+        );
+        let mut unproven = committee_update(&current, &next, PERIOD * PERIOD_SLOTS + 40);
+        unproven.finality_branch[0][0] ^= 0xff;
+        assert_eq!(
+            apply_sync_committee_update(&mut store, &unproven, &HashCommitmentBls),
+            Err(EthError::BadFinalityProof)
+        );
+        assert_eq!(store.next_sync_committee, None);
     }
 
     #[test]
@@ -959,57 +1149,15 @@ mod tests {
 
     #[test]
     fn a_wrong_next_committee_branch_is_refused() {
-        let cfg = config::ethereum();
         let (current, _) = committee(0xaa);
         let (next, _) = committee(0xbb);
-
-        let next_branch: Vec<[u8; 32]> = (0..NEXT_SYNC_COMMITTEE_DEPTH)
-            .map(|i| [0xc0 + i as u8; 32])
-            .collect();
-        let next_leaf = next.hash_tree_root();
-        let attested_state_root =
-            ssz::merkle_root_from_branch(&next_leaf, &next_branch, NEXT_SYNC_COMMITTEE_INDEX);
-
-        let attested_header = BeaconBlockHeader {
-            slot: PERIOD * PERIOD_SLOTS + 60,
-            proposer_index: 100,
-            parent_root: [0x03; 32],
-            state_root: attested_state_root,
-            body_root: [0x04; 32],
-        };
-        let participation = full_participation();
-        let signature = sign_header(&current, &participation, &attested_header, &cfg);
-
-        let mut store = LightClientStore {
-            config: cfg,
-            period: PERIOD,
-            current_sync_committee: current,
-            next_sync_committee: None,
-            finalized_header: attested_header,
-        };
-
-        let mut bad_branch = update_branch();
-        bad_branch[0][0] ^= 0xff;
-        let update = SyncCommitteeUpdate {
-            attested_header,
-            next_sync_committee: next,
-            next_sync_committee_branch: bad_branch,
-            sync_aggregate: SyncAggregate {
-                participation,
-                signature,
-            },
-            signature_slot: SIG_SLOT,
-        };
+        let mut store = committee_store(current.clone());
+        let mut update = committee_update(&current, &next, PERIOD * PERIOD_SLOTS + 40);
+        update.next_sync_committee_branch[0][0] ^= 0xff;
         assert_eq!(
             apply_sync_committee_update(&mut store, &update, &HashCommitmentBls),
             Err(EthError::BadSyncCommitteeProof)
         );
-    }
-
-    fn update_branch() -> Vec<[u8; 32]> {
-        (0..NEXT_SYNC_COMMITTEE_DEPTH)
-            .map(|i| [0xc0 + i as u8; 32])
-            .collect()
     }
 
     #[test]
@@ -1216,6 +1364,135 @@ mod tests {
                 got: 300,
                 needed: 342
             })
+        );
+    }
+}
+
+#[cfg(test)]
+mod corridor_binding_tests {
+    use super::*;
+    use qlc_stark::corridors::{evm_light_client, EventClaim};
+
+    fn claim() -> EventClaim {
+        EventClaim {
+            source_ref: [4u8; 32],
+            asset_id: [5u8; 16],
+            amount: 1_000,
+            recipient: [6u8; 32],
+        }
+    }
+
+    #[test]
+    fn the_corridor_changes_the_public_input_digest() {
+        let ethereum = evm_light_client(
+            2,
+            qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+            900,
+            [3u8; 32],
+            claim(),
+            64,
+        );
+        let arbitrum = evm_light_client(
+            6,
+            qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+            900,
+            [3u8; 32],
+            claim(),
+            64,
+        );
+
+        assert_ne!(
+            public_input_digest(&ethereum),
+            public_input_digest(&arbitrum),
+            "two EVM corridors produced the same digest for the same event, so a deposit proved \
+             on one chain would be admissible as a deposit on the other"
+        );
+    }
+
+    #[test]
+    fn every_field_of_the_statement_moves_the_digest() {
+        let base = evm_light_client(
+            2,
+            qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+            900,
+            [3u8; 32],
+            claim(),
+            64,
+        );
+        let baseline = public_input_digest(&base);
+
+        let other_anchor = evm_light_client(
+            2,
+            qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+            900,
+            [4u8; 32],
+            claim(),
+            64,
+        );
+        assert_ne!(
+            baseline,
+            public_input_digest(&other_anchor),
+            "the anchor must bind"
+        );
+
+        let other_block = evm_light_client(
+            2,
+            qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+            901,
+            [3u8; 32],
+            claim(),
+            64,
+        );
+        assert_ne!(
+            baseline,
+            public_input_digest(&other_block),
+            "the block number must bind"
+        );
+
+        let mut amount = claim();
+        amount.amount = 1_001;
+        let other_amount = evm_light_client(
+            2,
+            qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+            900,
+            [3u8; 32],
+            amount,
+            64,
+        );
+        assert_ne!(
+            baseline,
+            public_input_digest(&other_amount),
+            "the amount must bind"
+        );
+
+        let mut recipient = claim();
+        recipient.recipient = [7u8; 32];
+        let other_recipient = evm_light_client(
+            2,
+            qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+            900,
+            [3u8; 32],
+            recipient,
+            64,
+        );
+        assert_ne!(
+            baseline,
+            public_input_digest(&other_recipient),
+            "the recipient must bind"
+        );
+
+        let other_depth = evm_light_client(
+            2,
+            qlc_stark::QUANTOVA_DEST_CHAIN_ID,
+            900,
+            [3u8; 32],
+            claim(),
+            32,
+        );
+        assert_ne!(
+            baseline,
+            public_input_digest(&other_depth),
+            "the finality depth must bind"
         );
     }
 }

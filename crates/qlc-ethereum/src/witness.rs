@@ -228,12 +228,13 @@ mod tests {
             signature_slot: SIG_SLOT,
             execution: ExecutionCommit {
                 receipts_root,
-                block_number: 20_000_000,
+                block_number: PERIOD * PERIOD_SLOTS + 40,
                 execution_branch,
             },
         };
 
         let deposit = DepositProof {
+            ancestry: Vec::new(),
             receipt_index: 3,
             receipt_proof,
         };

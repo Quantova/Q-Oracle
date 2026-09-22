@@ -880,6 +880,45 @@ pub fn run_with<A: ToSocketAddrs>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_coinbase(
+        txid: [u8; 32],
+    ) -> (
+        [u8; 32],
+        Vec<u8>,
+        Vec<qlc_bitcoin::MerkleStep>,
+        Vec<qlc_bitcoin::MerkleStep>,
+    ) {
+        let mut coinbase = Vec::new();
+        coinbase.extend_from_slice(&1u32.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.extend_from_slice(&[0u8; 32]);
+        coinbase.extend_from_slice(&[0xff; 4]);
+        coinbase.push(0x04);
+        coinbase.extend_from_slice(&[0x03, 0x01, 0x00, 0x00]);
+        coinbase.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.extend_from_slice(&5_000_000_000u64.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.push(0x51);
+        coinbase.extend_from_slice(&0u32.to_le_bytes());
+        let coinbase_id = qlc_bitcoin::double_sha256(&coinbase);
+        let mut pair = [0u8; 64];
+        pair[..32].copy_from_slice(&coinbase_id);
+        pair[32..].copy_from_slice(&txid);
+        (
+            qlc_bitcoin::double_sha256(&pair),
+            coinbase,
+            vec![qlc_bitcoin::MerkleStep {
+                hash: coinbase_id,
+                sibling_on_left: true,
+            }],
+            vec![qlc_bitcoin::MerkleStep {
+                hash: txid,
+                sibling_on_left: false,
+            }],
+        )
+    }
     use q_airlock::{AttestationEnvelope, SignerSig};
     use q_assets::Network;
     use q_codec::{
@@ -959,7 +998,8 @@ mod tests {
     ) -> (BitcoinProofMaterial, BitcoinAnchor, [u8; 32]) {
         let raw = raw_deposit_tx(&[(amount, bridge.to_vec()), (0, op_return(recipient))]);
         let txid = Transaction::parse(&raw).unwrap().txid();
-        let mut headers = vec![mine([0u8; 32], txid)];
+        let (root, coinbase_tx, branch, coinbase_branch) = with_coinbase(txid);
+        let mut headers = vec![mine([0u8; 32], root)];
         let mut prev = headers[0].block_hash();
         for i in 0..5u8 {
             let block = mine(prev, [i + 1; 32]);
@@ -975,8 +1015,10 @@ mod tests {
             headers,
             start_height: 0,
             deposit_height: 0,
-            branch: vec![],
+            branch,
             raw_tx: raw,
+            coinbase_tx,
+            coinbase_branch,
         };
         (
             material,
@@ -1389,6 +1431,8 @@ mod tests {
             release_height: 100,
             branch: Vec::new(),
             raw_tx: vec![0u8; 60],
+            coinbase_tx: Vec::new(),
+            coinbase_branch: Vec::new(),
         };
         for _ in 0..(MAX_PENDING_RELEASES + 1) {
             assert_eq!(

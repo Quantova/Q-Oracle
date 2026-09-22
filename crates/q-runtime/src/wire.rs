@@ -314,12 +314,28 @@ pub fn decode_release_proof(body: &Json) -> Result<BitcoinReleaseProof, WireErro
     for item in branch_items {
         branch.push(merkle_step_from(item)?);
     }
+    let coinbase_items = field(body, "coinbase_branch")?
+        .as_array()
+        .ok_or(WireError::BadType("coinbase_branch"))?;
+    if coinbase_items.len() > MAX_RELEASE_BRANCH {
+        return Err(WireError::BadField("coinbase_branch"));
+    }
+    let mut coinbase_branch = Vec::with_capacity(coinbase_items.len());
+    for item in coinbase_items {
+        coinbase_branch.push(merkle_step_from(item)?);
+    }
     Ok(BitcoinReleaseProof {
         headers,
         start_height: as_u32(field(body, "start_height")?, "start_height")?,
         release_height: as_u32(field(body, "release_height")?, "release_height")?,
         branch,
         raw_tx: hex_bounded(field(body, "raw_tx")?, "raw_tx", MAX_RELEASE_TX_BYTES)?,
+        coinbase_tx: hex_bounded(
+            field(body, "coinbase_tx")?,
+            "coinbase_tx",
+            MAX_RELEASE_TX_BYTES,
+        )?,
+        coinbase_branch,
     })
 }
 
@@ -408,6 +424,22 @@ fn encode_proof(proof: &DepositProof) -> Json {
                 ),
             ),
             ("raw_tx", hexs(&material.raw_tx)),
+            ("coinbase_tx", hexs(&material.coinbase_tx)),
+            (
+                "coinbase_branch",
+                Json::Array(
+                    material
+                        .coinbase_branch
+                        .iter()
+                        .map(|s| {
+                            object(vec![
+                                ("hash", hexs(&s.hash)),
+                                ("sibling_on_left", Json::Bool(s.sibling_on_left)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
             ("fact", hexs(&fact.encode())),
         ]),
         DepositProof::Ethereum {
@@ -442,6 +474,10 @@ fn encode_proof(proof: &DepositProof) -> Json {
             (
                 "receipt_proof",
                 Json::Array(deposit.receipt_proof.iter().map(|n| hexs(n)).collect()),
+            ),
+            (
+                "ancestry",
+                Json::Array(deposit.ancestry.iter().map(header_json).collect()),
             ),
             ("fact", hexs(&fact.encode())),
         ]),
@@ -538,6 +574,19 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                     sibling_on_left: as_bool(field(s, "sibling_on_left")?, "sibling_on_left")?,
                 });
             }
+            let coinbase_json = field(j, "coinbase_branch")?
+                .as_array()
+                .ok_or(WireError::BadType("coinbase_branch"))?;
+            if coinbase_json.len() > MAX_BRANCH {
+                return Err(WireError::BadField("coinbase_branch"));
+            }
+            let mut coinbase_branch = Vec::with_capacity(coinbase_json.len());
+            for s in coinbase_json {
+                coinbase_branch.push(MerkleStep {
+                    hash: hex_array::<32>(field(s, "hash")?, "hash")?,
+                    sibling_on_left: as_bool(field(s, "sibling_on_left")?, "sibling_on_left")?,
+                });
+            }
             Ok(DepositProof::Bitcoin {
                 material: BitcoinProofMaterial {
                     headers,
@@ -545,6 +594,12 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                     deposit_height: as_u32(field(j, "deposit_height")?, "deposit_height")?,
                     branch,
                     raw_tx: hex_bounded(field(j, "raw_tx")?, "raw_tx", crate::watch::MAX_RAW_TX)?,
+                    coinbase_tx: hex_bounded(
+                        field(j, "coinbase_tx")?,
+                        "coinbase_tx",
+                        crate::watch::MAX_RAW_TX,
+                    )?,
+                    coinbase_branch,
                 },
                 fact: decode_fact(j)?,
             })
@@ -593,9 +648,22 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                     )?,
                 },
             };
+            let ancestry = match j.get("ancestry") {
+                None => Vec::new(),
+                Some(list) => {
+                    let list = list.as_array().ok_or(WireError::BadType("ancestry"))?;
+                    if list.len() > qlc_ethereum::engine::MAX_DEPOSIT_ANCESTRY {
+                        return Err(WireError::BadField("ancestry"));
+                    }
+                    list.iter()
+                        .map(header_from)
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+            };
             let deposit = EthDepositProof {
                 receipt_index: as_u64(field(j, "receipt_index")?, "receipt_index")?,
                 receipt_proof,
+                ancestry,
             };
             Ok(DepositProof::Ethereum {
                 update,
@@ -1107,6 +1175,11 @@ fn spv_err_json(e: &SpvError) -> Json {
         SpvError::CheckpointNotInChain => tagged("spv", "checkpoint_not_in_chain", vec![]),
         SpvError::CheckpointMismatch => tagged("spv", "checkpoint_mismatch", vec![]),
         SpvError::InsufficientWork => tagged("spv", "insufficient_work", vec![]),
+        SpvError::UnverifiableRetarget { index } => tagged(
+            "spv",
+            "unverifiable_retarget",
+            vec![("index", usizej(*index))],
+        ),
         SpvError::CheckpointNotArmed => tagged("spv", "checkpoint_not_armed", vec![]),
         SpvError::MalformedTransaction => tagged("spv", "malformed_transaction", vec![]),
         SpvError::TransactionMismatch => tagged("spv", "transaction_mismatch", vec![]),
@@ -1148,6 +1221,15 @@ fn spv_err_from(j: &Json) -> Result<SpvError, WireError> {
         "checkpoint_mismatch" => Ok(SpvError::CheckpointMismatch),
         "insufficient_work" => Ok(SpvError::InsufficientWork),
         "checkpoint_not_armed" => Ok(SpvError::CheckpointNotArmed),
+        "unverifiable_retarget" => Ok(SpvError::UnverifiableRetarget {
+            index: as_usize(field(j, "index")?, "index")?,
+        }),
+        "non_canonical_bits" => Ok(SpvError::NonCanonicalBits {
+            index: as_usize(field(j, "index")?, "index")?,
+        }),
+        "median_time_past" => Ok(SpvError::MedianTimePast {
+            index: as_usize(field(j, "index")?, "index")?,
+        }),
         "malformed_transaction" => Ok(SpvError::MalformedTransaction),
         "transaction_mismatch" => Ok(SpvError::TransactionMismatch),
         "merkle_branch_too_long" => Ok(SpvError::MerkleBranchTooLong),
@@ -1181,6 +1263,7 @@ fn eth_err_json(e: &EthError) -> Json {
             ],
         ),
         EthError::BadFinalityProof => tagged("eth", "bad_finality_proof", vec![]),
+        EthError::BadAncestry => tagged("eth", "bad_ancestry", vec![]),
         EthError::BadExecutionProof => tagged("eth", "bad_execution_proof", vec![]),
         EthError::BadSyncCommitteeProof => tagged("eth", "bad_sync_committee_proof", vec![]),
         EthError::BadSignature => tagged("eth", "bad_signature", vec![]),
@@ -1215,6 +1298,7 @@ fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
             attested_slot: as_u64(field(j, "attested_slot")?, "attested_slot")?,
         }),
         "bad_finality_proof" => Ok(EthError::BadFinalityProof),
+        "bad_ancestry" => Ok(EthError::BadAncestry),
         "bad_execution_proof" => Ok(EthError::BadExecutionProof),
         "bad_sync_committee_proof" => Ok(EthError::BadSyncCommitteeProof),
         "bad_signature" => Ok(EthError::BadSignature),
@@ -2128,6 +2212,11 @@ mod tests {
                 sibling_on_left: true,
             }],
             raw_tx: vec![0x01, 0x02, 0x03, 0x04],
+            coinbase_tx: vec![0x05, 0x06],
+            coinbase_branch: vec![MerkleStep {
+                hash: [0xdd; 32],
+                sibling_on_left: false,
+            }],
         };
         round_request(Request::SubmitDeposit(DepositRequest {
             proof: DepositProof::Bitcoin {
@@ -2162,6 +2251,7 @@ mod tests {
             },
         };
         let deposit = EthDepositProof {
+            ancestry: Vec::new(),
             receipt_index: 3,
             receipt_proof: vec![vec![0x01, 0x02], vec![0x03, 0x04, 0x05]],
         };

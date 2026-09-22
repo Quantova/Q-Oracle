@@ -213,6 +213,45 @@ pub fn ingest_once(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_coinbase(
+        txid: [u8; 32],
+    ) -> (
+        [u8; 32],
+        Vec<u8>,
+        Vec<qlc_bitcoin::MerkleStep>,
+        Vec<qlc_bitcoin::MerkleStep>,
+    ) {
+        let mut coinbase = Vec::new();
+        coinbase.extend_from_slice(&1u32.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.extend_from_slice(&[0u8; 32]);
+        coinbase.extend_from_slice(&[0xff; 4]);
+        coinbase.push(0x04);
+        coinbase.extend_from_slice(&[0x03, 0x01, 0x00, 0x00]);
+        coinbase.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.extend_from_slice(&5_000_000_000u64.to_le_bytes());
+        coinbase.push(0x01);
+        coinbase.push(0x51);
+        coinbase.extend_from_slice(&0u32.to_le_bytes());
+        let coinbase_id = qlc_bitcoin::double_sha256(&coinbase);
+        let mut pair = [0u8; 64];
+        pair[..32].copy_from_slice(&coinbase_id);
+        pair[32..].copy_from_slice(&txid);
+        (
+            qlc_bitcoin::double_sha256(&pair),
+            coinbase,
+            vec![qlc_bitcoin::MerkleStep {
+                hash: coinbase_id,
+                sibling_on_left: true,
+            }],
+            vec![qlc_bitcoin::MerkleStep {
+                hash: txid,
+                sibling_on_left: false,
+            }],
+        )
+    }
     use crate::boot::{boot, boot_configured, shared, DEST_CHAIN};
     use q_assets::Network;
     use q_codec::{AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
@@ -304,12 +343,15 @@ mod tests {
             let txid = Transaction::parse(&self.raw_tx)
                 .map_err(|_| WatchError::Rpc("unparseable transaction".to_string()))?
                 .txid();
+            let (root, coinbase_tx, branch, coinbase_branch) = with_coinbase(txid);
             let material = BitcoinProofMaterial {
-                headers: crafted_chain(txid),
+                headers: crafted_chain(root),
                 start_height: 0,
                 deposit_height: 0,
-                branch: vec![],
+                branch,
                 raw_tx: self.raw_tx.clone(),
+                coinbase_tx,
+                coinbase_branch,
             };
             let fact = BridgeFact {
                 version: FACT_VERSION,
@@ -351,7 +393,7 @@ mod tests {
         let asset_id = derive_asset_id(Network::Bitcoin, "BTC").0;
         let checkpoint = Checkpoint {
             height: 0,
-            hash: crafted_chain(txid)[0].block_hash(),
+            hash: crafted_chain(with_coinbase(txid).0)[0].block_hash(),
             min_work: U256::ONE,
         };
 
@@ -449,6 +491,8 @@ mod tests {
             deposit_height: 0,
             branch: vec![],
             raw_tx: vec![0u8; 4],
+            coinbase_tx: Vec::new(),
+            coinbase_branch: Vec::new(),
         };
         let state = shared(boot());
         let mut pool = WatcherPool::new();
@@ -493,7 +537,7 @@ mod tests {
         let asset_id = derive_asset_id(Network::Bitcoin, "BTC").0;
         let checkpoint = Checkpoint {
             height: 0,
-            hash: crafted_chain(txid)[0].block_hash(),
+            hash: crafted_chain(with_coinbase(txid).0)[0].block_hash(),
             min_work: U256::ONE,
         };
         let state = shared(boot_configured());
@@ -572,6 +616,8 @@ mod tests {
                 deposit_height: 0,
                 branch: vec![],
                 raw_tx: vec![0u8; 4],
+                coinbase_tx: Vec::new(),
+                coinbase_branch: Vec::new(),
             };
             proofs.push(bitcoin_proof(material, btc_fact(txid)));
         }

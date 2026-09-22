@@ -102,7 +102,10 @@ pub fn verify_chain(
                 return Err(SpvError::BrokenLink { index: i });
             }
             let interval = params.retarget_interval() as usize;
-            if height % params.retarget_interval() == 0 && i >= interval {
+            if height % params.retarget_interval() == 0 {
+                if i < interval {
+                    return Err(SpvError::UnverifiableRetarget { index: i });
+                }
                 check_retarget_boundary(&headers[i - interval], prev, h, params)?;
             } else {
                 bits_expectation(height, prev.bits, h.bits, params, i)?;
@@ -171,9 +174,6 @@ impl VerifiedChain {
         if header.block_hash() != checkpoint.hash {
             return Err(SpvError::CheckpointMismatch);
         }
-        // Only the work built after the checkpoint measures a fork from it. Headers before
-        // it are public history anyone can prepend, so counting them lets a short private
-        // fork meet any floor.
         if self.work_above(checkpoint.height) < checkpoint.min_work {
             return Err(SpvError::InsufficientWork);
         }
@@ -238,64 +238,6 @@ impl VerifiedChain {
 mod tests {
     use super::*;
     use crate::params::{BITCOIN, BITCOIN_CASH};
-
-    #[test]
-    fn a_backdated_timestamp_below_the_median_of_eleven_is_rejected() {
-        let easy = NetworkParams {
-            pow_limit_bits: 0x207f_ffff,
-            ..BITCOIN
-        };
-        let mine = |prev: [u8; 32], root: [u8; 32], timestamp: u32| {
-            let mut h = BlockHeader {
-                version: 1,
-                prev_block: prev,
-                merkle_root: root,
-                timestamp,
-                bits: 0x207f_ffff,
-                nonce: 0,
-            };
-            while !h.meets_pow() {
-                h.nonce = h.nonce.wrapping_add(1);
-            }
-            h
-        };
-        let mut headers = Vec::new();
-        let mut prev = [0u8; 32];
-        for i in 0..12u32 {
-            let h = mine(prev, [i as u8 + 1; 32], 1_700_000_000 + i * 600);
-            prev = h.block_hash();
-            headers.push(h);
-        }
-        headers.push(mine(prev, [0xff; 32], 1_700_000_000));
-        assert_eq!(
-            verify_chain(&headers, 0, &easy),
-            Err(SpvError::MedianTimePast { index: 12 })
-        );
-    }
-
-    #[test]
-    fn a_non_canonical_bits_encoding_is_refused() {
-        let easy = NetworkParams {
-            pow_limit_bits: 0x207f_ffff,
-            ..BITCOIN
-        };
-        let mut h = BlockHeader {
-            version: 1,
-            prev_block: [0u8; 32],
-            merkle_root: [0x11u8; 32],
-            timestamp: 1_700_000_000,
-            bits: 0x207f_ffff,
-            nonce: 0,
-        };
-        while !h.meets_pow() {
-            h.nonce += 1;
-        }
-        h.bits |= 0x0080_0000;
-        assert_eq!(
-            verify_chain(&[h], 0, &easy),
-            Err(SpvError::NonCanonicalBits { index: 0 })
-        );
-    }
 
     fn from_hex(s: &str) -> Vec<u8> {
         let b = s.as_bytes();
@@ -384,6 +326,67 @@ mod tests {
         assert_eq!(
             verify_chain(&headers, 0, &BITCOIN),
             Err(SpvError::BrokenLink { index: 2 })
+        );
+    }
+
+    #[test]
+    fn a_backdated_timestamp_below_the_median_of_eleven_is_rejected() {
+        let easy = NetworkParams {
+            pow_limit_bits: 0x207f_ffff,
+            ..BITCOIN
+        };
+        let mine = |prev: [u8; 32], root: [u8; 32], timestamp: u32| {
+            let mut h = BlockHeader {
+                version: 1,
+                prev_block: prev,
+                merkle_root: root,
+                timestamp,
+                bits: 0x207f_ffff,
+                nonce: 0,
+            };
+            while !h.meets_pow() {
+                h.nonce = h.nonce.wrapping_add(1);
+            }
+            h
+        };
+        let mut headers = Vec::new();
+        let mut prev = [0u8; 32];
+        for i in 0..12u32 {
+            let h = mine(prev, [i as u8 + 1; 32], 1_700_000_000 + i * 600);
+            prev = h.block_hash();
+            headers.push(h);
+        }
+        let backdated = mine(prev, [0xff; 32], 1_700_000_000);
+        headers.push(backdated);
+        assert_eq!(
+            verify_chain(&headers, 0, &easy),
+            Err(SpvError::MedianTimePast { index: 12 }),
+            "a header backdated below the median of the last eleven must be refused"
+        );
+    }
+
+    #[test]
+    fn a_non_canonical_bits_encoding_is_refused() {
+        let easy = NetworkParams {
+            pow_limit_bits: 0x207f_ffff,
+            ..BITCOIN
+        };
+        let mut h = BlockHeader {
+            version: 1,
+            prev_block: [0u8; 32],
+            merkle_root: [0x11u8; 32],
+            timestamp: 1_700_000_000,
+            bits: 0x207f_ffff,
+            nonce: 0,
+        };
+        while !h.meets_pow() {
+            h.nonce += 1;
+        }
+        h.bits |= 0x0080_0000;
+        assert_eq!(
+            verify_chain(&[h], 0, &easy),
+            Err(SpvError::NonCanonicalBits { index: 0 }),
+            "a bits word carrying the sign bit is not the canonical target encoding"
         );
     }
 

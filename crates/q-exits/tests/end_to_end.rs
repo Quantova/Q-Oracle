@@ -272,8 +272,25 @@ fn mine(mut header: BlockHeader) -> BlockHeader {
     header
 }
 
+fn coinbase_tx() -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&1u32.to_le_bytes());
+    out.push(0x01);
+    out.extend_from_slice(&[0u8; 32]);
+    out.extend_from_slice(&[0xff; 4]);
+    out.push(0x04);
+    out.extend_from_slice(&[0x03, 0x01, 0x00, 0x00]);
+    out.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+    out.push(0x01);
+    out.extend_from_slice(&5_000_000_000u64.to_le_bytes());
+    out.push(0x01);
+    out.push(0x51);
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out
+}
+
 fn release_around(raw_tx: Vec<u8>) -> BitcoinReleaseProof {
-    let coinbase = [0xcb; 32];
+    let coinbase = double_sha256(&coinbase_tx());
     let release_txid = double_sha256(&raw_tx);
     let mut leaves = Vec::new();
     leaves.extend_from_slice(&coinbase);
@@ -313,6 +330,11 @@ fn release_around(raw_tx: Vec<u8>) -> BitcoinReleaseProof {
         release_height: 100,
         branch,
         raw_tx,
+        coinbase_tx: coinbase_tx(),
+        coinbase_branch: vec![MerkleStep {
+            hash: release_txid,
+            sibling_on_left: false,
+        }],
     }
 }
 

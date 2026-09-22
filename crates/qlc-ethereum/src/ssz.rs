@@ -79,10 +79,45 @@ pub fn is_valid_merkle_branch(
     &value == root
 }
 
-// positions at or past the width of the index read as zero, so an over long branch
-// shifts to zero instead of panicking
+// The bit of `index` at position `i`, treating every position at or beyond the width of
+// the index as zero so an over-long branch shifts to zero rather than panicking.
 fn branch_bit(index: u64, i: usize) -> bool {
     i < 64 && (index >> i) & 1 == 1
+}
+
+#[cfg(any(test, feature = "test-util"))]
+pub fn two_leaf_tree(
+    first: ([u8; 32], u64, usize),
+    second: ([u8; 32], u64, usize),
+) -> ([u8; 32], Vec<[u8; 32]>, Vec<[u8; 32]>) {
+    let depth = first.2.max(second.2);
+    let at = |index: u64, depth: usize| (1u64 << depth) + (index & ((1u64 << depth) - 1));
+    let fixed = [
+        (at(first.1, first.2), first.0),
+        (at(second.1, second.2), second.0),
+    ];
+    fn node(g: u64, depth: usize, fixed: &[(u64, [u8; 32]); 2]) -> [u8; 32] {
+        if let Some((_, value)) = fixed.iter().find(|(at, _)| *at == g) {
+            return *value;
+        }
+        if 63 - g.leading_zeros() as usize >= depth {
+            return zero_chunk();
+        }
+        hash_pair(&node(2 * g, depth, fixed), &node(2 * g + 1, depth, fixed))
+    }
+    let branch = |mut g: u64| {
+        let mut out = Vec::new();
+        while g > 1 {
+            out.push(node(g ^ 1, depth, &fixed));
+            g >>= 1;
+        }
+        out
+    };
+    (
+        node(1, depth, &fixed),
+        branch(fixed[0].0),
+        branch(fixed[1].0),
+    )
 }
 
 pub fn merkle_root_from_branch(leaf: &[u8; 32], branch: &[[u8; 32]], index: u64) -> [u8; 32] {

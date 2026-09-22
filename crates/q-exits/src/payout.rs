@@ -153,6 +153,8 @@ pub struct BitcoinReleaseProof {
     pub release_height: u32,
     pub branch: Vec<MerkleStep>,
     pub raw_tx: Vec<u8>,
+    pub coinbase_tx: Vec<u8>,
+    pub coinbase_branch: Vec<MerkleStep>,
 }
 
 impl BitcoinReleaseProof {
@@ -182,6 +184,22 @@ impl BitcoinReleaseProof {
         chain
             .anchored_to(checkpoint)
             .map_err(PayoutProofError::Spv)?;
+        let coinbase = qlc_bitcoin::tx::Transaction::parse(&self.coinbase_tx)
+            .map_err(PayoutProofError::Spv)?;
+        if !coinbase.is_coinbase() || self.coinbase_branch.iter().any(|step| step.sibling_on_left) {
+            return Err(PayoutProofError::MalformedTransaction);
+        }
+        chain
+            .verify_deposit(
+                self.release_height,
+                coinbase.txid(),
+                &self.coinbase_branch,
+                confirmation_depth,
+            )
+            .map_err(PayoutProofError::Spv)?;
+        if self.branch.len() != self.coinbase_branch.len() {
+            return Err(PayoutProofError::Spv(SpvError::MerkleMismatch));
+        }
         let txid = double_sha256(&self.raw_tx);
         let confirmed = chain
             .verify_deposit(self.release_height, txid, &self.branch, confirmation_depth)
@@ -578,8 +596,25 @@ mod tests {
         release_around(release_tx(beneficiary, amount, burn_ref))
     }
 
+    fn coinbase_tx() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.push(0x01);
+        out.extend_from_slice(&[0u8; 32]);
+        out.extend_from_slice(&[0xff; 4]);
+        out.push(0x04);
+        out.extend_from_slice(&[0x03, 0x01, 0x00, 0x00]);
+        out.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+        out.push(0x01);
+        out.extend_from_slice(&5_000_000_000u64.to_le_bytes());
+        out.push(0x01);
+        out.push(0x51);
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out
+    }
+
     fn release_around(raw_tx: Vec<u8>) -> BitcoinReleaseProof {
-        let coinbase = [0xcb; 32];
+        let coinbase = double_sha256(&coinbase_tx());
         let release_txid = double_sha256(&raw_tx);
         let mut leaves = Vec::new();
         leaves.extend_from_slice(&coinbase);
@@ -619,6 +654,11 @@ mod tests {
             release_height: 100,
             branch,
             raw_tx,
+            coinbase_tx: coinbase_tx(),
+            coinbase_branch: vec![MerkleStep {
+                hash: release_txid,
+                sibling_on_left: false,
+            }],
         }
     }
 
@@ -758,10 +798,53 @@ mod tests {
     }
 
     #[test]
+    fn a_payout_hung_under_a_64_byte_node_is_refused() {
+        let s = statement();
+        let honest = bitcoin_release(&s.destination, 500, &s.burn_ref);
+        let fake_id = double_sha256(&honest.raw_tx);
+        let left = [0x5a; 32];
+        let mut node = Vec::new();
+        node.extend_from_slice(&left);
+        node.extend_from_slice(&fake_id);
+        let node = double_sha256(&node);
+        let coinbase_id = double_sha256(&coinbase_tx());
+        let mut top = Vec::new();
+        top.extend_from_slice(&coinbase_id);
+        top.extend_from_slice(&node);
+        let mut forged = honest.clone();
+        forged.headers[0].merkle_root = double_sha256(&top);
+        forged.headers[0] = mine(forged.headers[0]);
+        for i in 1..forged.headers.len() {
+            forged.headers[i].prev_block = forged.headers[i - 1].block_hash();
+            forged.headers[i] = mine(forged.headers[i]);
+        }
+        forged.branch = vec![
+            MerkleStep {
+                hash: left,
+                sibling_on_left: true,
+            },
+            MerkleStep {
+                hash: coinbase_id,
+                sibling_on_left: true,
+            },
+        ];
+        forged.coinbase_branch = vec![MerkleStep {
+            hash: node,
+            sibling_on_left: false,
+        }];
+        assert_eq!(
+            forged.verify(&EASY, &checkpoint_for(&forged), EASY.confirmation_depth),
+            Err(PayoutProofError::Spv(SpvError::MerkleMismatch))
+        );
+    }
+
+    #[test]
     fn a_forged_bitcoin_header_fails_the_proof_of_work_check() {
         let s = statement();
         let mut release = bitcoin_release(&s.destination, 500, &s.burn_ref);
-        release.headers[0].nonce = release.headers[0].nonce.wrapping_add(1);
+        while release.headers[0].meets_pow() {
+            release.headers[0].nonce = release.headers[0].nonce.wrapping_add(1);
+        }
         assert_eq!(
             release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
             Err(PayoutProofError::Spv(SpvError::PowNotMet))

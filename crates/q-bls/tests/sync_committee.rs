@@ -84,11 +84,25 @@ fn build_rotation() -> Rotation {
     let (current, current_secrets) = committee(0x11);
     let (next, _) = committee(0x22);
 
-    let branch: Vec<[u8; 32]> = (0..NEXT_SYNC_COMMITTEE_DEPTH)
-        .map(|i| [0xc0 + i as u8; 32])
-        .collect();
-    let next_leaf = next.hash_tree_root();
-    let state_root = ssz::merkle_root_from_branch(&next_leaf, &branch, NEXT_SYNC_COMMITTEE_INDEX);
+    let finalized_header = BeaconBlockHeader {
+        slot: PERIOD * PERIOD_SLOTS + 40,
+        proposer_index: 99,
+        parent_root: [0x01; 32],
+        state_root: [0x02; 32],
+        body_root: [0x05; 32],
+    };
+    let (state_root, finality_branch, branch) = ssz::two_leaf_tree(
+        (
+            finalized_header.hash_tree_root(),
+            qlc_ethereum::beacon::FINALIZED_ROOT_INDEX,
+            qlc_ethereum::beacon::FINALIZED_ROOT_DEPTH,
+        ),
+        (
+            next.hash_tree_root(),
+            NEXT_SYNC_COMMITTEE_INDEX,
+            NEXT_SYNC_COMMITTEE_DEPTH,
+        ),
+    );
 
     let attested = BeaconBlockHeader {
         slot: PERIOD * PERIOD_SLOTS + 60,
@@ -102,17 +116,12 @@ fn build_rotation() -> Rotation {
     let participation = full_participation();
     let aggregate = aggregate_over(&current_secrets, &participation, &root);
 
-    let finalized_header = BeaconBlockHeader {
-        slot: PERIOD * PERIOD_SLOTS + 40,
-        proposer_index: 99,
-        parent_root: [0x01; 32],
-        state_root: [0x02; 32],
-        body_root: [0x05; 32],
-    };
     let store = LightClientStore::from_trusted_committee(config, PERIOD, current, finalized_header);
 
     let update = SyncCommitteeUpdate {
         attested_header: attested,
+        finalized_header,
+        finality_branch,
         next_sync_committee: next.clone(),
         next_sync_committee_branch: branch,
         sync_aggregate: SyncAggregate {
