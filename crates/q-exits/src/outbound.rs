@@ -193,7 +193,14 @@ pub fn verify_ack_quorum(
     }
     let preimage = envelope.decision.ack_preimage(chain_id);
     let mut distinct = BTreeSet::new();
+    let mut attempted = BTreeSet::new();
     for signer in &envelope.signatures {
+        if attempted.len() >= operators.len() {
+            break;
+        }
+        if !attempted.insert(signer.operator_id) {
+            continue;
+        }
         let operator = match operators
             .iter()
             .find(|o| o.operator_id == signer.operator_id)
@@ -447,6 +454,26 @@ mod tests {
         assert_eq!(
             verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
             Ok(3)
+        );
+    }
+
+    #[test]
+    fn one_operator_is_verified_once_however_many_times_it_appears() {
+        let chain_id = 0x0123_4567_89AB_CDEFu64;
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
+        let mut envelope = envelope_signed_by(&decision, chain_id, &signers);
+        let padding = SignerSig {
+            operator_id: signers[0].0.operator_id,
+            signature: vec![0u8; SIGNATURE_BYTES],
+        };
+        envelope.signatures.insert(0, padding);
+        assert_eq!(
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
+            Ok(2),
+            "an operator already attempted is not verified again, so padding buys no signature \
+             checks and cannot pad the count"
         );
     }
 
