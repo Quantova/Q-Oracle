@@ -198,9 +198,6 @@ pub fn verify_ack_quorum(
         if attempted.len() >= operators.len() {
             break;
         }
-        if !attempted.insert(signer.operator_id) {
-            continue;
-        }
         let operator = match operators
             .iter()
             .find(|o| o.operator_id == signer.operator_id)
@@ -208,6 +205,9 @@ pub fn verify_ack_quorum(
             Some(operator) => operator,
             None => continue,
         };
+        if !attempted.insert(signer.operator_id) {
+            continue;
+        }
         let signature: &[u8; SIGNATURE_BYTES] = match signer.signature.as_slice().try_into() {
             Ok(bytes) => bytes,
             Err(_) => continue,
@@ -474,6 +474,30 @@ mod tests {
             Ok(2),
             "an operator already attempted is not verified again, so padding buys no signature \
              checks and cannot pad the count"
+        );
+    }
+
+    #[test]
+    fn unknown_operators_cannot_exhaust_the_quorum_budget() {
+        let chain_id = 0x0123_4567_89AB_CDEFu64;
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
+        let mut envelope = envelope_signed_by(&decision, chain_id, &signers);
+        for id in 90..99u32 {
+            envelope.signatures.insert(
+                0,
+                SignerSig {
+                    operator_id: id,
+                    signature: Vec::new(),
+                },
+            );
+        }
+        assert_eq!(
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
+            Ok(3),
+            "identifiers outside the operator set buy nothing, so they cannot \
+             starve the genuine signatures behind them"
         );
     }
 

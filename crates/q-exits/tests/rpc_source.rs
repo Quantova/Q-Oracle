@@ -113,6 +113,7 @@ fn finalized_certificate(
                 block,
                 beacon,
             )
+            .expect("the attester serves this slot")
         })
         .collect();
     aggregate(

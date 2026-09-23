@@ -104,6 +104,7 @@ fn finalized_certificate(members: &[Attester], block: Block, beacon: &Beacon) ->
                 block,
                 beacon,
             )
+            .expect("the attester serves this slot")
         })
         .collect();
     aggregate(
@@ -704,15 +705,17 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
     let block = Block::new(HEIGHT, header.hash(), Parent::Genesis);
     let commitment = committee(&members);
     let envelope = Envelope::new(HEIGHT, SLOT, block, &commitment);
-    let lone = members[0].attest(
-        CHAIN_ID,
-        HEIGHT,
-        SLOT,
-        0,
-        commitment.digest(),
-        block,
-        &beacon,
-    );
+    let lone = members[0]
+        .attest(
+            CHAIN_ID,
+            HEIGHT,
+            SLOT,
+            0,
+            commitment.digest(),
+            block,
+            &beacon,
+        )
+        .expect("the attester serves this slot");
     let thin = Certificate::new(envelope, vec![lone]);
     let proof = ProofOfBurn {
         header_bytes: to_bytes(&header),

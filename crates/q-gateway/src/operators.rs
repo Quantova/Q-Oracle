@@ -135,13 +135,13 @@ pub fn verify_quorum(
         if attempted.len() >= set.size() {
             break;
         }
-        if !attempted.insert(s.operator_id) {
-            continue;
-        }
         let pk = match set.pubkey(s.operator_id) {
             Some(pk) => pk,
             None => continue,
         };
+        if !attempted.insert(s.operator_id) {
+            continue;
+        }
         if s.signature.len() != SIGNATURE_BYTES {
             continue;
         }
