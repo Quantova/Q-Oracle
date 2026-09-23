@@ -139,6 +139,37 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_snapshot_another_live_process_holds_is_refused() {
+        let path = temp_path("claim");
+        let store = GuardStore::new(path.clone());
+        store.claim().expect("a free snapshot is claimed");
+        store.save(&[1, 2, 3]).expect("save");
+
+        let mut other = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("a second process to stand in for a live holder");
+        fs::write(holder_path(&path), other.id().to_string()).expect("the holder is claimed");
+
+        let refused = GuardStore::new(path.clone()).claim();
+        assert_eq!(
+            refused.err().map(|e| e.kind()),
+            Some(ErrorKind::AddrInUse),
+            "two oracles must not share one replay set"
+        );
+
+        other.kill().ok();
+        other.wait().ok();
+        let _ = fs::remove_file(holder_path(&path));
+        GuardStore::new(path.clone())
+            .claim()
+            .expect("once the holder is gone the snapshot is claimable");
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(holder_path(&path));
+    }
+
     #[test]
     fn a_saved_snapshot_loads_back_byte_for_byte() {
         let path = temp_path("roundtrip");

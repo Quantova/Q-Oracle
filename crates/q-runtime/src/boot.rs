@@ -749,7 +749,9 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
         &path,
         std::env::var(INIT_SNAPSHOT_ENV).as_deref() == Ok("1"),
     )?;
-    let store = Some(GuardStore::new(path));
+    let store = GuardStore::new(path);
+    store.claim()?;
+    let store = Some(store);
     let state = shared(restore(&store)?);
     if first_boot {
         if let Some(store) = store.as_ref() {
