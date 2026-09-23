@@ -29,22 +29,31 @@ struct BodyGuard {
 }
 
 impl BodyGuard {
-    fn reserve(want: usize) -> Option<BodyGuard> {
-        let mut seen = INFLIGHT_BODY.load(Ordering::Relaxed);
-        loop {
-            let next = seen.checked_add(want)?;
-            if next > MAX_INFLIGHT_BODY {
-                return None;
-            }
-            match INFLIGHT_BODY.compare_exchange_weak(
-                seen,
-                next,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Some(BodyGuard { held: want }),
-                Err(actual) => seen = actual,
-            }
+    fn empty() -> BodyGuard {
+        BodyGuard { held: 0 }
+    }
+
+    fn take(&mut self, more: usize) -> bool {
+        if !claim_inflight(more) {
+            return false;
+        }
+        self.held += more;
+        true
+    }
+}
+
+fn claim_inflight(want: usize) -> bool {
+    let mut seen = INFLIGHT_BODY.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = seen.checked_add(want) else {
+            return false;
+        };
+        if next > MAX_INFLIGHT_BODY {
+            return false;
+        }
+        match INFLIGHT_BODY.compare_exchange_weak(seen, next, Ordering::AcqRel, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(actual) => seen = actual,
         }
     }
 }
@@ -405,21 +414,7 @@ fn handle_connection(
         );
     }
 
-    let _body_guard = if content_length == 0 {
-        None
-    } else {
-        match BodyGuard::reserve(content_length) {
-            Some(guard) => Some(guard),
-            None => {
-                return write_error(
-                    &mut stream,
-                    503,
-                    "busy",
-                    "the gateway is handling too much request data, retry shortly",
-                )
-            }
-        }
-    };
+    let mut body_guard = BodyGuard::empty();
 
     let mut body = Vec::with_capacity(content_length.min(64 * 1024));
     let mut chunk = [0u8; 8192];
@@ -441,7 +436,17 @@ fn handle_connection(
         let want = (content_length - body.len()).min(chunk.len());
         match reader.read(&mut chunk[..want]) {
             Ok(0) => return Ok(()),
-            Ok(n) => body.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                if !body_guard.take(n) {
+                    return write_error(
+                        &mut stream,
+                        503,
+                        "busy",
+                        "the gateway is handling too much request data, retry shortly",
+                    );
+                }
+                body.extend_from_slice(&chunk[..n]);
+            }
             Err(ref e) if is_timeout(e) => {
                 return write_error(
                     &mut stream,
@@ -778,6 +783,32 @@ fn reason(code: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_body_that_is_declared_but_never_sent_holds_none_of_the_in_flight_budget() {
+        let stalled = MAX_INFLIGHT_BODY / MAX_BODY;
+        let guards: Vec<BodyGuard> = (0..stalled).map(|_| BodyGuard::empty()).collect();
+        assert!(
+            guards.iter().all(|guard| guard.held == 0),
+            "a connection that declared a length but sent nothing holds nothing"
+        );
+        let mut arriving = BodyGuard::empty();
+        assert!(
+            arriving.take(MAX_BODY),
+            "a body that really arrives still fits while the others only declared a length"
+        );
+        assert_eq!(
+            arriving.held, MAX_BODY,
+            "the budget counts the bytes that came"
+        );
+        drop(arriving);
+        drop(guards);
+        assert_eq!(
+            INFLIGHT_BODY.load(Ordering::Relaxed),
+            0,
+            "every held byte is released"
+        );
+    }
 
     #[test]
     fn every_status_the_oracle_sends_carries_its_own_reason() {
