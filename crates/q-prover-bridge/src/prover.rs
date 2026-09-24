@@ -106,7 +106,13 @@ mod tests {
         let bits = BRIDGE_QUERIES as f64 * 0.5 * (comp_fri_blowup as f64).log2();
         assert!(
             bits >= 128.0,
-            "bridge statement composition soundness {bits} bits below the 128 target"
+            "bridge statement composition soundness {bits} bits below the 128 target \
+             (queries {BRIDGE_QUERIES}, composition blowup {comp_fri_blowup})"
+        );
+        let trace_bits = BRIDGE_QUERIES as f64 * 0.5 * (BRIDGE_BLOWUP as f64).log2();
+        assert!(
+            trace_bits >= bits,
+            "trace soundness {trace_bits} fell below the composition layer {bits}"
         );
     }
 
