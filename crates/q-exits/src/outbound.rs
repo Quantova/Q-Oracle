@@ -192,11 +192,13 @@ pub fn verify_ack_quorum(
         return Err(ExitAckError::Malformed);
     }
     let preimage = envelope.decision.ack_preimage(chain_id);
+    if envelope.signatures.len() > operators.len() {
+        return Err(ExitAckError::Malformed);
+    }
     let mut distinct = BTreeSet::new();
-    let mut attempted = BTreeSet::new();
     for signer in &envelope.signatures {
-        if attempted.len() >= operators.len() {
-            break;
+        if distinct.contains(&signer.operator_id) {
+            continue;
         }
         let operator = match operators
             .iter()
@@ -205,9 +207,6 @@ pub fn verify_ack_quorum(
             Some(operator) => operator,
             None => continue,
         };
-        if !attempted.insert(signer.operator_id) {
-            continue;
-        }
         let signature: &[u8; SIGNATURE_BYTES] = match signer.signature.as_slice().try_into() {
             Ok(bytes) => bytes,
             Err(_) => continue,
@@ -458,46 +457,65 @@ mod tests {
     }
 
     #[test]
-    fn one_operator_is_verified_once_however_many_times_it_appears() {
+    fn an_unusable_entry_does_not_spend_its_operator() {
         let chain_id = 0x0123_4567_89AB_CDEFu64;
         let decision = ExitDecision::settle(&statement(), 9000);
         let signers: Vec<_> = (1..=3).map(operator).collect();
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let mut envelope = envelope_signed_by(&decision, chain_id, &signers);
-        let padding = SignerSig {
-            operator_id: signers[0].0.operator_id,
-            signature: vec![0u8; SIGNATURE_BYTES],
-        };
-        envelope.signatures.insert(0, padding);
+        envelope.signatures.remove(2);
+        envelope.signatures.insert(
+            0,
+            SignerSig {
+                operator_id: signers[0].0.operator_id,
+                signature: Vec::new(),
+            },
+        );
         assert_eq!(
             verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
             Ok(2),
-            "an operator already attempted is not verified again, so padding buys no signature \
-             checks and cannot pad the count"
+            "an entry that cannot be used must not consume the operator it names, \
+             or a caller holding no key vetoes the quorum"
         );
     }
 
     #[test]
-    fn unknown_operators_cannot_exhaust_the_quorum_budget() {
+    fn an_identifier_outside_the_set_does_not_starve_the_signatures_behind_it() {
         let chain_id = 0x0123_4567_89AB_CDEFu64;
         let decision = ExitDecision::settle(&statement(), 9000);
         let signers: Vec<_> = (1..=3).map(operator).collect();
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let mut envelope = envelope_signed_by(&decision, chain_id, &signers);
-        for id in 90..99u32 {
-            envelope.signatures.insert(
-                0,
-                SignerSig {
-                    operator_id: id,
-                    signature: Vec::new(),
-                },
-            );
-        }
+        envelope.signatures.remove(2);
+        envelope.signatures.insert(
+            0,
+            SignerSig {
+                operator_id: 99,
+                signature: Vec::new(),
+            },
+        );
         assert_eq!(
             verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
-            Ok(3),
-            "identifiers outside the operator set buy nothing, so they cannot \
-             starve the genuine signatures behind them"
+            Ok(2),
+            "an unknown identifier buys nothing and costs the genuine signatures nothing"
+        );
+    }
+
+    #[test]
+    fn a_signature_list_longer_than_the_operator_set_is_refused() {
+        let chain_id = 0x0123_4567_89AB_CDEFu64;
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
+        let mut envelope = envelope_signed_by(&decision, chain_id, &signers);
+        envelope.signatures.push(SignerSig {
+            operator_id: 1,
+            signature: Vec::new(),
+        });
+        assert_eq!(
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
+            Err(ExitAckError::Malformed),
+            "one operator holds one seat, so a longer list is malformed and bounds the work"
         );
     }
 

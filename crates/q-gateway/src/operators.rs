@@ -90,7 +90,7 @@ mod tests {
     fn a_junk_or_unknown_signature_is_skipped_not_fatal_to_the_quorum() {
         let mut set = OperatorSet::new(2);
         let mut sk = Vec::new();
-        for i in 0..3u8 {
+        for i in 0..4u8 {
             let mut seed = [0u8; 32];
             seed[0] = i + 1;
             let (pk, secret) = ml_dsa::keygen(&seed);
@@ -129,19 +129,18 @@ pub fn verify_quorum(
     sigs: &[SignerSig],
     set: &OperatorSet,
 ) -> BTreeSet<u32> {
+    if sigs.len() > set.size() {
+        return BTreeSet::new();
+    }
     let mut distinct: BTreeSet<u32> = BTreeSet::new();
-    let mut attempted: BTreeSet<u32> = BTreeSet::new();
     for s in sigs {
-        if attempted.len() >= set.size() {
-            break;
+        if distinct.contains(&s.operator_id) {
+            continue;
         }
         let pk = match set.pubkey(s.operator_id) {
             Some(pk) => pk,
             None => continue,
         };
-        if !attempted.insert(s.operator_id) {
-            continue;
-        }
         if s.signature.len() != SIGNATURE_BYTES {
             continue;
         }
