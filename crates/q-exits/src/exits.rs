@@ -88,6 +88,15 @@ impl DeskConfig {
     fn serves(&self, asset: &[u8; 16]) -> bool {
         self.assets.iter().any(|served| served == asset)
     }
+
+    pub fn window_covers_the_largest_exit(&self, base_depth: u32, spacing_ms: u64) -> bool {
+        if self.max_amount == 0 {
+            return true;
+        }
+        let depth = qlc_bitcoin::confirmations_for(self.max_amount, base_depth);
+        let needed = u64::from(depth).saturating_mul(spacing_ms);
+        needed.saturating_mul(2) <= self.window
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

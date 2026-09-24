@@ -377,6 +377,20 @@ pub(crate) fn start_exits_inner(
                      can be proven and every exit would slash; refusing to serve exits",
                 ));
             }
+            if let Some(checkpoint) = cfg.bitcoin.as_ref() {
+                let desk = cfg.desk_config();
+                if !desk.window_covers_the_largest_exit(
+                    checkpoint.confirmations,
+                    u64::from(qlc_bitcoin::BITCOIN.target_spacing).saturating_mul(1_000),
+                ) {
+                    return Err(std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "the largest exit this desk serves needs more confirmations than its \
+                         redeem window can hold, so an honest payout could never be proven in \
+                         time and the vault would be slashed for paying; refusing to serve exits",
+                    ));
+                }
+            }
             if !EXIT_ACK_PATH_WIRED {
                 return Err(std::io::Error::new(
                     ErrorKind::InvalidInput,
