@@ -196,6 +196,7 @@ pub fn verify_ack_quorum(
         return Err(ExitAckError::Malformed);
     }
     let mut distinct = BTreeSet::new();
+    let mut counted_keys: BTreeSet<&[u8]> = BTreeSet::new();
     for signer in &envelope.signatures {
         if distinct.contains(&signer.operator_id) {
             continue;
@@ -211,6 +212,9 @@ pub fn verify_ack_quorum(
             Ok(bytes) => bytes,
             Err(_) => continue,
         };
+        if counted_keys.contains(operator.public_key.as_slice()) {
+            continue;
+        }
         if ml_dsa::verify(
             &operator.public_key,
             &preimage,
@@ -218,11 +222,12 @@ pub fn verify_ack_quorum(
             &exit_ack_context(era),
         ) {
             distinct.insert(signer.operator_id);
+            counted_keys.insert(operator.public_key.as_slice());
         }
     }
-    if distinct.len() < threshold {
+    if counted_keys.len() < threshold {
         return Err(ExitAckError::BelowThreshold {
-            got: distinct.len(),
+            got: counted_keys.len(),
             need: threshold,
         });
     }
