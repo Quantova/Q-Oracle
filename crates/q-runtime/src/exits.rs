@@ -21,6 +21,7 @@ pub const BUDGET_ENV: &str = "Q_ORACLE_EXITS_BUDGET";
 pub const DEST_CHAIN_ENV: &str = "Q_ORACLE_EXITS_DEST_CHAIN";
 pub const CORRIDOR_ENV: &str = "Q_ORACLE_EXITS_CORRIDOR";
 pub const MIN_PAYOUT_CONFIRMATIONS: u32 = 6;
+pub const MIN_PINNED_CHECKPOINT_HEIGHT: u32 = 800_000;
 pub const START_HEIGHT_ENV: &str = "Q_ORACLE_EXITS_START_HEIGHT";
 pub const BEACON_SEED_ENV: &str = "Q_ORACLE_EXITS_BEACON_SEED";
 pub const COMMITTEE_ENV: &str = "Q_ORACLE_EXITS_COMMITTEE";
@@ -333,10 +334,13 @@ fn parse_bitcoin<E: EnvSource>(
     if fields.len() != 4 {
         return Err(ExitConfigError::Malformed("bitcoin checkpoint"));
     }
-    let height = fields[0]
+    let height: u32 = fields[0]
         .trim()
         .parse()
         .map_err(|_| ExitConfigError::Malformed("bitcoin height"))?;
+    if height < MIN_PINNED_CHECKPOINT_HEIGHT {
+        return Err(ExitConfigError::Malformed("bitcoin height"));
+    }
     let hash_bytes = decode_hex(fields[1]).ok_or(ExitConfigError::Malformed("bitcoin hash"))?;
     let hash: [u8; 32] = hash_bytes
         .as_slice()
@@ -608,11 +612,13 @@ mod tests {
     #[test]
     fn the_optional_bitcoin_checkpoint_loads_when_present() {
         let mut env = full_env();
-        env.0
-            .insert(BITCOIN_ENV.into(), format!("100,{},01,6", "cc".repeat(32)));
+        env.0.insert(
+            BITCOIN_ENV.into(),
+            format!("900000,{},01,6", "cc".repeat(32)),
+        );
         let config = parse_exit_config(&env).unwrap().unwrap();
         let checkpoint = config.bitcoin.expect("the checkpoint loads");
-        assert_eq!(checkpoint.height, 100);
+        assert_eq!(checkpoint.height, 900_000);
         assert_eq!(checkpoint.confirmations, 6);
         assert_eq!(checkpoint.min_work[31], 1);
     }
@@ -620,13 +626,24 @@ mod tests {
     #[test]
     fn a_zero_work_floor_or_a_shallow_payout_depth_is_refused() {
         for bad in [
-            format!("100,{},00,6", "cc".repeat(32)),
-            format!("100,{},01,5", "cc".repeat(32)),
+            format!("900000,{},00,6", "cc".repeat(32)),
+            format!("900000,{},01,5", "cc".repeat(32)),
         ] {
             let mut env = full_env();
             env.0.insert(BITCOIN_ENV.into(), bad);
             assert!(parse_exit_config(&env).is_err());
         }
+    }
+
+    #[test]
+    fn a_checkpoint_at_a_height_only_a_private_chain_sits_at_is_refused() {
+        let mut env = full_env();
+        env.0
+            .insert(BITCOIN_ENV.into(), format!("100,{},01,6", "cc".repeat(32)));
+        assert!(
+            parse_exit_config(&env).is_err(),
+            "a checkpoint mainnet passed years ago cannot arm the payout corridor"
+        );
     }
 
     #[test]

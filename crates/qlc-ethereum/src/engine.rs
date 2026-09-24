@@ -30,6 +30,10 @@ pub enum EthError {
         needed: usize,
     },
     WrongPeriod,
+    BootstrapPeriodMismatch {
+        period: u64,
+        slot: u64,
+    },
     InconsistentSlots {
         signature_slot: u64,
         attested_slot: u64,
@@ -199,6 +203,12 @@ pub fn bootstrap(
 ) -> Result<LightClientStore, EthError> {
     if !config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
+    }
+    if period != config.sync_committee_period(checkpoint_header.slot) {
+        return Err(EthError::BootstrapPeriodMismatch {
+            period,
+            slot: checkpoint_header.slot,
+        });
     }
     let electra = config.is_electra_at_slot(checkpoint_header.slot);
     let (index, depth) = current_sync_committee_layout(electra);
@@ -1234,6 +1244,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_bootstrap_period_that_is_not_the_checkpoints_own_period_is_refused() {
+        use crate::beacon::{current_sync_committee_layout, CURRENT_SYNC_COMMITTEE_DEPTH};
+        let cfg = config::ethereum();
+        let (committee, _) = committee(0xaa);
+        let (index, _depth) = current_sync_committee_layout(false);
+        let branch: Vec<[u8; 32]> = (0..CURRENT_SYNC_COMMITTEE_DEPTH)
+            .map(|i| [0xd0 + i as u8; 32])
+            .collect();
+        let leaf = committee.hash_tree_root();
+        let state_root = ssz::merkle_root_from_branch(&leaf, &branch, index);
+        let slot = PERIOD * PERIOD_SLOTS + 8;
+        let checkpoint = BeaconBlockHeader {
+            slot,
+            proposer_index: 7,
+            parent_root: [0x01; 32],
+            state_root,
+            body_root: [0x02; 32],
+        };
+        assert_eq!(
+            bootstrap(cfg, PERIOD + 1, checkpoint, committee, branch),
+            Err(EthError::BootstrapPeriodMismatch {
+                period: PERIOD + 1,
+                slot,
+            })
+        );
+    }
     #[test]
     fn a_wrong_next_committee_branch_is_refused() {
         let (current, _) = committee(0xaa);

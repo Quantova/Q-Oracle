@@ -1255,6 +1255,11 @@ fn eth_err_json(e: &EthError) -> Json {
             vec![("got", usizej(*got)), ("needed", usizej(*needed))],
         ),
         EthError::WrongPeriod => tagged("eth", "wrong_period", vec![]),
+        EthError::BootstrapPeriodMismatch { period, slot } => tagged(
+            "eth",
+            "bootstrap_period_mismatch",
+            vec![("period", Json::Int(*period)), ("slot", Json::Int(*slot))],
+        ),
         EthError::InconsistentSlots {
             signature_slot,
             attested_slot,
@@ -1297,6 +1302,10 @@ fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
             needed: as_usize(field(j, "needed")?, "needed")?,
         }),
         "wrong_period" => Ok(EthError::WrongPeriod),
+        "bootstrap_period_mismatch" => Ok(EthError::BootstrapPeriodMismatch {
+            period: as_u64(field(j, "period")?, "period")?,
+            slot: as_u64(field(j, "slot")?, "slot")?,
+        }),
         "inconsistent_slots" => Ok(EthError::InconsistentSlots {
             signature_slot: as_u64(field(j, "signature_slot")?, "signature_slot")?,
             attested_slot: as_u64(field(j, "attested_slot")?, "attested_slot")?,
@@ -1423,6 +1432,9 @@ fn light_err_json(e: &LightError) -> Json {
                 ("trusting_period_secs", Json::Int(*trusting_period_secs)),
             ],
         ),
+        LightError::ClockBehindTrustedState => {
+            tagged("light", "clock_behind_trusted_state", vec![])
+        }
         LightError::NonMonotonicHeaderTime => tagged("light", "non_monotonic_header_time", vec![]),
         LightError::HeaderTimeInFuture => tagged("light", "header_time_in_future", vec![]),
         LightError::NotAdjacent => tagged("light", "not_adjacent", vec![]),
@@ -1451,6 +1463,7 @@ fn light_err_from(j: &Json) -> Result<LightError, WireError> {
                 "trusting_period_secs",
             )?,
         }),
+        "clock_behind_trusted_state" => Ok(LightError::ClockBehindTrustedState),
         "non_monotonic_header_time" => Ok(LightError::NonMonotonicHeaderTime),
         "header_time_in_future" => Ok(LightError::HeaderTimeInFuture),
         "not_adjacent" => Ok(LightError::NotAdjacent),

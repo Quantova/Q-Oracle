@@ -32,6 +32,7 @@ pub enum LightError {
         elapsed_secs: i64,
         trusting_period_secs: u64,
     },
+    ClockBehindTrustedState,
     NonMonotonicHeaderTime,
     HeaderTimeInFuture,
     NotAdjacent,
@@ -55,6 +56,9 @@ fn check_time(
     let trusting_ns = cfg.trusting_period_secs as i128 * 1_000_000_000;
     let drift_ns = cfg.max_clock_drift_secs as i128 * 1_000_000_000;
 
+    if now_ns < trusted_ns {
+        return Err(LightError::ClockBehindTrustedState);
+    }
     if now_ns - trusted_ns >= trusting_ns {
         return Err(LightError::TrustedStateExpired {
             elapsed_secs: now.seconds - trusted.time.seconds,
@@ -529,6 +533,31 @@ mod tests {
                 Err(LightError::TrustedStateExpired { .. })
             ),
             "an anchor older than the trusting period must not advance on overlap alone"
+        );
+    }
+
+    #[test]
+    fn a_clock_rolled_back_behind_the_anchor_cannot_revive_an_expired_set() {
+        let a = keyed(1, 40);
+        let b = keyed(2, 40);
+        let c = keyed(3, 20);
+        let d = keyed(4, 20);
+        let old = make_set(&[&a, &b, &c]);
+        let new = make_set(&[&a, &b, &d]);
+        let trusted = trusted_from(100, &old, &old);
+        let header = header_for(150, &new, &new);
+        let commit = signed_commit(&header, &[&a, &b, &d]);
+        let rolled_back = Timestamp {
+            seconds: trusted.time.seconds - 1,
+            nanos: 0,
+        };
+
+        assert!(
+            matches!(
+                verify_transition(&COSMOS_HUB, &trusted, &header, &commit, &new, rolled_back),
+                Err(LightError::ClockBehindTrustedState)
+            ),
+            "a clock behind the anchor it measures is refused, not believed"
         );
     }
 
