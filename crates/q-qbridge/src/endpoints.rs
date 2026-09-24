@@ -846,13 +846,15 @@ mod tests {
     }
 
     fn bitcoin_pool(state: &mut BridgeState) -> PoolView {
-        match handle(
+        let view = match handle(
             state,
             Request::CreatePool(pool_request(Network::Bitcoin.id(), "BTC")),
         ) {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
-        }
+        };
+        state.gateway.set_escrow(view.asset_id, 1_000_000_000_000);
+        view
     }
 
     #[test]
@@ -866,6 +868,7 @@ mod tests {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
         };
+        state.gateway.set_escrow(view.asset_id, 1_000_000_000_000);
         assert_eq!(view.identifier, "GHO");
         assert_eq!(view.tier, "Federated");
         assert_eq!(view.asset_id, derive_asset_id(Network::Polygon, "GHO").0);
@@ -918,6 +921,7 @@ mod tests {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
         };
+        state.gateway.set_escrow(view.asset_id, 1_000_000_000_000);
         let got = handle(
             &mut state,
             Request::GetPool(GetPoolRequest {
@@ -993,6 +997,7 @@ mod tests {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
         };
+        state.gateway.set_escrow(view.asset_id, 1_000_000_000_000);
         for op in &ops {
             state.sources.declare(
                 Network::Solana.id(),
@@ -1441,6 +1446,7 @@ mod tests {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
         };
+        state.gateway.set_escrow(view.asset_id, 1_000_000_000_000);
         let bridge = p2pkh([0x11; 20]);
         let (material, _anchor, _txid) = bitcoin_deposit(&bridge, [0x42; 32], 500);
         let mut fact = federated_fact(view.asset_id, [0x11; 32]);
@@ -1464,6 +1470,7 @@ mod tests {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
         };
+        state.gateway.set_escrow(view.asset_id, 1_000_000_000_000);
         let mut fact = federated_fact(view.asset_id, [0x11; 32]);
         fact.source_chain = Network::Solana.id();
         let env = AttestationEnvelope {
@@ -1734,13 +1741,15 @@ mod tests {
     }
 
     fn ethereum_pool(state: &mut BridgeState) -> PoolView {
-        match handle(
+        let view = match handle(
             state,
             Request::CreatePool(pool_request(Network::Ethereum.id(), "USDC")),
         ) {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
-        }
+        };
+        state.gateway.set_escrow(view.asset_id, 1_000_000_000_000);
+        view
     }
 
     fn ethereum_fact(
@@ -1988,13 +1997,15 @@ mod tests {
     }
 
     fn cosmos_pool(state: &mut BridgeState) -> PoolView {
-        match handle(
+        let view = match handle(
             state,
             Request::CreatePool(pool_request(Network::Cosmos.id(), "ATOM")),
         ) {
             Response::PoolCreated(view) => view,
             other => panic!("expected PoolCreated, got {:?}", other),
-        }
+        };
+        state.gateway.set_escrow(view.asset_id, 1_000_000_000_000);
+        view
     }
 
     fn cosmos_fact(

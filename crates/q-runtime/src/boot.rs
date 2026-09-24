@@ -667,11 +667,25 @@ pub fn boot_with(
 }
 
 #[cfg(test)]
+pub(crate) fn boot_with_reserves(
+    operators: OperatorSet,
+    dest_chain_id: u64,
+    era: [u8; 32],
+    epoch_cap: u128,
+) -> BridgeState {
+    let mut state = boot_with(operators, dest_chain_id, era, epoch_cap);
+    for asset in state.gateway.registered_assets() {
+        state.gateway.set_escrow(asset, u128::MAX >> 1);
+    }
+    state
+}
+
+#[cfg(test)]
 pub(crate) const CONFIGURED_DEST_CHAIN_ID: u64 = 0x5100_0000_0000_9000;
 
 #[cfg(test)]
 pub(crate) fn boot_configured() -> BridgeState {
-    boot_with(
+    boot_with_reserves(
         OperatorSet::new(0),
         CONFIGURED_DEST_CHAIN_ID,
         [0u8; 32],
@@ -783,19 +797,12 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
             format!("the foreign reserve figures are unusable, refusing to start: {e:?}"),
         )
     })?;
-    if reserves.is_empty() {
-        eprintln!(
-            "q-oracle: no foreign reserves are configured, so deposits mint against the \
-             asset caps alone with no escrow bound"
-        );
-    } else {
-        let registered = state
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .gateway
-            .registered_assets();
-        reserves_cover(&registered, &reserves)?;
-    }
+    let registered = state
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .gateway
+        .registered_assets();
+    reserves_cover(&registered, &reserves)?;
     apply_reserves(&state, &reserves);
     let chain_rpc = std::env::var(crate::clock::CHAIN_RPC_ENV).map_err(|_| {
         std::io::Error::new(
@@ -1111,7 +1118,7 @@ mod tests {
         for op in &ops {
             set.register(op.id, op.pk);
         }
-        let mut state = boot_with(set, TEST_DEST_ID, [0u8; 32], DEFAULT_EPOCH_CAP);
+        let mut state = boot_with_reserves(set, TEST_DEST_ID, [0u8; 32], DEFAULT_EPOCH_CAP);
         for op in &ops {
             declare_operator_source(
                 &mut state,
@@ -1218,7 +1225,12 @@ mod tests {
         let store = GuardStore::new(path.clone());
         let asset = derive_asset_id(Network::Bitcoin, "BTC").0;
 
-        let mut state = boot();
+        let mut state = boot_with_reserves(
+            OperatorSet::new(0),
+            DEST_CHAIN_ID,
+            [0u8; 32],
+            DEFAULT_EPOCH_CAP,
+        );
         state
             .gateway
             .admit_trustless(asset, [0x11; 32], 1, Network::Bitcoin.id())
@@ -1465,6 +1477,15 @@ mod tests {
             )
             .is_err(),
             "a reserve for an asset no pool registers is a typo, not a bound"
+        );
+
+        assert!(
+            reserves_cover(&pools, &[]).is_err(),
+            "no reserves at all leaves every pool minting with no escrow bound"
+        );
+        assert!(
+            reserves_cover(&[], &[]).is_ok(),
+            "a node that registers no pool has nothing to mint and may start"
         );
     }
 

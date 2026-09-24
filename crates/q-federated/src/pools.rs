@@ -299,6 +299,9 @@ pub fn install_pool(gateway: &mut Gateway, spec: &PoolSpec) {
     gateway.register_corridor(spec.network.id(), depth_for(spec.network));
     gateway.register_asset_cap(spec.asset_id.0, spec.per_asset_cap);
     gateway.register_asset_epoch_cap(spec.asset_id.0, spec.per_epoch_cap);
+    if gateway.escrow_of(&spec.asset_id.0).is_none() {
+        gateway.set_escrow(spec.asset_id.0, 0);
+    }
 }
 
 pub fn install_all(gateway: &mut Gateway, registry: &PoolRegistry) {
@@ -309,6 +312,35 @@ pub fn install_all(gateway: &mut Gateway, registry: &PoolRegistry) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_pool_installed_while_running_mints_nothing_until_a_reserve_is_stated() {
+        let mut gw = Gateway::new(9000, 0x2a, q_gateway::OperatorSet::new(1), u128::MAX >> 1);
+        let spec = PoolSpec {
+            network: Network::Bitcoin,
+            asset_id: AssetId([0xa1; 16]),
+            identifier: "BTC".to_string(),
+            decimals: 8,
+            per_asset_cap: MAX_CAP,
+            per_epoch_cap: MAX_CAP,
+            tier: tier_for(Network::Bitcoin),
+        };
+        install_pool(&mut gw, &spec);
+        assert_eq!(
+            gw.escrow_of(&spec.asset_id.0),
+            Some(0),
+            "a fresh pool is bound at nothing, not left unbound"
+        );
+
+        gw.set_escrow(spec.asset_id.0, 500);
+        install_pool(&mut gw, &spec);
+        assert_eq!(
+            gw.escrow_of(&spec.asset_id.0),
+            Some(500),
+            "installing again must not wipe a stated reserve back to nothing"
+        );
+    }
+
     use super::*;
 
     const DEST_ID: u64 = 0x0000_002a_0000_2328;
