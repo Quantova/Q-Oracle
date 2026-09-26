@@ -1,7 +1,7 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use q_codec::BridgeFact;
+use q_codec::{BridgeFact, Direction, FACT_VERSION};
 use q_gateway::{Gateway, GatewayError};
 use qlc_bitcoin::TrustlessDeposit;
 use qlc_cosmos::TrustlessDeposit as CosmosDeposit;
@@ -17,6 +17,7 @@ pub enum TrustlessError {
     AmountMismatch { proven: u128, fact: u128 },
     RecipientMismatch,
     AssetMismatch,
+    MalformedFact,
     InsufficientConfirmations { have: u32, need: u32 },
     ReplayedReference,
     AssetNotRegistered,
@@ -47,6 +48,9 @@ pub fn match_bitcoin_deposit(
             corridor: corridor.chain_id,
             fact: fact.source_chain,
         });
+    }
+    if fact.version != FACT_VERSION || fact.direction != Direction::Deposit {
+        return Err(TrustlessError::MalformedFact);
     }
     if fact.source_ref.0 != proven.txid {
         return Err(TrustlessError::ReferenceMismatch);
@@ -129,6 +133,9 @@ pub fn match_ethereum_deposit(
             fact: fact.source_chain,
         });
     }
+    if fact.version != FACT_VERSION || fact.direction != Direction::Deposit {
+        return Err(TrustlessError::MalformedFact);
+    }
     if fact.source_ref.0 != proven.source_ref() {
         return Err(TrustlessError::ReferenceMismatch);
     }
@@ -184,6 +191,9 @@ pub fn match_cosmos_deposit(
             corridor: corridor.chain_id,
             fact: fact.source_chain,
         });
+    }
+    if fact.version != FACT_VERSION || fact.direction != Direction::Deposit {
+        return Err(TrustlessError::MalformedFact);
     }
     if fact.source_ref.0 != proven.source_ref() {
         return Err(TrustlessError::ReferenceMismatch);
@@ -588,6 +598,25 @@ mod tests {
         assert_eq!(mint.source_chain, ETH_CHAIN);
         assert_eq!(mint.asset_id, ETH_ASSET);
         assert_eq!(mint.confirmations, 64);
+    }
+
+    #[test]
+    fn an_exit_or_foreign_version_fact_is_refused_as_a_deposit() {
+        let c = eth_corridor(Tier::ProofBacked);
+        let r = [0x33u8; 32];
+        let p = eth_proven(r, 250_000, [0x42u8; 32], ETH_ASSET, 64);
+        let mut f = fact_with_asset(&c, r, 250_000, [0x42u8; 32], ETH_ASSET);
+        f.direction = Direction::ExitAck;
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::MalformedFact)
+        );
+        let mut f = fact_with_asset(&c, r, 250_000, [0x42u8; 32], ETH_ASSET);
+        f.version = FACT_VERSION.wrapping_add(1);
+        assert_eq!(
+            match_ethereum_deposit(&c, &p, &f),
+            Err(TrustlessError::MalformedFact)
+        );
     }
 
     #[test]
