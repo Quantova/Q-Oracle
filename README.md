@@ -20,6 +20,12 @@ The trustless corridors are Bitcoin, Ethereum, and Cosmos. The Bitcoin verifier 
 
 A proof backed deposit is admitted here but not minted here. The authoritative on chain mint stays behind the trustless deposit seam, so this repository never opens a mint entry point of its own.
 
+## Running it
+
+The oracle keeps its sense of time from the Quantova chain head it reads at the address in `Q_ORACLE_CHAIN_RPC`. That head is not signed, so it must come from a node the operator runs, over loopback or a private link that no one else can reach or sit in the middle of. The oracle already refuses a head that moves backwards and caps how far one answer can move it, but a head source on an open network could still push its windows forward faster than the chain.
+
+The Cosmos verifier checks Ed25519 more strictly than the ZIP 215 rules CometBFT uses. It refuses small order keys and commitments and non canonical encodings, and it uses the cofactorless check. A signature the Cosmos chain accepts under the looser rules can be ignored here, so a commit can fall short of two thirds and the light client stops until a later commit clears it. It never accepts a signature the chain would refuse.
+
 ## The one exemption, stated plainly
 
 Every other Quantova repository runs cargo deny against the shared deny list, which makes classical crypto crates unrepresentable anywhere in the dependency tree. Q-Oracle's own deny file lifts that ban for this repository alone. License and advisory checks still apply here. The exemption is the whole point of the repository, and it is the reason nothing may import it. The isolation is enforced two ways. The repository is dropped from the classical crypto deny gate that every other repository runs, and no other crate is allowed to depend on it, so the classical code has exactly one home and no path inward.
