@@ -118,3 +118,21 @@ fn burns_beyond_the_poll_budget_are_deferred_not_dropped() {
         "every burn is assembled exactly once, none dropped"
     );
 }
+
+#[test]
+fn a_finalized_height_the_node_cannot_serve_is_retried_not_skipped() {
+    let short = Blocks {
+        head: 5,
+        counts: vec![0, 1],
+    };
+    let mut watcher = BurnWatcher::new(0);
+    watcher.poll(&short).expect("poll succeeds");
+    assert_eq!(watcher.scanned_through(), 2);
+    let full = Blocks {
+        head: 5,
+        counts: vec![0, 1, 2, 0, 0],
+    };
+    let burns = watcher.poll(&full).expect("poll succeeds");
+    assert_eq!(burns.len(), 2);
+    assert_eq!(watcher.scanned_through(), 5);
+}

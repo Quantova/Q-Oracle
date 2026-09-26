@@ -85,10 +85,10 @@ impl BurnWatcher {
         let mut assembled = Vec::new();
         while self.scanned_through < ceiling {
             let height = self.scanned_through + 1;
-            if let Some(block) = source.finalized_block(height)? {
-                assembled
-                    .extend((0..block.events.len()).filter_map(|index| assemble(&block, index)));
-            }
+            let Some(block) = source.finalized_block(height)? else {
+                break;
+            };
+            assembled.extend((0..block.events.len()).filter_map(|index| assemble(&block, index)));
             self.scanned_through = height;
             if assembled.len() >= MAX_BURNS_PER_POLL {
                 break;
