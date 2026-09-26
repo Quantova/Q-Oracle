@@ -1255,6 +1255,17 @@ fn eth_err_json(e: &EthError) -> Json {
             vec![("got", usizej(*got)), ("needed", usizej(*needed))],
         ),
         EthError::WrongPeriod => tagged("eth", "wrong_period", vec![]),
+        EthError::StaleStore {
+            store_period,
+            attested_period,
+        } => tagged(
+            "eth",
+            "stale_store",
+            vec![
+                ("store_period", Json::Int(*store_period)),
+                ("attested_period", Json::Int(*attested_period)),
+            ],
+        ),
         EthError::BootstrapPeriodMismatch { period, slot } => tagged(
             "eth",
             "bootstrap_period_mismatch",
@@ -1302,6 +1313,10 @@ fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
             needed: as_usize(field(j, "needed")?, "needed")?,
         }),
         "wrong_period" => Ok(EthError::WrongPeriod),
+        "stale_store" => Ok(EthError::StaleStore {
+            store_period: as_u64(field(j, "store_period")?, "store_period")?,
+            attested_period: as_u64(field(j, "attested_period")?, "attested_period")?,
+        }),
         "bootstrap_period_mismatch" => Ok(EthError::BootstrapPeriodMismatch {
             period: as_u64(field(j, "period")?, "period")?,
             slot: as_u64(field(j, "slot")?, "slot")?,
@@ -1476,6 +1491,14 @@ fn light_err_from(j: &Json) -> Result<LightError, WireError> {
 fn commit_err_json(e: &CommitError) -> Json {
     match e {
         CommitError::HeaderMismatch => tagged("commit", "header_mismatch", vec![]),
+        CommitError::HeightMismatch { header, commit } => tagged(
+            "commit",
+            "height_mismatch",
+            vec![
+                ("header", Json::Int(*header as u64)),
+                ("commit", Json::Int(*commit as u64)),
+            ],
+        ),
         CommitError::NotEnoughVotingPower { signed, total } => tagged(
             "commit",
             "not_enough_voting_power",
@@ -1489,6 +1512,10 @@ fn commit_err_json(e: &CommitError) -> Json {
 fn commit_err_from(j: &Json) -> Result<CommitError, WireError> {
     match code_of(j)? {
         "header_mismatch" => Ok(CommitError::HeaderMismatch),
+        "height_mismatch" => Ok(CommitError::HeightMismatch {
+            header: as_i64(field(j, "header")?, "header")?,
+            commit: as_i64(field(j, "commit")?, "commit")?,
+        }),
         "not_enough_voting_power" => Ok(CommitError::NotEnoughVotingPower {
             signed: as_u128(field(j, "signed")?, "signed")?,
             total: as_u128(field(j, "total")?, "total")?,
@@ -2547,6 +2574,12 @@ mod tests {
             },
         )));
         round_response(Response::Error(ApiError::EthereumVerify(
+            EthError::StaleStore {
+                store_period: 868,
+                attested_period: 870,
+            },
+        )));
+        round_response(Response::Error(ApiError::EthereumVerify(
             EthError::Receipt(ReceiptError::NoDeposit),
         )));
         round_response(Response::Error(ApiError::EthereumVerify(EthError::Mpt(
@@ -2565,6 +2598,12 @@ mod tests {
             CorridorError::Commit(CommitError::NotEnoughVotingPower {
                 signed: 50,
                 total: 100,
+            }),
+        )));
+        round_response(Response::Error(ApiError::CosmosVerify(
+            CorridorError::Commit(CommitError::HeightMismatch {
+                header: 18_010_657,
+                commit: 18_010_658,
             }),
         )));
         round_response(Response::Error(ApiError::CosmosVerify(

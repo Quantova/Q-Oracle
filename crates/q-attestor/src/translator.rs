@@ -404,8 +404,21 @@ mod tests {
 
     #[test]
     fn packaging_is_deterministic_across_operators() {
-        let a = package(&fact(), &signer(), DEST_ID, &[0u8; 32]);
-        let b = package(&fact(), &signer(), DEST_ID, &[0u8; 32]);
-        assert_eq!(a, b);
+        let s = signer();
+        let a = package(&fact(), &s, DEST_ID, &[0u8; 32]);
+        let b = package(&fact(), &s, DEST_ID, &[0u8; 32]);
+        assert_eq!(a.attestation.fact, b.attestation.fact);
+        assert_eq!(a.stark, b.stark);
+        for env in [&a, &b] {
+            assert_eq!(env.attestation.signatures.len(), 1);
+            let mut sig = [0u8; SIGNATURE_BYTES];
+            sig.copy_from_slice(&env.attestation.signatures[0].signature);
+            assert!(ml_dsa::verify(
+                &s.public_key(),
+                &fact().attest_preimage(DEST_ID),
+                &sig,
+                &attest_context(&[0u8; 32])
+            ));
+        }
     }
 }

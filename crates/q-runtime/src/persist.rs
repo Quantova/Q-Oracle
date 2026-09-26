@@ -1,92 +1,54 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::fs::{self, File};
+use std::fs::{self, File, TryLockError};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub struct GuardStore {
     path: PathBuf,
+    lock: OnceLock<File>,
 }
 
-const HOLDER_FRESH: std::time::Duration = std::time::Duration::from_secs(30);
-
-fn holder_path(path: &Path) -> PathBuf {
+fn lock_path(path: &Path) -> PathBuf {
     let mut p = path.to_path_buf().into_os_string();
-    p.push(".holder");
+    p.push(".lock");
     PathBuf::from(p)
-}
-
-#[cfg(unix)]
-fn process_is_alive(pid: u32) -> bool {
-    std::process::Command::new("ps")
-        .arg("-p")
-        .arg(pid.to_string())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn process_is_alive(_pid: u32) -> bool {
-    false
-}
-
-fn another_process_is_live(path: &Path) -> bool {
-    let holder = holder_path(path);
-    let Ok(meta) = fs::metadata(&holder) else {
-        return false;
-    };
-    let Ok(modified) = meta.modified() else {
-        return false;
-    };
-    let fresh = std::time::SystemTime::now()
-        .duration_since(modified)
-        .map(|age| age < HOLDER_FRESH)
-        .unwrap_or(false);
-    if !fresh {
-        return false;
-    }
-    let Ok(text) = fs::read_to_string(&holder) else {
-        return false;
-    };
-    let Ok(pid) = text.trim().parse::<u32>() else {
-        return false;
-    };
-    if pid == std::process::id() {
-        return false;
-    }
-    process_is_alive(pid)
-}
-
-fn touch_holder(path: &Path) {
-    let _ = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(holder_path(path))
-        .and_then(|mut f| f.write_all(std::process::id().to_string().as_bytes()));
 }
 
 impl GuardStore {
     pub fn new<P: Into<PathBuf>>(path: P) -> GuardStore {
-        GuardStore { path: path.into() }
+        GuardStore {
+            path: path.into(),
+            lock: OnceLock::new(),
+        }
     }
 
     pub fn claim(&self) -> io::Result<()> {
-        if another_process_is_live(&self.path) {
-            return Err(io::Error::new(
-                ErrorKind::AddrInUse,
-                format!(
-                    "another live process holds the guard snapshot at {}; two oracles sharing one \
-                     snapshot would each mint on their own replay set and overwrite the other",
-                    self.path.display()
-                ),
-            ));
+        if self.lock.get().is_some() {
+            return Ok(());
         }
-        touch_holder(&self.path);
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(lock_path(&self.path))?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    ErrorKind::AddrInUse,
+                    format!(
+                        "another live process holds the guard snapshot at {}; two oracles sharing \
+                         one snapshot would each mint on their own replay set and overwrite the other",
+                        self.path.display()
+                    ),
+                ))
+            }
+            Err(TryLockError::Error(e)) => return Err(e),
+        }
+        let _ = self.lock.set(file);
         Ok(())
     }
 
@@ -117,7 +79,6 @@ impl GuardStore {
                 File::open(parent)?.sync_all()?;
             }
         }
-        touch_holder(&self.path);
         Ok(())
     }
 }
@@ -139,35 +100,39 @@ mod tests {
         path
     }
 
-    #[cfg(unix)]
     #[test]
-    fn a_snapshot_another_live_process_holds_is_refused() {
+    fn a_held_snapshot_is_refused_however_long_its_holder_stays_idle() {
         let path = temp_path("claim");
-        let store = GuardStore::new(path.clone());
-        store.claim().expect("a free snapshot is claimed");
-        store.save(&[1, 2, 3]).expect("save");
+        let holder = GuardStore::new(path.clone());
+        holder.claim().expect("a free snapshot is claimed");
+        holder.save(&[1, 2, 3]).expect("save");
+        holder
+            .claim()
+            .expect("the holder re-claiming its own snapshot is a no-op");
 
-        let mut other = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("a second process to stand in for a live holder");
-        fs::write(holder_path(&path), other.id().to_string()).expect("the holder is claimed");
-
+        let long_ago = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        for idle in [path.clone(), lock_path(&path)] {
+            File::options()
+                .write(true)
+                .open(&idle)
+                .and_then(|file| file.set_modified(long_ago))
+                .expect("the holder looks idle for decades");
+        }
         let refused = GuardStore::new(path.clone()).claim();
         assert_eq!(
             refused.err().map(|e| e.kind()),
             Some(ErrorKind::AddrInUse),
-            "two oracles must not share one replay set"
+            "an idle but live holder keeps its lock, so two oracles never share one replay set"
         );
 
-        other.kill().ok();
-        other.wait().ok();
-        let _ = fs::remove_file(holder_path(&path));
-        GuardStore::new(path.clone())
+        drop(holder);
+        let successor = GuardStore::new(path.clone());
+        successor
             .claim()
-            .expect("once the holder is gone the snapshot is claimable");
+            .expect("the lock dies with its holder, so the snapshot is claimable again");
+        drop(successor);
         let _ = fs::remove_file(&path);
-        let _ = fs::remove_file(holder_path(&path));
+        let _ = fs::remove_file(lock_path(&path));
     }
 
     #[test]

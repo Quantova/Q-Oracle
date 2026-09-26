@@ -82,7 +82,7 @@ pub struct ExitTrustConfig {
     pub budget: u64,
     pub beacon_seed: [u8; BEACON_SEED_BYTES],
     pub members: Vec<MemberConfig>,
-    pub dest_chain: u32,
+    pub bridge_dest_chain: u32,
     pub corridor: u32,
     pub start_height: u64,
     pub vaults: Vec<VaultSeed>,
@@ -108,7 +108,7 @@ impl ExitTrustConfig {
     }
 
     pub fn desk_config(&self) -> DeskConfig {
-        DeskConfig::aligned(self.corridor, self.dest_chain as u64)
+        DeskConfig::aligned(self.corridor, self.bridge_dest_chain)
             .serving(self.assets.clone(), self.max_exit_amount)
     }
 
@@ -378,7 +378,10 @@ pub fn parse_exit_config<E: EnvSource>(
     let tau = req_u64(env, TAU_ENV, "tau")?;
     let slot = opt_u64(env, SLOT_ENV, 0)?;
     let budget = req_u64(env, BUDGET_ENV, "committee budget")?;
-    let dest_chain = req_u32(env, DEST_CHAIN_ENV, "dest chain")?;
+    let bridge_dest_chain = req_u32(env, DEST_CHAIN_ENV, "dest chain")?;
+    if bridge_dest_chain == 0 {
+        return Err(ExitConfigError::Malformed("dest chain"));
+    }
     let corridor = req_u32(env, CORRIDOR_ENV, "corridor")?;
     let start_height = opt_u64(env, START_HEIGHT_ENV, 0)?;
     let seed_bytes = decode_hex(&req(env, BEACON_SEED_ENV, "beacon seed")?)
@@ -409,7 +412,7 @@ pub fn parse_exit_config<E: EnvSource>(
         budget,
         beacon_seed,
         members,
-        dest_chain,
+        bridge_dest_chain,
         corridor,
         start_height,
         vaults,
@@ -465,13 +468,16 @@ mod tests {
         }
     }
 
+    const MAINNET_CHAIN_ID: u64 = 5_296_651_311_193_914_109;
+    const BRIDGE_DEST_CHAIN: u32 = 9000;
+
     fn full_env() -> MapEnv {
         let mut map = BTreeMap::new();
         map.insert(EXITS_ENABLED_ENV.into(), "1".into());
-        map.insert(CHAIN_ID_ENV.into(), "9000".into());
+        map.insert(CHAIN_ID_ENV.into(), MAINNET_CHAIN_ID.to_string());
         map.insert(TAU_ENV.into(), "1".into());
         map.insert(BUDGET_ENV.into(), "100".into());
-        map.insert(DEST_CHAIN_ENV.into(), "9000".into());
+        map.insert(DEST_CHAIN_ENV.into(), BRIDGE_DEST_CHAIN.to_string());
         map.insert(CORRIDOR_ENV.into(), "1".into());
         map.insert(START_HEIGHT_ENV.into(), "4199999".into());
         map.insert(MAX_AMOUNT_ENV.into(), "1000000".into());
@@ -524,9 +530,9 @@ mod tests {
         let config = parse_exit_config(&full_env())
             .expect("a full config loads")
             .expect("exits are on");
-        assert_eq!(config.chain_id, 9000);
+        assert_eq!(config.chain_id, MAINNET_CHAIN_ID);
         assert_eq!(config.tau, 1);
-        assert_eq!(config.dest_chain, 9000);
+        assert_eq!(config.bridge_dest_chain, BRIDGE_DEST_CHAIN);
         assert_eq!(config.corridor, 1);
         assert_eq!(config.start_height, 4_199_999);
         assert_eq!(config.members.len(), 1);
@@ -539,6 +545,43 @@ mod tests {
         config
             .build_anchor()
             .expect("the loaded anchor is well formed");
+    }
+
+    #[test]
+    fn the_mainnet_chain_id_and_the_bridge_destination_are_kept_apart() {
+        assert!(MAINNET_CHAIN_ID > u64::from(u32::MAX));
+        let config = parse_exit_config(&full_env())
+            .expect("a mainnet config loads")
+            .expect("exits are on");
+        let anchor = config
+            .build_anchor()
+            .expect("the anchor pins the 64 bit id");
+        assert_eq!(
+            anchor.chain_id(),
+            MAINNET_CHAIN_ID,
+            "burns are matched against the full chain id the chain writes into the burn event"
+        );
+        let desk = config.desk_config();
+        assert_eq!(
+            desk.bridge_dest_chain, BRIDGE_DEST_CHAIN,
+            "the exit decision carries the chain's own bridge destination id"
+        );
+        assert_ne!(u64::from(desk.bridge_dest_chain), anchor.chain_id());
+
+        let mut env = full_env();
+        env.0
+            .insert(DEST_CHAIN_ENV.into(), MAINNET_CHAIN_ID.to_string());
+        assert_eq!(
+            parse_exit_config(&env),
+            Err(ExitConfigError::Malformed("dest chain")),
+            "the bridge destination is the chain's 32 bit id, never the 64 bit chain id"
+        );
+        let mut env = full_env();
+        env.0.insert(DEST_CHAIN_ENV.into(), "0".into());
+        assert_eq!(
+            parse_exit_config(&env),
+            Err(ExitConfigError::Malformed("dest chain"))
+        );
     }
 
     #[test]

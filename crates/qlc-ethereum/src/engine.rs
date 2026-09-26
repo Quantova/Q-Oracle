@@ -30,6 +30,10 @@ pub enum EthError {
         needed: usize,
     },
     WrongPeriod,
+    StaleStore {
+        store_period: u64,
+        attested_period: u64,
+    },
     BootstrapPeriodMismatch {
         period: u64,
         slot: u64,
@@ -235,14 +239,28 @@ fn slots_are_consistent(
     store: &LightClientStore,
     signature_slot: u64,
     attested_slot: u64,
+    finalized_slot: u64,
 ) -> Result<(), EthError> {
-    if signature_slot < attested_slot
+    if signature_slot <= attested_slot
+        || attested_slot < finalized_slot
         || store.config.sync_committee_period(signature_slot)
             != store.config.sync_committee_period(attested_slot)
     {
         return Err(EthError::InconsistentSlots {
             signature_slot,
             attested_slot,
+        });
+    }
+    let attested_period = store.config.sync_committee_period(attested_slot);
+    let reach = if store.next_sync_committee.is_some() {
+        store.period.saturating_add(1)
+    } else {
+        store.period
+    };
+    if attested_period > reach {
+        return Err(EthError::StaleStore {
+            store_period: store.period,
+            attested_period,
         });
     }
     Ok(())
@@ -397,7 +415,12 @@ fn verify_deposit_core(
     if !store.config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
-    slots_are_consistent(store, update.signature_slot, update.attested_header.slot)?;
+    slots_are_consistent(
+        store,
+        update.signature_slot,
+        update.attested_header.slot,
+        update.finalized_header.slot,
+    )?;
     verify_sync_aggregate(
         store,
         &update.attested_header,
@@ -529,6 +552,12 @@ pub fn apply_sync_committee_update(
     if !store.config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
+    slots_are_consistent(
+        store,
+        update.signature_slot,
+        update.attested_header.slot,
+        update.finalized_header.slot,
+    )?;
     if store
         .config
         .sync_committee_period(update.attested_header.slot)
@@ -536,7 +565,6 @@ pub fn apply_sync_committee_update(
     {
         return Err(EthError::WrongPeriod);
     }
-    slots_are_consistent(store, update.signature_slot, update.attested_header.slot)?;
     verify_sync_aggregate(
         store,
         &update.attested_header,
@@ -1001,6 +1029,97 @@ mod tests {
                 attested_slot: attested,
             })
         );
+    }
+
+    #[test]
+    fn a_signature_slot_equal_to_the_attested_slot_is_refused() {
+        let mut f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        let attested = f.update.attested_header.slot;
+        f.update.signature_slot = attested;
+        assert_eq!(
+            verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::InconsistentSlots {
+                signature_slot: attested,
+                attested_slot: attested,
+            })
+        );
+    }
+
+    #[test]
+    fn a_finalized_header_newer_than_the_attested_header_is_refused() {
+        let mut f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        let attested = f.update.attested_header.slot;
+        f.update.finalized_header.slot = attested + 1;
+        assert_eq!(
+            verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+            Err(EthError::InconsistentSlots {
+                signature_slot: SIG_SLOT,
+                attested_slot: attested,
+            })
+        );
+    }
+
+    #[test]
+    fn a_store_whose_period_is_too_old_for_the_attested_slot_is_refused() {
+        for behind in [1, 2, 40] {
+            let mut f = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+            f.store.period = PERIOD - behind;
+            assert_eq!(
+                verify_deposit_update(&f.store, &f.update, &f.deposit, &HashCommitmentBls),
+                Err(EthError::StaleStore {
+                    store_period: PERIOD - behind,
+                    attested_period: PERIOD,
+                }),
+                "a store {behind} periods behind the attested slot must not verify it"
+            );
+        }
+
+        let mut two_behind = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        two_behind.store.period = PERIOD - 2;
+        two_behind.store.next_sync_committee =
+            Some(two_behind.store.current_sync_committee.clone());
+        assert_eq!(
+            verify_deposit_update(
+                &two_behind.store,
+                &two_behind.update,
+                &two_behind.deposit,
+                &HashCommitmentBls
+            ),
+            Err(EthError::StaleStore {
+                store_period: PERIOD - 2,
+                attested_period: PERIOD,
+            }),
+            "a known next committee reaches one period ahead, never two"
+        );
+
+        let mut next_known = build_fixture(7_000_000_000_000_000_000u128, full_participation());
+        next_known.store.period = PERIOD - 1;
+        next_known.store.next_sync_committee =
+            Some(next_known.store.current_sync_committee.clone());
+        assert!(
+            verify_deposit_update(
+                &next_known.store,
+                &next_known.update,
+                &next_known.deposit,
+                &HashCommitmentBls
+            )
+            .is_ok(),
+            "one period ahead is in reach when the next committee is known"
+        );
+
+        let (current, _) = committee(0xaa);
+        let (next, _) = committee(0xbb);
+        let mut stale = committee_store(current.clone());
+        stale.period = PERIOD - 3;
+        let update = committee_update(&current, &next, PERIOD * PERIOD_SLOTS + 40);
+        assert_eq!(
+            apply_sync_committee_update(&mut stale, &update, &HashCommitmentBls),
+            Err(EthError::StaleStore {
+                store_period: PERIOD - 3,
+                attested_period: PERIOD,
+            })
+        );
+        assert_eq!(stale.next_sync_committee, None);
     }
 
     #[test]

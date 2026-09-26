@@ -158,11 +158,17 @@ pub struct BitcoinReleaseProof {
 }
 
 impl BitcoinReleaseProof {
+    pub fn burn_ref(&self) -> Option<[u8; 32]> {
+        release_reference(&parse_bitcoin_outputs(&self.raw_tx)?)
+    }
+
     pub fn verify(
         &self,
         params: &NetworkParams,
         checkpoint: &Checkpoint,
         confirmation_depth: u32,
+        beneficiary: &[u8; 32],
+        amount: u128,
     ) -> Result<VerifiedPayout, PayoutProofError> {
         let pinned = checkpoint
             .height
@@ -188,8 +194,8 @@ impl BitcoinReleaseProof {
         }
         let outputs =
             parse_bitcoin_outputs(&self.raw_tx).ok_or(PayoutProofError::MalformedTransaction)?;
-        let (beneficiary, value, burn_ref) =
-            scan_release_outputs(&outputs).ok_or(PayoutProofError::UnboundPayout)?;
+        let burn_ref = release_reference(&outputs).ok_or(PayoutProofError::UnboundPayout)?;
+        let value = payout_value(&outputs, beneficiary, amount)?;
         let depth = qlc_bitcoin::confirmations_for(value as u128, confirmation_depth);
         chain
             .verify_deposit(
@@ -209,7 +215,7 @@ impl BitcoinReleaseProof {
         Ok(VerifiedPayout {
             asset_id: None,
             amount: value as u128,
-            beneficiary,
+            beneficiary: *beneficiary,
             burn_ref: Some(burn_ref),
             foreign_ref: txid,
             proof_height: confirmed.deposit_height as u64,
@@ -289,34 +295,49 @@ fn parse_bitcoin_outputs(raw: &[u8]) -> Option<Vec<BitcoinOutput>> {
     Some(outputs)
 }
 
-fn scan_release_outputs(outputs: &[BitcoinOutput]) -> Option<([u8; 32], u64, [u8; 32])> {
-    let mut payout: Option<([u8; 32], u64)> = None;
-    let mut reference: Option<[u8; 32]> = None;
-    for output in outputs {
-        if output.script.len() != 34 || output.script[1] != 0x20 {
-            continue;
-        }
-        let mut word = [0u8; 32];
-        word.copy_from_slice(&output.script[2..34]);
-        match output.script[0] {
-            0x51 => {
-                if payout.is_some() {
-                    return None;
-                }
-                payout = Some((word, output.value));
-            }
-            0x6a => {
-                if reference.is_some() {
-                    return None;
-                }
-                reference = Some(word);
-            }
-            _ => {}
-        }
+const OP_1: u8 = 0x51;
+const OP_RETURN: u8 = 0x6a;
+const PUSH_32: u8 = 0x20;
+
+fn word_under(script: &[u8], opcode: u8) -> Option<[u8; 32]> {
+    if script.len() != 34 || script[0] != opcode || script[1] != PUSH_32 {
+        return None;
     }
-    match (payout, reference) {
-        (Some((beneficiary, value)), Some(burn_ref)) => Some((beneficiary, value, burn_ref)),
-        _ => None,
+    let mut word = [0u8; 32];
+    word.copy_from_slice(&script[2..34]);
+    Some(word)
+}
+
+fn release_reference(outputs: &[BitcoinOutput]) -> Option<[u8; 32]> {
+    let mut references = outputs
+        .iter()
+        .filter_map(|output| word_under(&output.script, OP_RETURN));
+    let reference = references.next()?;
+    if references.next().is_some() {
+        return None;
+    }
+    Some(reference)
+}
+
+fn payout_value(
+    outputs: &[BitcoinOutput],
+    beneficiary: &[u8; 32],
+    amount: u128,
+) -> Result<u64, PayoutProofError> {
+    let to_beneficiary: Vec<u64> = outputs
+        .iter()
+        .filter(|output| word_under(&output.script, OP_1).as_ref() == Some(beneficiary))
+        .map(|output| output.value)
+        .collect();
+    let exact = to_beneficiary
+        .iter()
+        .filter(|value| u128::from(**value) == amount)
+        .count();
+    match exact {
+        1 => Ok(amount as u64),
+        0 if to_beneficiary.is_empty() => Err(PayoutProofError::BeneficiaryMismatch),
+        0 => Err(PayoutProofError::AmountMismatch),
+        _ => Err(PayoutProofError::UnboundPayout),
     }
 }
 
@@ -359,14 +380,19 @@ impl BitcoinPayoutWatcher {
         }
         let mut last = PayoutProofError::MissingReceipt;
         for release in &self.releases {
-            let payout =
-                match release.verify(&self.params, &self.checkpoint, self.confirmation_depth) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        last = e;
-                        continue;
-                    }
-                };
+            let payout = match release.verify(
+                &self.params,
+                &self.checkpoint,
+                self.confirmation_depth,
+                &statement.destination,
+                statement.amount,
+            ) {
+                Ok(p) => p,
+                Err(e) => {
+                    last = e;
+                    continue;
+                }
+            };
             if payout.amount != statement.amount {
                 last = PayoutProofError::AmountMismatch;
                 continue;
@@ -831,7 +857,13 @@ mod tests {
             sibling_on_left: false,
         }];
         assert_eq!(
-            forged.verify(&EASY, &checkpoint_for(&forged), EASY.confirmation_depth),
+            forged.verify(
+                &EASY,
+                &checkpoint_for(&forged),
+                EASY.confirmation_depth,
+                &s.destination,
+                500
+            ),
             Err(PayoutProofError::Spv(SpvError::MerkleMismatch))
         );
     }
@@ -844,7 +876,13 @@ mod tests {
             release.headers[0].nonce = release.headers[0].nonce.wrapping_add(1);
         }
         assert_eq!(
-            release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
+            release.verify(
+                &EASY,
+                &checkpoint_for(&release),
+                EASY.confirmation_depth,
+                &s.destination,
+                500
+            ),
             Err(PayoutProofError::Spv(SpvError::PowNotMet))
         );
         let watcher = bitcoin_watcher(vec![release]);
@@ -857,7 +895,13 @@ mod tests {
         let mut release = bitcoin_release(&s.destination, 500, &s.burn_ref);
         release.branch[0].hash = [0x00; 32];
         assert_eq!(
-            release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
+            release.verify(
+                &EASY,
+                &checkpoint_for(&release),
+                EASY.confirmation_depth,
+                &s.destination,
+                500
+            ),
             Err(PayoutProofError::Spv(SpvError::MerkleMismatch))
         );
         assert!(bitcoin_watcher(vec![release]).confirm(&s).is_none());
@@ -870,7 +914,13 @@ mod tests {
         let last = release.raw_tx.len() - 6;
         release.raw_tx[last] ^= 0xff;
         assert_eq!(
-            release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
+            release.verify(
+                &EASY,
+                &checkpoint_for(&release),
+                EASY.confirmation_depth,
+                &s.destination,
+                500
+            ),
             Err(PayoutProofError::Spv(SpvError::MerkleMismatch))
         );
     }
@@ -885,7 +935,7 @@ mod tests {
             min_work: U256::from_u64(u64::MAX),
         };
         assert_eq!(
-            release.verify(&EASY, &heavy, EASY.confirmation_depth),
+            release.verify(&EASY, &heavy, EASY.confirmation_depth, &s.destination, 500),
             Err(PayoutProofError::Spv(SpvError::InsufficientWork)),
             "a floor-difficulty release chain cannot forge a payout below the pinned work"
         );
@@ -902,16 +952,32 @@ mod tests {
             min_work: U256::ZERO,
         };
         assert_eq!(
-            release.verify(&EASY, &foreign, EASY.confirmation_depth),
+            release.verify(
+                &EASY,
+                &foreign,
+                EASY.confirmation_depth,
+                &s.destination,
+                500
+            ),
             Err(PayoutProofError::Spv(SpvError::CheckpointMismatch)),
             "a release proof on a chain off the pinned checkpoint cannot release the vault"
         );
         assert!(bitcoin_watcher_with(release, foreign).confirm(&s).is_none());
     }
 
-    #[test]
-    fn a_release_with_two_candidate_payout_outputs_is_rejected() {
-        let s = statement();
+    fn p2tr(key: &[u8; 32]) -> Vec<u8> {
+        let mut script = vec![0x51u8, 0x20];
+        script.extend_from_slice(key);
+        script
+    }
+
+    fn op_return(burn_ref: &[u8; 32]) -> Vec<u8> {
+        let mut script = vec![0x6au8, 0x20];
+        script.extend_from_slice(burn_ref);
+        script
+    }
+
+    fn tx_paying(outputs: &[(u64, Vec<u8>)]) -> Vec<u8> {
         let mut tx = Vec::new();
         tx.extend_from_slice(&1u32.to_le_bytes());
         put_varint(1, &mut tx);
@@ -919,30 +985,126 @@ mod tests {
         tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
         put_varint(0, &mut tx);
         tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
-        put_varint(3, &mut tx);
-        tx.extend_from_slice(&500u64.to_le_bytes());
-        let mut first = vec![0x51u8, 0x20];
-        first.extend_from_slice(&s.destination);
-        put_varint(first.len() as u64, &mut tx);
-        tx.extend_from_slice(&first);
-        tx.extend_from_slice(&999u64.to_le_bytes());
-        let mut second = vec![0x51u8, 0x20];
-        second.extend_from_slice(&[0x66u8; 32]);
-        put_varint(second.len() as u64, &mut tx);
-        tx.extend_from_slice(&second);
-        tx.extend_from_slice(&0u64.to_le_bytes());
-        let mut reference = vec![0x6au8, 0x20];
-        reference.extend_from_slice(&s.burn_ref);
-        put_varint(reference.len() as u64, &mut tx);
-        tx.extend_from_slice(&reference);
+        put_varint(outputs.len() as u64, &mut tx);
+        for (value, script) in outputs {
+            tx.extend_from_slice(&value.to_le_bytes());
+            put_varint(script.len() as u64, &mut tx);
+            tx.extend_from_slice(script);
+        }
         tx.extend_from_slice(&0u32.to_le_bytes());
+        tx
+    }
 
-        let release = release_around(tx);
+    const VAULT_CHANGE: [u8; 32] = [0x66; 32];
+
+    #[test]
+    fn a_release_with_a_taproot_change_output_settles_the_exit() {
+        let s = statement();
+        let release = release_around(tx_paying(&[
+            (500, p2tr(&s.destination)),
+            (999, p2tr(&VAULT_CHANGE)),
+            (0, op_return(&s.burn_ref)),
+        ]));
+        let payout = release
+            .verify(
+                &EASY,
+                &checkpoint_for(&release),
+                EASY.confirmation_depth,
+                &s.destination,
+                500,
+            )
+            .expect("a payout with vault change is a normal taproot spend");
+        assert_eq!(payout.amount, 500);
+        assert_eq!(payout.beneficiary, s.destination);
+        assert_eq!(payout.burn_ref, Some(s.burn_ref));
+        assert_eq!(release.burn_ref(), Some(s.burn_ref));
+        let attestation = bitcoin_watcher(vec![release])
+            .confirm(&s)
+            .expect("the change output does not hide the payout");
+        assert!(attestation.covers(&s));
+    }
+
+    #[test]
+    fn a_release_paying_the_beneficiary_the_amount_twice_is_rejected() {
+        let s = statement();
+        let release = release_around(tx_paying(&[
+            (500, p2tr(&s.destination)),
+            (500, p2tr(&s.destination)),
+            (0, op_return(&s.burn_ref)),
+        ]));
         assert_eq!(
-            release.verify(&EASY, &checkpoint_for(&release), EASY.confirmation_depth),
+            release.verify(
+                &EASY,
+                &checkpoint_for(&release),
+                EASY.confirmation_depth,
+                &s.destination,
+                500
+            ),
             Err(PayoutProofError::UnboundPayout),
-            "two candidate payout outputs must be refused rather than bound to the last"
+            "two matching outputs are ambiguous and must not be counted"
         );
+    }
+
+    #[test]
+    fn a_release_naming_two_burns_is_rejected() {
+        let s = statement();
+        let release = release_around(tx_paying(&[
+            (500, p2tr(&s.destination)),
+            (0, op_return(&s.burn_ref)),
+            (0, op_return(&[0x12; 32])),
+        ]));
+        assert_eq!(release.burn_ref(), None);
+        assert_eq!(
+            release.verify(
+                &EASY,
+                &checkpoint_for(&release),
+                EASY.confirmation_depth,
+                &s.destination,
+                500
+            ),
+            Err(PayoutProofError::UnboundPayout),
+            "one output must not be bound to two exits through two references"
+        );
+    }
+
+    #[test]
+    fn a_release_that_pays_only_the_change_address_is_rejected() {
+        let s = statement();
+        let release = release_around(tx_paying(&[
+            (500, p2tr(&VAULT_CHANGE)),
+            (0, op_return(&s.burn_ref)),
+        ]));
+        assert_eq!(
+            release.verify(
+                &EASY,
+                &checkpoint_for(&release),
+                EASY.confirmation_depth,
+                &s.destination,
+                500
+            ),
+            Err(PayoutProofError::BeneficiaryMismatch)
+        );
+    }
+
+    #[test]
+    fn one_release_with_change_cannot_settle_two_exits() {
+        let a = statement();
+        let mut b = statement();
+        b.burn_ref = [0x12; 32];
+        let release = release_around(tx_paying(&[
+            (500, p2tr(&a.destination)),
+            (1_500, p2tr(&VAULT_CHANGE)),
+            (0, op_return(&a.burn_ref)),
+        ]));
+        let watcher = bitcoin_watcher(vec![release]);
+        assert_eq!(
+            watcher.attest(&b),
+            Err(PayoutProofError::ReferenceMismatch),
+            "an exit of the same beneficiary and amount cannot borrow another exit's payout"
+        );
+        assert!(watcher.confirm(&a).is_some());
+        assert_eq!(watcher.attest(&a), Err(PayoutProofError::ReusedPayout));
+        assert_eq!(watcher.attest(&b), Err(PayoutProofError::ReferenceMismatch));
     }
 
     #[test]

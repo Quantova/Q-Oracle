@@ -15,6 +15,7 @@ q-airlock = { workspace = true }
 qtv-crypto = { workspace = true }
 q-prover-bridge = { path = "../q-prover-bridge" }
 q-isolation = { path = "../q-isolation" }
+zeroize = "1.9"
 
 [dev-dependencies]
 q-gateway = { workspace = true }

@@ -6,7 +6,7 @@ name = "q-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-rust-version.workspace = true
+rust-version = "1.89"
 description = "The oracle data plane. A bounded, hand-rolled HTTP server over std::net wraps the transport-free qbridge dispatcher, decoding a bounded request frame, calling handle over a shared bridge state behind a mutex, and encoding the answer. The runtime boots every seeded corridor and pool and exposes the per-chain block-ingestion watcher seam the concrete RPC clients attach to. The authoritative on-chain mint stays at the trustless deposit seam it already lives behind."
 
 [[bin]]

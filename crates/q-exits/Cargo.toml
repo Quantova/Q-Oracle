@@ -18,6 +18,7 @@ qtv-block = { path = "../../../Quantova-Chain/crates/qtv-block" }
 qtv-codec = { path = "../../../Quantova-Chain/crates/qtv-codec" }
 qtv-attest = { path = "../../../QRC-CONSENSUS/crates/qtv-attest" }
 qtv-sampler = { path = "../../../QRC-CONSENSUS/crates/qtv-sampler" }
+zeroize = "1.9"
 
 [dev-dependencies]
 q-codec = { workspace = true }

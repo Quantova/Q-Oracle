@@ -95,6 +95,7 @@ dependencies = [
  "qlc-stark",
  "qtv-crypto",
  "qtv-stark",
+ "zeroize",
 ]
 
 [[package]]
@@ -121,6 +122,7 @@ dependencies = [
  "qtv-codec",
  "qtv-crypto",
  "qtv-sampler",
+ "zeroize",
 ]
 
 [[package]]

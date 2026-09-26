@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey, Signature, SEED_BYTES};
+use zeroize::Zeroizing;
 
 fn secure_wipe(bytes: &mut [u8]) {
     for slot in bytes.iter_mut() {
@@ -28,18 +29,20 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 struct ZeroizingSecretKey {
-    bytes: SecretKey,
+    bytes: Zeroizing<SecretKey>,
 }
 
 impl ZeroizingSecretKey {
     #[cfg(test)]
     fn new(bytes: SecretKey) -> ZeroizingSecretKey {
-        ZeroizingSecretKey { bytes }
+        ZeroizingSecretKey {
+            bytes: Zeroizing::new(bytes),
+        }
     }
 
     fn derive(seed: &[u8; SEED_BYTES]) -> (PublicKey, ZeroizingSecretKey) {
         let mut held = ZeroizingSecretKey {
-            bytes: [0u8; ml_dsa::SECRET_KEY_BYTES],
+            bytes: Zeroizing::new([0u8; ml_dsa::SECRET_KEY_BYTES]),
         };
         let public_key = ml_dsa::keygen_into(seed, &mut held.bytes);
         (public_key, held)
@@ -49,15 +52,15 @@ impl ZeroizingSecretKey {
         &self.bytes
     }
 
+    fn sign(&self, message: &[u8], context: &[u8]) -> Option<Signature> {
+        let mut rnd = Zeroizing::new([0u8; 32]);
+        qtv_crypto::rng::try_fill_random(rnd.as_mut_slice()).ok()?;
+        ml_dsa::sign(self.expose(), message, context, &rnd)
+    }
+
     #[cfg(test)]
     fn clear_for_test(&mut self) {
-        secure_wipe(&mut self.bytes);
-    }
-}
-
-impl Drop for ZeroizingSecretKey {
-    fn drop(&mut self) {
-        secure_wipe(&mut self.bytes);
+        zeroize::Zeroize::zeroize(&mut self.bytes);
     }
 }
 
@@ -94,9 +97,9 @@ impl AttestationSigner for SoftSigner {
     }
 
     fn sign(&self, message: &[u8], context: &[u8]) -> Signature {
-        let rnd = [0u8; 32];
-        ml_dsa::sign(self.secret_key.expose(), message, context, &rnd)
-            .expect("ml-dsa sign over an in-bounds context")
+        self.secret_key
+            .sign(message, context)
+            .expect("hedged ml-dsa sign with os entropy over an in-bounds context")
     }
 }
 
@@ -157,9 +160,9 @@ impl SigningBackend for SoftBackend {
     }
 
     fn sign(&self, preimage: &[u8], context: &[u8]) -> Signature {
-        let rnd = [0u8; 32];
-        ml_dsa::sign(self.secret_key.expose(), preimage, context, &rnd)
-            .expect("ml-dsa sign over an in-bounds context")
+        self.secret_key
+            .sign(preimage, context)
+            .expect("hedged ml-dsa sign with os entropy over an in-bounds context")
     }
 }
 
@@ -349,8 +352,8 @@ impl Pkcs11Module for SoftwareHsm {
         if handle != self.key_handle {
             return Err(Pkcs11Error::KeyNotProvisioned);
         }
-        let rnd = [0u8; 32];
-        ml_dsa::sign(self.secret_key.expose(), preimage, context, &rnd)
+        self.secret_key
+            .sign(preimage, context)
             .ok_or(Pkcs11Error::SignRejected)
     }
 }
@@ -580,6 +583,44 @@ mod tests {
             .sign(session, handle, b"observed lock", CTX)
             .expect("the handle signs");
         assert!(ml_dsa::verify(&pk, b"observed lock", &sig, CTX));
+    }
+
+    #[test]
+    fn every_software_signer_hedges_with_fresh_randomness_and_still_verifies() {
+        let soft = SoftSigner::from_seed(5, &[0x55u8; 32]);
+        let backend = SoftBackend::from_seed(6, &[0x56u8; 32]);
+        let token = SoftwareHsm::provision_operator_key(SLOT, PIN, LABEL, &[0x57u8; 32]);
+        let session = token.open_session(SLOT).unwrap();
+        token.login(session, PIN).unwrap();
+        let handle = token.find_key(session, LABEL).unwrap();
+        let token_pk = token.export_public_key(session, handle).unwrap();
+        let message = b"observed fact";
+
+        let pairs = [
+            (
+                soft.public_key(),
+                soft.sign(message, CTX),
+                soft.sign(message, CTX),
+            ),
+            (
+                backend.public_key(),
+                backend.sign(message, CTX),
+                backend.sign(message, CTX),
+            ),
+            (
+                token_pk,
+                token.sign(session, handle, message, CTX).unwrap(),
+                token.sign(session, handle, message, CTX).unwrap(),
+            ),
+        ];
+        for (pk, first, second) in pairs {
+            assert_ne!(
+                first, second,
+                "a fixed signing nonce seed would make these byte identical"
+            );
+            assert!(ml_dsa::verify(&pk, message, &first, CTX));
+            assert!(ml_dsa::verify(&pk, message, &second, CTX));
+        }
     }
 
     #[test]

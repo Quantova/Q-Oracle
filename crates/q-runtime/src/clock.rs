@@ -97,7 +97,7 @@ impl<H: ChainHead> ChainClock<H> {
             let current = guard.gateway.current_epoch();
             let spaced = self
                 .epoch_moved
-                .map_or(true, |at| now.duration_since(at) >= MIN_EPOCH_GAP);
+                .is_none_or(|at| now.duration_since(at) >= MIN_EPOCH_GAP);
             if (self.fresh && self.epoch_moved.is_none() && epoch > current)
                 || (epoch == current.saturating_add(1) && spaced)
             {

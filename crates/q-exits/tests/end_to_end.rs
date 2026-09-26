@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use q_exits::{
-    BitcoinPayoutWatcher, BitcoinReleaseProof, DeskConfig, ExitDesk, ExitError, ExitState,
-    MemberConfig, ProofOfBurn, QuantovaAnchor,
+    BitcoinPayoutWatcher, BitcoinReleaseProof, DeskConfig, ExitDesk, ExitError, ExitOutcome,
+    ExitState, MemberConfig, ProofOfBurn, QuantovaAnchor,
 };
 
 use qlc_bitcoin::{
@@ -17,6 +17,9 @@ use qtv_codec::{to_bytes, Encoder};
 use qtv_sampler::beacon::Beacon;
 
 const CHAIN_ID: u64 = 9000;
+const MAINNET_CHAIN_ID: u64 = 5_296_651_311_193_914_109;
+const BRIDGE_DEST: u32 = 7;
+const GRACE: u64 = 50;
 const HEIGHT: u64 = 4_200_000;
 const SLOT: u64 = 0;
 const BUDGET: u64 = 300;
@@ -60,12 +63,22 @@ fn member_configs(members: &[Attester]) -> Vec<MemberConfig> {
 }
 
 fn burn_leaf(amount: u128, asset: [u8; 16], destination: [u8; 32], burn_ref: [u8; 32]) -> Vec<u8> {
+    burn_leaf_on(CHAIN_ID, amount, asset, destination, burn_ref)
+}
+
+fn burn_leaf_on(
+    chain_id: u64,
+    amount: u128,
+    asset: [u8; 16],
+    destination: [u8; 32],
+    burn_ref: [u8; 32],
+) -> Vec<u8> {
     let mut data = Encoder::new();
     data.put_bytes(&asset);
     data.put_bytes(&HOLDER);
     data.put_u128(amount);
     data.put_bytes(&destination);
-    data.put_u64(CHAIN_ID);
+    data.put_u64(chain_id);
     data.put_u64(0);
     data.put_u64(1);
     data.put_bytes(&burn_ref);
@@ -91,12 +104,21 @@ fn header_for(leaves: &[Vec<u8>]) -> Header {
 }
 
 fn finalized_certificate(members: &[Attester], block: Block, beacon: &Beacon) -> Certificate {
+    finalized_certificate_on(CHAIN_ID, members, block, beacon)
+}
+
+fn finalized_certificate_on(
+    chain_id: u64,
+    members: &[Attester],
+    block: Block,
+    beacon: &Beacon,
+) -> Certificate {
     let commitment = committee(members);
     let atts: Vec<_> = members
         .iter()
         .map(|a| {
             a.attest(
-                CHAIN_ID,
+                chain_id,
                 HEIGHT,
                 SLOT,
                 0,
@@ -108,7 +130,7 @@ fn finalized_certificate(members: &[Attester], block: Block, beacon: &Beacon) ->
         })
         .collect();
     aggregate(
-        CHAIN_ID,
+        chain_id,
         HEIGHT,
         SLOT,
         block,
@@ -121,8 +143,12 @@ fn finalized_certificate(members: &[Attester], block: Block, beacon: &Beacon) ->
 }
 
 fn anchor(members: &[Attester], beacon: &Beacon) -> QuantovaAnchor {
+    anchor_on(CHAIN_ID, members, beacon)
+}
+
+fn anchor_on(chain_id: u64, members: &[Attester], beacon: &Beacon) -> QuantovaAnchor {
     QuantovaAnchor::from_config(
-        CHAIN_ID,
+        chain_id,
         TAU,
         SLOT,
         BUDGET,
@@ -135,12 +161,31 @@ fn anchor(members: &[Attester], beacon: &Beacon) -> QuantovaAnchor {
 fn config() -> DeskConfig {
     DeskConfig {
         corridor: CORRIDOR,
-        dest_chain: CHAIN_ID,
+        bridge_dest_chain: BRIDGE_DEST,
         secure_bps: SECURE_BPS,
         premium_bps: PREMIUM_BPS,
         window: 100,
+        grace: GRACE,
         assets: vec![ASSET],
         max_amount: 0,
+    }
+}
+
+fn proof_with_leaf(
+    chain_id: u64,
+    members: &[Attester],
+    beacon: &Beacon,
+    leaf: Vec<u8>,
+) -> ProofOfBurn {
+    let leaves = vec![vec![0xde; 8], leaf, vec![0xad; 12]];
+    let burn_index = 1;
+    let header = header_for(&leaves);
+    let block = Block::new(HEIGHT, header.hash(), Parent::Genesis);
+    ProofOfBurn {
+        header_bytes: to_bytes(&header),
+        certificate: finalized_certificate_on(chain_id, members, block, beacon),
+        leaf: leaves[burn_index].clone(),
+        inclusion: prove_inclusion(&leaves, burn_index).unwrap(),
     }
 }
 
@@ -416,7 +461,7 @@ fn settling_within_the_window_against_a_bitcoin_payout_releases_the_collateral()
         AMOUNT as u64,
         &BURN_REF,
     )));
-    let release = desk.settle(id, &watcher, 60).unwrap();
+    let release = desk.settle(id, &watcher).unwrap();
     assert_eq!(release.released, REQUIRED);
     assert_eq!(desk.locked_collateral(1), 0);
     assert_eq!(desk.free_collateral(1), 2_000);
@@ -424,7 +469,7 @@ fn settling_within_the_window_against_a_bitcoin_payout_releases_the_collateral()
 }
 
 #[test]
-fn settling_after_the_window_is_refused() {
+fn a_payout_confirmed_after_the_window_still_settles_an_unslashed_exit() {
     let members = attesters();
     let beacon = Beacon::genesis();
     let mut desk = desk();
@@ -432,17 +477,32 @@ fn settling_after_the_window_is_refused() {
     let id = desk
         .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
         .unwrap();
+    let deadline = desk.exit(id).unwrap().deadline;
+    assert!(
+        desk.slashable(deadline + 1).is_empty(),
+        "the grace period keeps a just-missed deadline from refunding the holder"
+    );
     let watcher = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
         &BURN_REF,
     )));
     assert_eq!(
-        desk.settle(id, &watcher, 200),
-        Err(ExitError::WindowExpired {
-            now: 200,
-            deadline: 110
-        })
+        desk.close_overdue(id, &[&watcher], deadline + GRACE + 1),
+        Ok(ExitOutcome::Settle),
+        "the vault paid, so the exit settles and the holder is not refunded on top"
+    );
+    assert_eq!(desk.exit(id).unwrap().state, ExitState::Settled);
+    assert_eq!(desk.locked_collateral(1), 0);
+    assert_eq!(desk.free_collateral(1), 2_000);
+    assert_eq!(
+        desk.decision(id).map(|decision| decision.outcome),
+        Some(ExitOutcome::Settle)
+    );
+    assert_eq!(
+        desk.slash(id, u64::MAX),
+        Err(ExitError::NotPending),
+        "a settled exit can never be slashed afterwards"
     );
 }
 
@@ -461,10 +521,7 @@ fn settle_refuses_when_the_watcher_cannot_prove_a_covering_payout() {
         AMOUNT as u64,
         &BURN_REF,
     )));
-    assert_eq!(
-        desk.settle(id, &watcher, 60),
-        Err(ExitError::PayoutUnproven)
-    );
+    assert_eq!(desk.settle(id, &watcher), Err(ExitError::PayoutUnproven));
     assert_eq!(
         desk.locked_collateral(1),
         REQUIRED,
@@ -477,19 +534,68 @@ fn settle_refuses_when_the_watcher_cannot_prove_a_covering_payout() {
 fn a_burn_for_another_destination_chain_cannot_open_an_exit() {
     let members = attesters();
     let beacon = Beacon::genesis();
-    let mut cfg = config();
-    cfg.dest_chain = CHAIN_ID + 1;
-    let mut desk = ExitDesk::new(cfg, anchor(&members, &beacon)).unwrap();
+    let mut desk = ExitDesk::new(config(), anchor(&members, &beacon)).unwrap();
     desk.register_vault(1, 2_000);
+    let leaf = burn_leaf_on(CHAIN_ID + 1, AMOUNT, ASSET, BENEFICIARY, BURN_REF);
     assert_eq!(
-        desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10),
+        desk.open_exit(&proof_with_leaf(CHAIN_ID, &members, &beacon, leaf), 1, 10),
         Err(ExitError::WrongDestination {
-            got: CHAIN_ID,
-            expected: CHAIN_ID + 1
+            got: CHAIN_ID + 1,
+            expected: CHAIN_ID
         })
     );
     assert!(!desk.is_consumed(&BURN_REF));
     assert_eq!(desk.locked_collateral(1), 0);
+}
+
+#[test]
+fn a_mainnet_burn_is_matched_on_the_64_bit_chain_id_and_acked_under_the_bridge_destination() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    assert!(MAINNET_CHAIN_ID > u64::from(u32::MAX));
+    let mut desk = ExitDesk::new(config(), anchor_on(MAINNET_CHAIN_ID, &members, &beacon)).unwrap();
+    desk.register_vault(1, 2_000);
+
+    let under_bridge_id = burn_leaf_on(
+        u64::from(BRIDGE_DEST),
+        AMOUNT,
+        ASSET,
+        BENEFICIARY,
+        [0x71; 32],
+    );
+    assert_eq!(
+        desk.open_exit(
+            &proof_with_leaf(MAINNET_CHAIN_ID, &members, &beacon, under_bridge_id),
+            1,
+            10
+        ),
+        Err(ExitError::WrongDestination {
+            got: u64::from(BRIDGE_DEST),
+            expected: MAINNET_CHAIN_ID
+        }),
+        "the burn event carries the chain id, not the bridge destination"
+    );
+
+    let mainnet = burn_leaf_on(MAINNET_CHAIN_ID, AMOUNT, ASSET, BENEFICIARY, BURN_REF);
+    let id = desk
+        .open_exit(
+            &proof_with_leaf(MAINNET_CHAIN_ID, &members, &beacon, mainnet),
+            1,
+            10,
+        )
+        .expect("a burn on the mainnet chain id opens an exit");
+    let watcher = bitcoin_watcher(release_around(release_tx(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
+    desk.settle(id, &watcher).unwrap();
+    let decision = desk.decision(id).expect("a settled exit has a decision");
+    assert_eq!(
+        decision.dest_chain, BRIDGE_DEST,
+        "the ack is bound to the chain's bridge destination id"
+    );
+    assert!(decision.well_formed());
 }
 
 #[test]
@@ -529,13 +635,13 @@ fn the_exit_fact_carries_the_holder_for_credit_and_the_destination_for_payout() 
         .unwrap();
     let statement = desk.exit(id).unwrap().statement.clone();
 
-    let settle = ExitDecision::settle(&statement, CHAIN_ID as u32);
+    let settle = ExitDecision::settle(&statement, BRIDGE_DEST);
     assert_eq!(settle.outcome, ExitOutcome::Settle);
     assert_eq!(settle.holder, HOLDER);
     assert_eq!(settle.destination, BENEFICIARY);
     assert_eq!(settle.amount, AMOUNT);
 
-    let slash = ExitDecision::slash(&statement, CHAIN_ID as u32);
+    let slash = ExitDecision::slash(&statement, BRIDGE_DEST);
     assert_eq!(slash.outcome, ExitOutcome::Slash);
     assert_eq!(
         slash.holder, HOLDER,
@@ -561,8 +667,16 @@ fn slashing_before_the_deadline_is_refused() {
         desk.slash(id, 100),
         Err(ExitError::WindowOpen {
             now: 100,
-            deadline: 110
+            deadline: 110 + GRACE
         })
+    );
+    assert_eq!(
+        desk.slash(id, 110 + GRACE),
+        Err(ExitError::WindowOpen {
+            now: 110 + GRACE,
+            deadline: 110 + GRACE
+        }),
+        "a missed deadline alone does not refund the holder while a late payout may still land"
     );
     assert_eq!(desk.locked_collateral(1), REQUIRED);
 }
@@ -613,7 +727,7 @@ fn an_exit_bound_to_one_burn_cannot_settle_against_a_payout_for_another() {
         &BURN_REF_B,
     )));
     assert_eq!(
-        desk.settle(id_a, &payout_for_b, 60),
+        desk.settle(id_a, &payout_for_b),
         Err(ExitError::PayoutUnproven),
         "a payout naming burn B cannot settle an exit bound to burn A"
     );
@@ -629,7 +743,7 @@ fn an_exit_bound_to_one_burn_cannot_settle_against_a_payout_for_another() {
         AMOUNT as u64,
         &BURN_REF,
     )));
-    let release = desk.settle(id_a, &payout_for_a, 60).unwrap();
+    let release = desk.settle(id_a, &payout_for_a).unwrap();
     assert_eq!(release.released, REQUIRED);
     assert_eq!(desk.exit(id_a).unwrap().state, ExitState::Settled);
 }
@@ -660,7 +774,7 @@ fn collateral_is_conserved_across_a_settle_and_a_slash() {
         AMOUNT as u64,
         &BURN_REF,
     )));
-    let release = desk.settle(id_a, &payout_for_a, 60).unwrap();
+    let release = desk.settle(id_a, &payout_for_a).unwrap();
     assert_eq!(release.released, REQUIRED);
     assert_eq!(
         desk.free_collateral(1) + desk.locked_collateral(1),
@@ -732,7 +846,7 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
 }
 
 #[test]
-fn a_pending_exit_is_settleable_inside_the_window_and_slashable_after_it() {
+fn a_pending_exit_stays_settleable_and_turns_slashable_only_after_the_grace() {
     let members = attesters();
     let beacon = Beacon::genesis();
     let mut desk = desk();
@@ -741,11 +855,18 @@ fn a_pending_exit_is_settleable_inside_the_window_and_slashable_after_it() {
         .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
         .unwrap();
 
-    assert_eq!(desk.settleable(60), vec![id]);
+    assert_eq!(desk.settleable(), vec![id]);
     assert!(desk.slashable(60).is_empty());
+    assert!(desk.slashable(110 + GRACE).is_empty());
 
-    assert!(desk.settleable(200).is_empty());
     assert_eq!(desk.slashable(200), vec![id]);
+    assert_eq!(
+        desk.settleable(),
+        vec![id],
+        "an overdue exit can still settle until it is slashed"
+    );
+    desk.slash(id, 200).unwrap();
+    assert!(desk.settleable().is_empty());
 }
 
 #[test]
@@ -763,8 +884,8 @@ fn the_settle_sweep_order_takes_an_exit_off_the_slash_list() {
         &BURN_REF,
     )));
 
-    for pending in desk.settleable(60) {
-        desk.settle(pending, &watcher, 60).unwrap();
+    for pending in desk.settleable() {
+        desk.settle(pending, &watcher).unwrap();
     }
     assert_eq!(desk.exit(id).unwrap().state, ExitState::Settled);
     assert!(desk.slashable(200).is_empty());
@@ -783,8 +904,63 @@ fn a_settled_exit_is_never_offered_for_settling_again() {
         AMOUNT as u64,
         &BURN_REF,
     )));
-    for pending in desk.settleable(60) {
-        desk.settle(pending, &watcher, 60).unwrap();
+    for pending in desk.settleable() {
+        desk.settle(pending, &watcher).unwrap();
     }
-    assert!(desk.settleable(61).is_empty());
+    assert!(desk.settleable().is_empty());
+}
+
+fn release_tx_with_change(beneficiary: &[u8; 32], amount: u64, burn_ref: &[u8; 32]) -> Vec<u8> {
+    let mut tx = Vec::new();
+    tx.extend_from_slice(&1u32.to_le_bytes());
+    put_varint(1, &mut tx);
+    tx.extend_from_slice(&[0u8; 32]);
+    tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+    put_varint(0, &mut tx);
+    tx.extend_from_slice(&0xffff_ffffu32.to_le_bytes());
+    put_varint(3, &mut tx);
+    for (value, key) in [(amount, *beneficiary), (5 * amount, [0x66u8; 32])] {
+        tx.extend_from_slice(&value.to_le_bytes());
+        let mut script = vec![0x51u8, 0x20];
+        script.extend_from_slice(&key);
+        put_varint(script.len() as u64, &mut tx);
+        tx.extend_from_slice(&script);
+    }
+    tx.extend_from_slice(&0u64.to_le_bytes());
+    let mut reference_script = vec![0x6au8, 0x20];
+    reference_script.extend_from_slice(burn_ref);
+    put_varint(reference_script.len() as u64, &mut tx);
+    tx.extend_from_slice(&reference_script);
+    tx.extend_from_slice(&0u32.to_le_bytes());
+    tx
+}
+
+#[test]
+fn a_payout_with_vault_change_settles_its_exit_and_never_a_second_one() {
+    let members = attesters();
+    let beacon = Beacon::genesis();
+    let mut desk = desk();
+    desk.register_vault(1, 5_000);
+    let id_a = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .unwrap();
+    let id_b = desk
+        .open_exit(&proof_of(&members, &beacon, BURN_REF_B), 1, 10)
+        .unwrap();
+    let watcher = bitcoin_watcher(release_around(release_tx_with_change(
+        &BENEFICIARY,
+        AMOUNT as u64,
+        &BURN_REF,
+    )));
+
+    desk.settle(id_a, &watcher)
+        .expect("a taproot payout with a change output settles the exit it names");
+    assert_eq!(
+        desk.settle(id_b, &watcher),
+        Err(ExitError::PayoutUnproven),
+        "the same payout output cannot also settle an exit of equal beneficiary and amount"
+    );
+    assert_eq!(desk.exit(id_a).unwrap().state, ExitState::Settled);
+    assert_eq!(desk.exit(id_b).unwrap().state, ExitState::Pending);
+    assert_eq!(desk.locked_collateral(1), REQUIRED);
 }

@@ -58,6 +58,26 @@ impl ProofOfBurn {
 
         parse_burn_leaf(&self.leaf, header.height())
     }
+
+    pub fn claimed_height(&self) -> u64 {
+        header_from_bytes(&self.header_bytes)
+            .map(|header| header.height())
+            .unwrap_or(self.certificate.envelope.height)
+    }
+
+    pub fn claimed_burn_ref(&self) -> Option<[u8; 32]> {
+        parse_burn_leaf(&self.leaf, 0)
+            .ok()
+            .map(|burn| burn.burn_ref)
+    }
+
+    pub fn leaf_digest(&self) -> [u8; 32] {
+        leaf_digest(&self.leaf)
+    }
+}
+
+pub fn leaf_digest(leaf: &[u8]) -> [u8; 32] {
+    qtv_crypto::sha3::sha3_256(leaf)
 }
 
 fn parse_burn_leaf(leaf: &[u8], finalized_height: u64) -> Result<AuthenticatedBurn, ExitError> {

@@ -5,7 +5,7 @@ use qtv_attest::Certificate;
 use qtv_block::prove_inclusion;
 use qtv_codec::Decoder;
 
-use crate::burn_proof::{ProofOfBurn, EVENT_BRIDGE_BURN, NATIVE_EVENT_SOURCE};
+use crate::burn_proof::{leaf_digest, ProofOfBurn, EVENT_BRIDGE_BURN, NATIVE_EVENT_SOURCE};
 
 pub const MAX_HEIGHTS_PER_POLL: u64 = 1024;
 pub const MAX_BURNS_PER_POLL: usize = 4096;
@@ -40,6 +40,27 @@ pub fn is_bridge_burn_leaf(leaf: &[u8]) -> bool {
     contract == NATIVE_EVENT_SOURCE && selector == EVENT_BRIDGE_BURN
 }
 
+fn assemble(block: &FinalizedBlock, index: usize) -> Option<ProofOfBurn> {
+    let leaf = block.events.get(index)?;
+    if !is_bridge_burn_leaf(leaf) {
+        return None;
+    }
+    let inclusion = prove_inclusion(&block.events, index)?;
+    Some(ProofOfBurn {
+        header_bytes: block.header_bytes.clone(),
+        certificate: block.certificate.clone(),
+        leaf: leaf.clone(),
+        inclusion,
+    })
+}
+
+pub fn burn_proofs_for_leaf(block: &FinalizedBlock, digest: &[u8; 32]) -> Vec<ProofOfBurn> {
+    (0..block.events.len())
+        .filter(|&index| leaf_digest(&block.events[index]) == *digest)
+        .filter_map(|index| assemble(block, index))
+        .collect()
+}
+
 pub struct BurnWatcher {
     scanned_through: u64,
 }
@@ -65,21 +86,8 @@ impl BurnWatcher {
         while self.scanned_through < ceiling {
             let height = self.scanned_through + 1;
             if let Some(block) = source.finalized_block(height)? {
-                for (index, leaf) in block.events.iter().enumerate() {
-                    if !is_bridge_burn_leaf(leaf) {
-                        continue;
-                    }
-                    let inclusion = match prove_inclusion(&block.events, index) {
-                        Some(inclusion) => inclusion,
-                        None => continue,
-                    };
-                    assembled.push(ProofOfBurn {
-                        header_bytes: block.header_bytes.clone(),
-                        certificate: block.certificate.clone(),
-                        leaf: leaf.clone(),
-                        inclusion,
-                    });
-                }
+                assembled
+                    .extend((0..block.events.len()).filter_map(|index| assemble(&block, index)));
             }
             self.scanned_through = height;
             if assembled.len() >= MAX_BURNS_PER_POLL {

@@ -15,6 +15,7 @@ const FRAME_LEN: usize = 1 + 4 + BODY_LEN + 4;
 const KIND_OPEN: u8 = 1;
 const KIND_SETTLE: u8 = 2;
 const KIND_SLASH: u8 = 3;
+const KIND_DEAD: u8 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JournaledExit {
@@ -32,11 +33,83 @@ pub struct JournaledExit {
     pub deadline: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadReason {
+    Unproven,
+    Malformed,
+    WrongDestination,
+    UnservedAsset,
+    AboveCeiling,
+    UnknownVault,
+    Refused,
+}
+
+impl DeadReason {
+    pub fn of(error: &ExitError) -> DeadReason {
+        match error {
+            ExitError::HeaderDecode
+            | ExitError::HeaderMismatch
+            | ExitError::HeightMismatch
+            | ExitError::NotFinalized
+            | ExitError::BadInclusion => DeadReason::Unproven,
+            ExitError::LeafDecode
+            | ExitError::NotABurnLeaf
+            | ExitError::BadVersion(_)
+            | ExitError::ZeroAmount
+            | ExitError::ZeroAsset
+            | ExitError::ZeroBeneficiary
+            | ExitError::ZeroBurnRef
+            | ExitError::ZeroCorridor
+            | ExitError::InvalidArtifact(_) => DeadReason::Malformed,
+            ExitError::WrongDestination { .. } => DeadReason::WrongDestination,
+            ExitError::UnservedAsset { .. } => DeadReason::UnservedAsset,
+            ExitError::AmountAboveCeiling { .. } => DeadReason::AboveCeiling,
+            ExitError::UnknownVault(_) => DeadReason::UnknownVault,
+            _ => DeadReason::Refused,
+        }
+    }
+
+    fn tag(self) -> u8 {
+        match self {
+            DeadReason::Unproven => 1,
+            DeadReason::Malformed => 2,
+            DeadReason::WrongDestination => 3,
+            DeadReason::UnservedAsset => 4,
+            DeadReason::AboveCeiling => 5,
+            DeadReason::UnknownVault => 6,
+            DeadReason::Refused => 7,
+        }
+    }
+
+    fn from_tag(tag: u8) -> Option<DeadReason> {
+        match tag {
+            1 => Some(DeadReason::Unproven),
+            2 => Some(DeadReason::Malformed),
+            3 => Some(DeadReason::WrongDestination),
+            4 => Some(DeadReason::UnservedAsset),
+            5 => Some(DeadReason::AboveCeiling),
+            6 => Some(DeadReason::UnknownVault),
+            7 => Some(DeadReason::Refused),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeadLetter {
+    pub height: u64,
+    pub leaf_digest: [u8; 32],
+    pub burn_ref: [u8; 32],
+    pub reason: DeadReason,
+    pub recorded_at: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitEvent {
     Open { index: u32, exit: JournaledExit },
     Settle { index: u32, foreign_ref: [u8; 32] },
     Slash { index: u32 },
+    DeadLetter { index: u32, letter: DeadLetter },
 }
 
 fn header() -> [u8; HEADER_LEN] {
@@ -79,6 +152,16 @@ fn frame_of(event: &ExitEvent) -> [u8; FRAME_LEN] {
         ExitEvent::Slash { index } => {
             out[0] = KIND_SLASH;
             out[1..5].copy_from_slice(&index.to_le_bytes());
+        }
+        ExitEvent::DeadLetter { index, letter } => {
+            out[0] = KIND_DEAD;
+            out[1..5].copy_from_slice(&index.to_le_bytes());
+            let b = &mut out[5..5 + BODY_LEN];
+            b[0..8].copy_from_slice(&letter.height.to_le_bytes());
+            b[8..40].copy_from_slice(&letter.leaf_digest);
+            b[40..72].copy_from_slice(&letter.burn_ref);
+            b[72] = letter.reason.tag();
+            b[73..81].copy_from_slice(&letter.recorded_at.to_le_bytes());
         }
     }
     let tag = tag_of(&out[..1 + 4 + BODY_LEN]);
@@ -143,6 +226,16 @@ fn decode_frame(frame: &[u8]) -> Result<ExitEvent, ExitError> {
             foreign_ref: arr32(b, 0),
         }),
         KIND_SLASH => Ok(ExitEvent::Slash { index }),
+        KIND_DEAD => Ok(ExitEvent::DeadLetter {
+            index,
+            letter: DeadLetter {
+                height: u64_at(b, 0),
+                leaf_digest: arr32(b, 8),
+                burn_ref: arr32(b, 40),
+                reason: DeadReason::from_tag(b[72]).ok_or(ExitError::PersistFailed)?,
+                recorded_at: u64_at(b, 73),
+            },
+        }),
         _ => Err(ExitError::PersistFailed),
     }
 }
@@ -294,10 +387,38 @@ mod tests {
                 foreign_ref: [0x77; 32],
             },
             ExitEvent::Slash { index: 9 },
+            ExitEvent::DeadLetter {
+                index: 2,
+                letter: DeadLetter {
+                    height: 4_200_000,
+                    leaf_digest: [0x44; 32],
+                    burn_ref: [0x11; 32],
+                    reason: DeadReason::UnservedAsset,
+                    recorded_at: 1_700,
+                },
+            },
         ] {
             let frame = frame_of(&event);
             assert_eq!(decode_frame(&frame).unwrap(), event);
         }
+    }
+
+    #[test]
+    fn a_dead_letter_with_an_unknown_reason_fails_closed() {
+        let mut frame = frame_of(&ExitEvent::DeadLetter {
+            index: 0,
+            letter: DeadLetter {
+                height: 1,
+                leaf_digest: [0x44; 32],
+                burn_ref: [0x11; 32],
+                reason: DeadReason::Refused,
+                recorded_at: 1,
+            },
+        });
+        frame[5 + 72] = 0xee;
+        let tag = tag_of(&frame[..1 + 4 + BODY_LEN]);
+        frame[1 + 4 + BODY_LEN..].copy_from_slice(&tag);
+        assert_eq!(decode_frame(&frame), Err(ExitError::PersistFailed));
     }
 
     #[test]

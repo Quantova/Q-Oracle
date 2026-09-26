@@ -4,8 +4,9 @@
 use crate::anchor::QuantovaAnchor;
 use crate::burn_proof::ProofOfBurn;
 use crate::errors::ExitError;
-use crate::journal::{ExitEvent, ExitJournal, JournaledExit, NullJournal};
+use crate::journal::{DeadLetter, DeadReason, ExitEvent, ExitJournal, JournaledExit, NullJournal};
 use crate::ledger::{MemoryLedger, ReplayLedger};
+use crate::outbound::{ExitDecision, ExitOutcome};
 use crate::payout::PayoutWatcher;
 use crate::vault::VaultBook;
 
@@ -54,10 +55,11 @@ impl ExitStatement {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeskConfig {
     pub corridor: u32,
-    pub dest_chain: u64,
+    pub bridge_dest_chain: u32,
     pub secure_bps: u32,
     pub premium_bps: u32,
     pub window: u64,
+    pub grace: u64,
     pub assets: Vec<[u8; 16]>,
     pub max_amount: u128,
 }
@@ -65,15 +67,18 @@ pub struct DeskConfig {
 pub const SECURE_RATIO_BPS: u32 = 15_000;
 pub const SLASH_PREMIUM_BPS: u32 = 10_000;
 pub const REDEEM_WINDOW_MS: u64 = 86_400_000;
+pub const SLASH_GRACE_MS: u64 = 21_600_000;
+pub const MAX_DEAD_LETTERS: usize = 65_536;
 
 impl DeskConfig {
-    pub fn aligned(corridor: u32, dest_chain: u64) -> DeskConfig {
+    pub fn aligned(corridor: u32, bridge_dest_chain: u32) -> DeskConfig {
         DeskConfig {
             corridor,
-            dest_chain,
+            bridge_dest_chain,
             secure_bps: SECURE_RATIO_BPS,
             premium_bps: SLASH_PREMIUM_BPS,
             window: REDEEM_WINDOW_MS,
+            grace: SLASH_GRACE_MS,
             assets: Vec::new(),
             max_amount: 0,
         }
@@ -138,6 +143,7 @@ pub struct ExitDesk {
     anchor: QuantovaAnchor,
     vaults: VaultBook,
     exits: Vec<Exit>,
+    dead: Vec<DeadLetter>,
     consumed: Box<dyn ReplayLedger + Send>,
     journal: Box<dyn ExitJournal + Send>,
 }
@@ -175,6 +181,7 @@ impl ExitDesk {
         journal: Box<dyn ExitJournal + Send>,
     ) -> Result<ExitDesk, ExitError> {
         if cfg.corridor == 0
+            || cfg.bridge_dest_chain == 0
             || cfg.secure_bps <= BPS_DEN as u32
             || cfg.premium_bps < BPS_DEN as u32
             || cfg.premium_bps > cfg.secure_bps
@@ -186,6 +193,7 @@ impl ExitDesk {
             anchor,
             vaults: VaultBook::new(),
             exits: Vec::new(),
+            dead: Vec::new(),
             consumed,
             journal,
         })
@@ -249,6 +257,12 @@ impl ExitDesk {
                     exit.state = ExitState::Slashed;
                     self.vaults.seize(vault_id, locked)?;
                 }
+                ExitEvent::DeadLetter { index, letter } => {
+                    if index as usize != self.dead.len() {
+                        return Err(ExitError::PersistFailed);
+                    }
+                    self.dead.push(letter);
+                }
             }
         }
         Ok(())
@@ -256,6 +270,10 @@ impl ExitDesk {
 
     pub fn corridor(&self) -> u32 {
         self.cfg.corridor
+    }
+
+    pub fn bridge_dest_chain(&self) -> u32 {
+        self.cfg.bridge_dest_chain
     }
 
     pub fn register_vault(&mut self, vault_id: u32, collateral: u128) {
@@ -296,21 +314,81 @@ impl ExitDesk {
         self.exits.len()
     }
 
-    pub fn settleable(&self, now: u64) -> Vec<ExitId> {
+    pub fn settleable(&self) -> Vec<ExitId> {
         self.exits
             .iter()
             .enumerate()
-            .filter(|(_, exit)| exit.state == ExitState::Pending && now <= exit.deadline)
+            .filter(|(_, exit)| exit.state == ExitState::Pending)
             .map(|(index, _)| ExitId(index))
             .collect()
+    }
+
+    fn slash_opens_at(&self, exit: &Exit) -> u64 {
+        exit.deadline.saturating_add(self.cfg.grace)
     }
 
     pub fn slashable(&self, now: u64) -> Vec<ExitId> {
         self.exits
             .iter()
             .enumerate()
-            .filter(|(_, exit)| exit.state == ExitState::Pending && now > exit.deadline)
+            .filter(|(_, exit)| exit.state == ExitState::Pending && now > self.slash_opens_at(exit))
             .map(|(index, _)| ExitId(index))
+            .collect()
+    }
+
+    pub fn decision(&self, id: ExitId) -> Option<ExitDecision> {
+        let exit = self.exits.get(id.0)?;
+        match exit.state {
+            ExitState::Pending => None,
+            ExitState::Settled => Some(ExitDecision::settle(
+                &exit.statement,
+                self.cfg.bridge_dest_chain,
+            )),
+            ExitState::Slashed => Some(ExitDecision::slash(
+                &exit.statement,
+                self.cfg.bridge_dest_chain,
+            )),
+        }
+    }
+
+    pub fn dead_letter(
+        &mut self,
+        proof: &ProofOfBurn,
+        error: &ExitError,
+        now: u64,
+    ) -> Result<(), ExitError> {
+        let letter = DeadLetter {
+            height: proof.claimed_height(),
+            leaf_digest: proof.leaf_digest(),
+            burn_ref: proof.claimed_burn_ref().unwrap_or([0u8; 32]),
+            reason: DeadReason::of(error),
+            recorded_at: now,
+        };
+        if self
+            .dead
+            .iter()
+            .any(|held| held.height == letter.height && held.leaf_digest == letter.leaf_digest)
+        {
+            return Ok(());
+        }
+        if self.dead.len() >= MAX_DEAD_LETTERS {
+            return Err(ExitError::LedgerFull);
+        }
+        self.journal.append(&ExitEvent::DeadLetter {
+            index: self.dead.len() as u32,
+            letter,
+        })?;
+        self.dead.push(letter);
+        Ok(())
+    }
+
+    pub fn dead_letters(&self) -> Vec<DeadLetter> {
+        self.dead
+            .iter()
+            .filter(|letter| {
+                letter.burn_ref == [0u8; 32] || !self.consumed.is_released(&letter.burn_ref)
+            })
+            .copied()
             .collect()
     }
 
@@ -321,10 +399,10 @@ impl ExitDesk {
         now: u64,
     ) -> Result<ExitId, ExitError> {
         let burn = proof.verify(&self.anchor)?;
-        if burn.dest_chain != self.cfg.dest_chain {
+        if burn.dest_chain != self.anchor.chain_id() {
             return Err(ExitError::WrongDestination {
                 got: burn.dest_chain,
-                expected: self.cfg.dest_chain,
+                expected: self.anchor.chain_id(),
             });
         }
         if !self.cfg.serves(&burn.asset_id) {
@@ -396,17 +474,10 @@ impl ExitDesk {
         &mut self,
         id: ExitId,
         watcher: &dyn PayoutWatcher,
-        now: u64,
     ) -> Result<Release, ExitError> {
         let exit = self.exits.get(id.0).ok_or(ExitError::UnknownExit)?;
         if exit.state != ExitState::Pending {
             return Err(ExitError::NotPending);
-        }
-        if now > exit.deadline {
-            return Err(ExitError::WindowExpired {
-                now,
-                deadline: exit.deadline,
-            });
         }
         if watcher.corridor() != self.cfg.corridor {
             return Err(ExitError::PayoutMismatch);
@@ -438,15 +509,37 @@ impl ExitDesk {
         Ok(Release { vault_id, released })
     }
 
+    pub fn close_overdue(
+        &mut self,
+        id: ExitId,
+        watchers: &[&dyn PayoutWatcher],
+        now: u64,
+    ) -> Result<ExitOutcome, ExitError> {
+        let exit = self.exits.get(id.0).ok_or(ExitError::UnknownExit)?;
+        if exit.state != ExitState::Pending {
+            return Err(ExitError::NotPending);
+        }
+        for watcher in watchers {
+            match self.settle(id, *watcher) {
+                Ok(_) => return Ok(ExitOutcome::Settle),
+                Err(e) if proves_no_payout(&e) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        self.slash(id, now)?;
+        Ok(ExitOutcome::Slash)
+    }
+
     pub fn slash(&mut self, id: ExitId, now: u64) -> Result<SlashOutcome, ExitError> {
         let exit = self.exits.get(id.0).ok_or(ExitError::UnknownExit)?;
         if exit.state != ExitState::Pending {
             return Err(ExitError::NotPending);
         }
-        if now <= exit.deadline {
+        let opens_at = self.slash_opens_at(exit);
+        if now <= opens_at {
             return Err(ExitError::WindowOpen {
                 now,
-                deadline: exit.deadline,
+                deadline: opens_at,
             });
         }
         let vault_id = exit.vault_id;
@@ -469,6 +562,21 @@ impl ExitDesk {
     }
 }
 
+fn proves_no_payout(error: &ExitError) -> bool {
+    matches!(
+        error,
+        ExitError::PayoutUnproven
+            | ExitError::PayoutMismatch
+            | ExitError::ReplayedPayout
+            | ExitError::BadVersion(_)
+            | ExitError::ZeroCorridor
+            | ExitError::ZeroAmount
+            | ExitError::ZeroAsset
+            | ExitError::ZeroBeneficiary
+            | ExitError::ZeroBurnRef
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,10 +584,11 @@ mod tests {
     fn cfg() -> DeskConfig {
         DeskConfig {
             corridor: 1,
-            dest_chain: 9000,
+            bridge_dest_chain: 9000,
             secure_bps: 15_000,
             premium_bps: 10_000,
             window: 100,
+            grace: 50,
             assets: vec![[0xa1; 16]],
             max_amount: 0,
         }
@@ -488,10 +597,11 @@ mod tests {
     #[test]
     fn the_aligned_config_pays_one_to_one_on_slash() {
         let c = DeskConfig::aligned(1, 9000);
-        assert_eq!(c.dest_chain, 9000);
+        assert_eq!(c.bridge_dest_chain, 9000);
         assert_eq!(c.secure_bps, 15_000);
         assert_eq!(c.premium_bps, 10_000);
         assert_eq!(c.window, 86_400_000);
+        assert_eq!(c.grace, SLASH_GRACE_MS);
         assert!(c.premium_bps == BPS_DEN as u32 && c.premium_bps <= c.secure_bps);
     }
 
@@ -572,6 +682,17 @@ mod tests {
     }
 
     #[test]
+    fn a_zero_bridge_destination_is_refused() {
+        let mut c = cfg();
+        c.bridge_dest_chain = 0;
+        assert_eq!(
+            ExitDesk::new(c, anchor()).err(),
+            Some(ExitError::UnsafeParams),
+            "a desk with no bridge destination would emit decisions the chain can never accept"
+        );
+    }
+
+    #[test]
     fn required_collateral_sits_above_the_value() {
         let d = desk();
         assert_eq!(d.required_collateral(1_000).unwrap(), 1_500);
@@ -597,7 +718,7 @@ mod tests {
         assert_eq!(s.validate(), Err(ExitError::ZeroBurnRef));
     }
 
-    use crate::journal::{JournaledExit, PersistentJournal};
+    use crate::journal::{DeadLetter, DeadReason, JournaledExit, PersistentJournal};
     use crate::store::ReplayStore;
     use std::path::PathBuf;
 
@@ -703,6 +824,75 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
+    fn letter(burn_ref: [u8; 32]) -> DeadLetter {
+        DeadLetter {
+            height: 4_200_000,
+            leaf_digest: [0x44; 32],
+            burn_ref,
+            reason: DeadReason::UnservedAsset,
+            recorded_at: 10,
+        }
+    }
+
+    #[test]
+    fn a_dead_lettered_burn_survives_a_restart_and_stays_listed_until_it_opens() {
+        let path = journal_path("dead-letter");
+        let unserved = [0x33; 32];
+        let opened = [0x11; 32];
+        {
+            let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+            journal
+                .append(&ExitEvent::DeadLetter {
+                    index: 0,
+                    letter: letter(unserved),
+                })
+                .unwrap();
+            journal
+                .append(&ExitEvent::DeadLetter {
+                    index: 1,
+                    letter: DeadLetter {
+                        leaf_digest: [0x45; 32],
+                        ..letter(opened)
+                    },
+                })
+                .unwrap();
+            journal
+                .append(&ExitEvent::Open {
+                    index: 0,
+                    exit: journaled(1, 1_500, opened),
+                })
+                .unwrap();
+        }
+        let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+        let mut desk = ExitDesk::with_journal(cfg(), anchor(), Box::new(journal)).unwrap();
+        desk.register_vault(1, 2_000);
+        desk.reconstruct().expect("the dead letters rebuild");
+        assert_eq!(
+            desk.dead_letters(),
+            vec![letter(unserved)],
+            "the unopened burn is still listed for retry, the one that later opened is not"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_dead_letter_out_of_sequence_fails_closed() {
+        let path = journal_path("dead-letter-gap");
+        {
+            let mut journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+            journal
+                .append(&ExitEvent::DeadLetter {
+                    index: 3,
+                    letter: letter([0x33; 32]),
+                })
+                .unwrap();
+        }
+        let journal = PersistentJournal::open(ReplayStore::new(path.clone())).unwrap();
+        let mut desk = ExitDesk::with_journal(cfg(), anchor(), Box::new(journal)).unwrap();
+        assert_eq!(desk.reconstruct(), Err(ExitError::PersistFailed));
+        std::fs::remove_file(&path).ok();
+    }
+
     #[test]
     fn a_settle_over_an_unknown_index_fails_closed_rather_than_dropping() {
         let path = journal_path("dangling-settle");
@@ -805,10 +995,11 @@ mod settle_commit_order_tests {
     fn cfg() -> DeskConfig {
         DeskConfig {
             corridor: 1,
-            dest_chain: 9000,
+            bridge_dest_chain: 9000,
             secure_bps: 15_000,
             premium_bps: 10_000,
             window: 100,
+            grace: 50,
             assets: vec![[0xa1; 16]],
             max_amount: 0,
         }
@@ -897,10 +1088,10 @@ mod settle_commit_order_tests {
         desk.reconstruct().expect("both opens replay");
         events.lock().unwrap().clear();
 
-        desk.settle(ExitId(0), &StubWatcher, 50)
+        desk.settle(ExitId(0), &StubWatcher)
             .expect("the first exit settles against the payout");
         assert_eq!(
-            desk.settle(ExitId(1), &StubWatcher, 50),
+            desk.settle(ExitId(1), &StubWatcher),
             Err(ExitError::ReplayedPayout),
             "one foreign payment must not release the custody behind two exits"
         );
@@ -921,7 +1112,7 @@ mod settle_commit_order_tests {
     fn a_settle_the_replay_ledger_refuses_is_never_written_to_the_journal() {
         let (mut desk, events) = pending_desk(Some(FOREIGN));
         assert_eq!(
-            desk.settle(ExitId(0), &StubWatcher, 50),
+            desk.settle(ExitId(0), &StubWatcher),
             Err(ExitError::LedgerFull)
         );
         assert!(
@@ -936,11 +1127,109 @@ mod settle_commit_order_tests {
     #[test]
     fn a_settle_the_replay_ledger_accepts_is_journaled_and_completed() {
         let (mut desk, events) = pending_desk(None);
-        desk.settle(ExitId(0), &StubWatcher, 50)
+        desk.settle(ExitId(0), &StubWatcher)
             .expect("the settle completes");
         assert_eq!(events.lock().unwrap().len(), 1, "exactly one settle event");
         assert!(desk.is_consumed(&FOREIGN));
         assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Settled);
         assert_eq!(desk.locked_collateral(1), 0);
+    }
+
+    struct SilentWatcher;
+
+    impl PayoutWatcher for SilentWatcher {
+        fn corridor(&self) -> u32 {
+            1
+        }
+
+        fn confirm(&self, _statement: &ExitStatement) -> Option<PayoutAttestation> {
+            None
+        }
+    }
+
+    const DEADLINE: u64 = 110;
+    const GRACE: u64 = 50;
+
+    #[test]
+    fn a_payout_proven_after_the_deadline_settles_instead_of_slashing() {
+        let (mut desk, events) = pending_desk(None);
+        assert!(
+            desk.settleable().contains(&ExitId(0)),
+            "an unslashed exit stays settleable once its deadline has passed"
+        );
+        assert_eq!(
+            desk.close_overdue(ExitId(0), &[&StubWatcher], DEADLINE + GRACE + 1),
+            Ok(ExitOutcome::Settle),
+            "a vault that paid late is settled, never refunded on top of its payout"
+        );
+        assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Settled);
+        assert_eq!(
+            desk.decision(ExitId(0)).map(|d| d.outcome),
+            Some(ExitOutcome::Settle)
+        );
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![ExitEvent::Settle {
+                index: 0,
+                foreign_ref: FOREIGN
+            }],
+            "only the settle is persisted"
+        );
+        assert_eq!(desk.slash(ExitId(0), u64::MAX), Err(ExitError::NotPending));
+    }
+
+    #[test]
+    fn an_unpaid_exit_is_slashed_only_after_the_deadline_and_the_grace() {
+        let (mut desk, events) = pending_desk(None);
+        assert!(desk.slashable(DEADLINE + 1).is_empty());
+        assert_eq!(
+            desk.close_overdue(ExitId(0), &[&SilentWatcher], DEADLINE + 1),
+            Err(ExitError::WindowOpen {
+                now: DEADLINE + 1,
+                deadline: DEADLINE + GRACE
+            })
+        );
+        assert_eq!(
+            desk.slash(ExitId(0), DEADLINE + GRACE),
+            Err(ExitError::WindowOpen {
+                now: DEADLINE + GRACE,
+                deadline: DEADLINE + GRACE
+            })
+        );
+        assert!(events.lock().unwrap().is_empty());
+        assert_eq!(desk.decision(ExitId(0)), None, "no decision while pending");
+
+        assert_eq!(desk.slashable(DEADLINE + GRACE + 1), vec![ExitId(0)]);
+        assert_eq!(
+            desk.close_overdue(ExitId(0), &[&SilentWatcher], DEADLINE + GRACE + 1),
+            Ok(ExitOutcome::Slash)
+        );
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![ExitEvent::Slash { index: 0 }],
+            "the slash is persisted before its decision exists"
+        );
+        assert_eq!(
+            desk.decision(ExitId(0)).map(|d| d.outcome),
+            Some(ExitOutcome::Slash)
+        );
+        assert_eq!(
+            desk.settle(ExitId(0), &StubWatcher),
+            Err(ExitError::NotPending),
+            "a slashed exit can never also settle"
+        );
+        assert_eq!(events.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_known_payout_that_cannot_be_recorded_blocks_the_slash() {
+        let (mut desk, events) = pending_desk(Some(FOREIGN));
+        assert_eq!(
+            desk.close_overdue(ExitId(0), &[&StubWatcher], DEADLINE + GRACE + 1),
+            Err(ExitError::LedgerFull),
+            "a proven payout must never fall through to a refund"
+        );
+        assert_eq!(desk.exit(ExitId(0)).unwrap().state, ExitState::Pending);
+        assert!(events.lock().unwrap().is_empty());
     }
 }

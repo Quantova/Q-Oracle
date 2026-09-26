@@ -116,6 +116,7 @@ pub struct Commit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitError {
     HeaderMismatch,
+    HeightMismatch { header: i64, commit: i64 },
     NotEnoughVotingPower { signed: u128, total: u128 },
     SetTooLarge,
     DuplicateSigner,
@@ -131,6 +132,12 @@ pub fn tally_signed_power(
         || commit.signatures.len() > crate::validator::MAX_VALIDATORS
     {
         return Err(CommitError::SetTooLarge);
+    }
+    if commit.height != header.height {
+        return Err(CommitError::HeightMismatch {
+            header: header.height,
+            commit: commit.height,
+        });
     }
     if commit.block_id.hash != header.hash() {
         return Err(CommitError::HeaderMismatch);
@@ -331,6 +338,29 @@ mod tests {
             verify_commit(CHAIN_ID, &header, &commit, &set),
             Err(CommitError::HeaderMismatch)
         );
+    }
+
+    #[test]
+    fn a_commit_for_another_height_is_refused_even_when_it_names_the_header() {
+        let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
+        let (header, mut commit, set) = build(&vs, &[]);
+        commit.height = header.height + 1;
+        commit.signatures = [0, 1, 2, 3]
+            .iter()
+            .map(|&i| precommit(&vs[i], &commit))
+            .collect();
+        assert_eq!(
+            verify_commit(CHAIN_ID, &header, &commit, &set),
+            Err(CommitError::HeightMismatch {
+                header: header.height,
+                commit: header.height + 1,
+            }),
+            "precommits for another height must not finalize this header"
+        );
+        assert!(matches!(
+            tally_signed_power(CHAIN_ID, &header, &commit, &set),
+            Err(CommitError::HeightMismatch { .. })
+        ));
     }
 
     #[test]

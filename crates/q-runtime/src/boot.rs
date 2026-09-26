@@ -10,8 +10,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use q_exits::{
-    BitcoinPayoutWatcher, BitcoinReleaseProof, BurnFeed, ExitConfig, ExitDecision, ExitDesk,
-    ExitError, ExitId, FeedError, PayoutWatcher, PersistentJournal, QuantovaBurnSource,
+    BitcoinPayoutWatcher, BitcoinReleaseProof, BurnFeed, DeadLetter, ExitConfig, ExitDecision,
+    ExitDesk, ExitError, ExitId, FeedError, PayoutWatcher, PersistentJournal, QuantovaBurnSource,
     ReplayStore, RpcBurnSource,
 };
 use q_federated::SourceEndpoint;
@@ -48,7 +48,6 @@ pub struct ExitService {
     feed: BurnFeed,
     source: RpcBurnSource,
     vault_id: u32,
-    dest_chain: u32,
     settle: Option<SettleInputs>,
 }
 
@@ -95,22 +94,30 @@ pub fn submit_release(
     gate: &ReleaseGate,
     proof: BitcoinReleaseProof,
 ) -> Result<(), ReleaseRefusal> {
-    let expected = {
-        let expected = gate.expected.lock().unwrap_or_else(|e| e.into_inner());
-        if expected.is_empty() {
-            return Err(ReleaseRefusal::Unmatched);
-        }
-        expected.clone()
-    };
-    let proven = proof
-        .verify(&gate.params, &gate.checkpoint, gate.confirmation_depth)
-        .map_err(|_| ReleaseRefusal::Unproven)?;
-    let matches = proven.burn_ref.is_some_and(|burn_ref| {
-        expected.get(&burn_ref) == Some(&(proven.beneficiary, proven.amount))
-    });
-    if !matches {
+    if gate
+        .expected
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_empty()
+    {
         return Err(ReleaseRefusal::Unmatched);
     }
+    let burn_ref = proof.burn_ref().ok_or(ReleaseRefusal::Unproven)?;
+    let (beneficiary, amount) = *gate
+        .expected
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&burn_ref)
+        .ok_or(ReleaseRefusal::Unmatched)?;
+    let proven = proof
+        .verify(
+            &gate.params,
+            &gate.checkpoint,
+            gate.confirmation_depth,
+            &beneficiary,
+            amount,
+        )
+        .map_err(|_| ReleaseRefusal::Unproven)?;
     let mut seen = gate.seen.lock().unwrap_or_else(|e| e.into_inner());
     if seen.contains(&proven.foreign_ref) {
         return Err(ReleaseRefusal::AlreadyHeld);
@@ -176,7 +183,6 @@ impl ExitService {
             feed: BurnFeed::new(cfg.start_height, ExitConfig { enabled: true }),
             source: RpcBurnSource::new(cfg.rpc_host.clone(), cfg.rpc_port),
             vault_id: cfg.active_vault(),
-            dest_chain: cfg.dest_chain,
         })
     }
 
@@ -209,30 +215,32 @@ impl ExitService {
         self.feed.drive(source, &mut self.desk, self.vault_id, now)
     }
 
+    pub fn dead_letters(&self) -> Vec<DeadLetter> {
+        self.desk.dead_letters()
+    }
+
+    pub fn retry_dead_letters(&mut self, now: u64) -> Result<Vec<ExitId>, FeedError> {
+        self.feed
+            .retry_dead_letters(&self.source, &mut self.desk, self.vault_id, now)
+    }
+
     pub fn settle(
         &mut self,
         id: ExitId,
         watcher: &dyn PayoutWatcher,
-        now: u64,
     ) -> Result<ExitDecision, ExitError> {
-        self.desk.settle(id, watcher, now)?;
-        let statement = self
-            .desk
-            .exit(id)
-            .ok_or(ExitError::UnknownExit)?
-            .statement
-            .clone();
-        Ok(ExitDecision::settle(&statement, self.dest_chain))
+        self.desk.settle(id, watcher)?;
+        self.desk.decision(id).ok_or(ExitError::UnknownExit)
     }
 
-    pub fn sweep_settle(&mut self, now: u64) -> Vec<ExitDecision> {
+    fn known_payouts(&mut self) -> Vec<BitcoinPayoutWatcher> {
         let Some(settle) = self.settle.as_mut() else {
             return Vec::new();
         };
         {
             let open: std::collections::BTreeMap<[u8; 32], ([u8; 32], u128)> = self
                 .desk
-                .settleable(now)
+                .settleable()
                 .into_iter()
                 .filter_map(|id| self.desk.exit(id))
                 .map(|exit| {
@@ -243,9 +251,14 @@ impl ExitService {
                     )
                 })
                 .collect();
-            *settle.expected.lock().unwrap_or_else(|e| e.into_inner()) = open;
             let mut queued = settle.queue.lock().unwrap_or_else(|e| e.into_inner());
             settle.held.append(&mut queued);
+            settle.held.retain(|proof| {
+                proof
+                    .burn_ref()
+                    .is_some_and(|burn_ref| open.contains_key(&burn_ref))
+            });
+            *settle.expected.lock().unwrap_or_else(|e| e.into_inner()) = open;
         }
         while settle.held.len() > MAX_PENDING_RELEASES {
             settle.held.remove(0);
@@ -253,7 +266,7 @@ impl ExitService {
         if settle.held.is_empty() {
             return Vec::new();
         }
-        let watchers: Vec<BitcoinPayoutWatcher> = settle
+        settle
             .assets
             .iter()
             .map(|asset| {
@@ -266,11 +279,18 @@ impl ExitService {
                     settle.held.clone(),
                 )
             })
-            .collect();
+            .collect()
+    }
+
+    pub fn sweep_settle(&mut self) -> Vec<ExitDecision> {
+        let watchers = self.known_payouts();
         let mut decisions = Vec::new();
-        for id in self.desk.settleable(now) {
+        if watchers.is_empty() {
+            return decisions;
+        }
+        for id in self.desk.settleable() {
             for watcher in &watchers {
-                if let Ok(decision) = self.settle(id, watcher, now) {
+                if let Ok(decision) = self.settle(id, watcher) {
                     decisions.push(decision);
                     break;
                 }
@@ -280,11 +300,16 @@ impl ExitService {
     }
 
     pub fn sweep_slash(&mut self, now: u64) -> Vec<ExitDecision> {
+        let watchers = self.known_payouts();
+        let known: Vec<&dyn PayoutWatcher> = watchers
+            .iter()
+            .map(|watcher| watcher as &dyn PayoutWatcher)
+            .collect();
         let mut decisions = Vec::new();
         for id in self.desk.slashable(now) {
-            if self.desk.slash(id, now).is_ok() {
-                if let Some(exit) = self.desk.exit(id) {
-                    decisions.push(ExitDecision::slash(&exit.statement, self.dest_chain));
+            if self.desk.close_overdue(id, &known, now).is_ok() {
+                if let Some(decision) = self.desk.decision(id) {
+                    decisions.push(decision);
                 }
             }
         }
@@ -293,7 +318,7 @@ impl ExitService {
 
     pub fn step(&mut self, now: u64) {
         let _ = self.poll_burns(now);
-        let _ = self.sweep_settle(now);
+        let _ = self.sweep_settle();
         let _ = self.sweep_slash(now);
         if let Some(state) = self.gateway.as_ref() {
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
@@ -1304,7 +1329,7 @@ mod tests {
                 root_slots: 64,
                 attest_pk: vec![0u8; ATTEST_PK_BYTES],
             }],
-            dest_chain: 9000,
+            bridge_dest_chain: 9000,
             corridor: 1,
             start_height: 4_199_999,
             vaults: vec![VaultSeed {
@@ -1413,7 +1438,7 @@ mod tests {
         cfg.bitcoin = None;
         let mut service = ExitService::build(&cfg).expect("the desk still builds");
         assert!(
-            service.sweep_settle(1).is_empty(),
+            service.sweep_settle().is_empty(),
             "with no checkpoint the sweep is a no-op"
         );
     }
@@ -1460,6 +1485,77 @@ mod tests {
             gate.queue.lock().unwrap().is_empty(),
             "a flood of junk cannot push a real proof out of the queue"
         );
+    }
+
+    fn release_gate(expected: ([u8; 32], ([u8; 32], u128)), anchor: [u8; 32]) -> ReleaseGate {
+        ReleaseGate {
+            queue: Arc::new(Mutex::new(Vec::new())),
+            params: EASY,
+            checkpoint: Checkpoint {
+                height: 0,
+                hash: anchor,
+                min_work: U256::ONE,
+            },
+            confirmation_depth: 6,
+            expected: Arc::new(Mutex::new([expected].into_iter().collect())),
+            seen: Mutex::new(Default::default()),
+        }
+    }
+
+    #[test]
+    fn a_payout_with_taproot_change_is_admitted_for_the_exit_it_names() {
+        let burn_ref = [0x42; 32];
+        let beneficiary = [0x43; 32];
+        let taproot = |key: [u8; 32]| {
+            let mut script = vec![0x51, 0x20];
+            script.extend_from_slice(&key);
+            script
+        };
+        let raw = raw_deposit_tx(&[
+            (250_000, taproot(beneficiary)),
+            (730_000, taproot([0x66; 32])),
+            (0, op_return(burn_ref)),
+        ]);
+        let txid = Transaction::parse(&raw).unwrap().txid();
+        let (root, coinbase_tx, branch, coinbase_branch) = with_coinbase(txid);
+        let mut headers = vec![mine([0u8; 32], root)];
+        let mut prev = headers[0].block_hash();
+        for i in 0..5u8 {
+            let block = mine(prev, [i + 1; 32]);
+            prev = block.block_hash();
+            headers.push(block);
+        }
+        let anchor = headers[0].block_hash();
+        let proof = BitcoinReleaseProof {
+            headers,
+            start_height: 0,
+            release_height: 0,
+            branch,
+            raw_tx: raw,
+            coinbase_tx,
+            coinbase_branch,
+        };
+
+        let gate = release_gate((burn_ref, (beneficiary, 250_000)), anchor);
+        assert_eq!(
+            submit_release(&gate, proof.clone()),
+            Ok(()),
+            "a vault payout that returns change to the vault is an ordinary release"
+        );
+        assert_eq!(gate.queue.lock().unwrap().len(), 1);
+        assert_eq!(
+            submit_release(&gate, proof.clone()),
+            Err(ReleaseRefusal::AlreadyHeld)
+        );
+
+        let elsewhere = release_gate(([0x44; 32], (beneficiary, 250_000)), anchor);
+        assert_eq!(
+            submit_release(&elsewhere, proof.clone()),
+            Err(ReleaseRefusal::Unmatched),
+            "the payout names one burn and cannot be matched to another exit"
+        );
+        let short = release_gate((burn_ref, (beneficiary, 250_001)), anchor);
+        assert_eq!(submit_release(&short, proof), Err(ReleaseRefusal::Unproven));
     }
 
     #[test]

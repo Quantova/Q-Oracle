@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 
 use qtv_crypto::ml_dsa::{self, PublicKey, SECRET_KEY_BYTES, SIGNATURE_BYTES};
+use zeroize::Zeroizing;
 
 use crate::exits::ExitStatement;
 
@@ -131,11 +132,13 @@ pub fn sign_decision(
     chain_id: u64,
     era: &[u8; 32],
 ) -> Option<Vec<u8>> {
+    let mut rnd = Zeroizing::new([0u8; 32]);
+    qtv_crypto::rng::try_fill_random(rnd.as_mut_slice()).ok()?;
     ml_dsa::sign(
         secret,
         &decision.ack_preimage(chain_id),
         &exit_ack_context(era),
-        &[0u8; 32],
+        &rnd,
     )
     .map(|signature| signature.to_vec())
 }
@@ -355,6 +358,59 @@ mod tests {
                 &exit_ack_context(&TEST_ERA)
             ),
             "a signature does not carry to a tampered decision"
+        );
+    }
+
+    #[test]
+    fn decision_signing_is_hedged_and_every_signature_still_verifies() {
+        let mut seed = [0u8; 32];
+        seed[0] = 10;
+        let (pk, sk) = ml_dsa::keygen(&seed);
+        let decision = ExitDecision::settle(&statement(), 9000);
+        let chain_id = 0x0123_4567_89AB_CDEFu64;
+        let first = sign_decision(&sk, &decision, chain_id, &TEST_ERA).unwrap();
+        let second = sign_decision(&sk, &decision, chain_id, &TEST_ERA).unwrap();
+        assert_ne!(
+            first, second,
+            "fresh OS randomness goes into every signature, never a fixed nonce seed"
+        );
+        for signature in [&first, &second] {
+            let sig: &[u8; SIGNATURE_BYTES] = signature.as_slice().try_into().unwrap();
+            assert!(ml_dsa::verify(
+                &pk,
+                &decision.ack_preimage(chain_id),
+                sig,
+                &exit_ack_context(&TEST_ERA)
+            ));
+        }
+        let operators = [AckOperator {
+            operator_id: 1,
+            public_key: pk,
+        }];
+        let (other, other_sk) = operator(2);
+        let envelope = ExitEnvelope {
+            decision: decision.clone(),
+            signatures: vec![
+                SignerSig {
+                    operator_id: 1,
+                    signature: second,
+                },
+                SignerSig {
+                    operator_id: other.operator_id,
+                    signature: sign_decision(&other_sk, &decision, chain_id, &TEST_ERA).unwrap(),
+                },
+            ],
+        };
+        assert_eq!(
+            verify_ack_quorum(
+                &envelope,
+                &[operators[0].clone(), other],
+                chain_id,
+                &TEST_ERA,
+                2
+            ),
+            Ok(2),
+            "the quorum check verifies hedged signatures rather than comparing bytes"
         );
     }
 

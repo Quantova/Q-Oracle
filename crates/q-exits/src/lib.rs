@@ -23,12 +23,13 @@ pub use burn_proof::{AuthenticatedBurn, ProofOfBurn, EVENT_BRIDGE_BURN, NATIVE_E
 pub use errors::ExitError;
 pub use exits::{
     DeskConfig, Exit, ExitDesk, ExitId, ExitState, ExitStatement, Release, SlashOutcome, BPS_DEN,
-    EXIT_STATEMENT_VERSION, REDEEM_WINDOW_MS, SECURE_RATIO_BPS, SLASH_PREMIUM_BPS,
+    EXIT_STATEMENT_VERSION, MAX_DEAD_LETTERS, REDEEM_WINDOW_MS, SECURE_RATIO_BPS, SLASH_GRACE_MS,
+    SLASH_PREMIUM_BPS,
 };
 pub use feed::{BurnFeed, ExitConfig, FeedError};
 pub use journal::{
-    ExitEvent, ExitJournal, JournaledExit, NullJournal, PersistentJournal, JOURNAL_VERSION,
-    MAX_JOURNAL_ENTRIES,
+    DeadLetter, DeadReason, ExitEvent, ExitJournal, JournaledExit, NullJournal, PersistentJournal,
+    JOURNAL_VERSION, MAX_JOURNAL_ENTRIES,
 };
 pub use ledger::{
     MemoryLedger, PersistentLedger, ReplayLedger, LEDGER_VERSION, MAX_LEDGER_ENTRIES,
@@ -50,6 +51,6 @@ pub use rpc::{
 pub use store::ReplayStore;
 pub use vault::{Vault, VaultBook};
 pub use watch::{
-    is_bridge_burn_leaf, BurnWatchError, BurnWatcher, FinalizedBlock, QuantovaBurnSource,
-    MAX_BURNS_PER_POLL, MAX_HEIGHTS_PER_POLL,
+    burn_proofs_for_leaf, is_bridge_burn_leaf, BurnWatchError, BurnWatcher, FinalizedBlock,
+    QuantovaBurnSource, MAX_BURNS_PER_POLL, MAX_HEIGHTS_PER_POLL,
 };
