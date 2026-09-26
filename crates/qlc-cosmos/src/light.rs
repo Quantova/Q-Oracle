@@ -103,13 +103,23 @@ pub fn check_trusting_commit(
     new_header: &Header,
     new_commit: &Commit,
 ) -> Result<(), LightError> {
+    let trusted_total = trusted.validators.total_power();
+    let reaches = |power: u128| {
+        cfg.overlap_numerator > 0
+            && power * (cfg.overlap_denominator as u128)
+                > trusted_total * (cfg.overlap_numerator as u128)
+    };
+    let claimed = crate::commit::claimed_power(new_commit, &trusted.validators)
+        .map_err(LightError::Commit)?;
+    if !reaches(claimed) {
+        return Err(LightError::InsufficientTrustedSignatures {
+            signed: claimed,
+            trusted_total,
+        });
+    }
     let signed = tally_signed_power(cfg.chain_id, new_header, new_commit, &trusted.validators)
         .map_err(LightError::Commit)?;
-    let trusted_total = trusted.validators.total_power();
-    if cfg.overlap_numerator > 0
-        && signed * (cfg.overlap_denominator as u128)
-            > trusted_total * (cfg.overlap_numerator as u128)
-    {
+    if reaches(signed) {
         Ok(())
     } else {
         Err(LightError::InsufficientTrustedSignatures {

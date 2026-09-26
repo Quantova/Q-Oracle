@@ -122,6 +122,32 @@ pub enum CommitError {
     DuplicateSigner,
 }
 
+pub fn claimed_power(commit: &Commit, set: &ValidatorSet) -> Result<u128, CommitError> {
+    if set.validators.len() > crate::validator::MAX_VALIDATORS
+        || commit.signatures.len() > crate::validator::MAX_VALIDATORS
+    {
+        return Err(CommitError::SetTooLarge);
+    }
+    let mut by_address: HashMap<[u8; 20], u64> = HashMap::with_capacity(set.validators.len());
+    for v in &set.validators {
+        by_address.entry(v.address()).or_insert(v.voting_power);
+    }
+    let mut claimed: u128 = 0;
+    let mut counted: HashSet<[u8; 20]> = HashSet::new();
+    for sig in &commit.signatures {
+        if sig.flag != BlockIdFlag::Commit || sig.signature.len() != 64 {
+            continue;
+        }
+        if !counted.insert(sig.validator_address) {
+            return Err(CommitError::DuplicateSigner);
+        }
+        if let Some(power) = by_address.get(&sig.validator_address) {
+            claimed += *power as u128;
+        }
+    }
+    Ok(claimed)
+}
+
 pub fn tally_signed_power(
     chain_id: &str,
     header: &Header,
@@ -189,8 +215,15 @@ pub fn verify_commit(
     commit: &Commit,
     set: &ValidatorSet,
 ) -> Result<u128, CommitError> {
-    let signed = tally_signed_power(chain_id, header, commit, set)?;
     let total = set.total_power();
+    let claimed = claimed_power(commit, set)?;
+    if !has_two_thirds(claimed, total) {
+        return Err(CommitError::NotEnoughVotingPower {
+            signed: claimed,
+            total,
+        });
+    }
+    let signed = tally_signed_power(chain_id, header, commit, set)?;
     if has_two_thirds(signed, total) {
         Ok(signed)
     } else {
