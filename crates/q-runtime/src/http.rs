@@ -596,7 +596,8 @@ fn persist_if_advanced(
 ) -> Result<(), RouteFail> {
     if guard.gateway.guard_revision() != rev_before {
         if let Some(store) = store {
-            if store.save(&guard.gateway.encode_guard()).is_err() {
+            let encoded = guard.gateway.encode_guard();
+            if !(0..3).any(|_| store.save(&encoded).is_ok()) {
                 return Err(RouteFail::PersistFailed);
             }
         }
@@ -654,10 +655,16 @@ fn route(
             }
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             let rev_before = guard.gateway.guard_revision();
-            let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let snapshot = guard.gateway.encode_guard();
+            let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 handle(&mut guard, other)
-            }))
-            .map_err(|_| RouteFail::Panicked)?;
+            })) {
+                Ok(response) => response,
+                Err(_) => {
+                    let _ = guard.gateway.rehydrate_guard(&snapshot);
+                    return Err(RouteFail::Panicked);
+                }
+            };
             persist_if_advanced(&guard, store, rev_before)?;
             Ok(response)
         }

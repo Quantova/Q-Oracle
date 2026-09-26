@@ -202,6 +202,7 @@ dependencies = [
  "qlc-bitcoin",
  "qlc-cosmos",
  "qlc-ethereum",
+ "qtv-attest",
  "qtv-crypto",
 ]
 

@@ -1355,8 +1355,18 @@ mod tests {
             Ok(self.head)
         }
 
-        fn finalized_block(&self, _height: u64) -> Result<Option<FinalizedBlock>, BurnWatchError> {
-            Ok(None)
+        fn finalized_block(&self, height: u64) -> Result<Option<FinalizedBlock>, BurnWatchError> {
+            let envelope = qtv_attest::Envelope {
+                height,
+                slot: 0,
+                block: qtv_attest::Block::new(height, [0u8; 32], qtv_attest::Parent::Genesis),
+                committee: [0u8; 32],
+            };
+            Ok(Some(FinalizedBlock {
+                header_bytes: Vec::new(),
+                certificate: qtv_attest::Certificate::new(envelope, Vec::new()),
+                events: Vec::new(),
+            }))
         }
     }
 

@@ -28,3 +28,4 @@ qlc-cosmos = { workspace = true }
 qtv-crypto = { workspace = true }
 
 [dev-dependencies]
+qtv-attest = { path = "../../../QRC-CONSENSUS/crates/qtv-attest" }
