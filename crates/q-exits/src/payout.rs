@@ -7,9 +7,7 @@ use std::collections::BTreeSet;
 use q_codec::{Reader, Writer};
 use qtv_crypto::sha3::shake256;
 
-use qlc_bitcoin::{
-    double_sha256, verify_chain, BlockHeader, Checkpoint, MerkleStep, NetworkParams, SpvError,
-};
+use qlc_bitcoin::{verify_chain, BlockHeader, Checkpoint, MerkleStep, NetworkParams, SpvError};
 use qlc_ethereum::mpt::MptError;
 use qlc_ethereum::receipt::ReceiptError;
 
@@ -208,7 +206,7 @@ impl BitcoinReleaseProof {
         if self.branch.len() != self.coinbase_branch.len() {
             return Err(PayoutProofError::Spv(SpvError::MerkleMismatch));
         }
-        let txid = double_sha256(&self.raw_tx);
+        let txid = bitcoin_txid(&self.raw_tx).ok_or(PayoutProofError::MalformedTransaction)?;
         let confirmed = chain
             .verify_deposit(self.release_height, txid, &self.branch, depth)
             .map_err(PayoutProofError::Spv)?;
@@ -228,71 +226,23 @@ struct BitcoinOutput {
     script: Vec<u8>,
 }
 
-fn read_u16_le(bytes: &[u8], pos: &mut usize) -> Option<u16> {
-    let end = pos.checked_add(2)?;
-    let slice = bytes.get(*pos..end)?;
-    *pos = end;
-    Some(u16::from_le_bytes([slice[0], slice[1]]))
-}
-
-fn read_u32_le(bytes: &[u8], pos: &mut usize) -> Option<u32> {
-    let end = pos.checked_add(4)?;
-    let slice = bytes.get(*pos..end)?;
-    *pos = end;
-    Some(u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
-}
-
-fn read_u64_le(bytes: &[u8], pos: &mut usize) -> Option<u64> {
-    let end = pos.checked_add(8)?;
-    let slice = bytes.get(*pos..end)?;
-    *pos = end;
-    let mut buf = [0u8; 8];
-    buf.copy_from_slice(slice);
-    Some(u64::from_le_bytes(buf))
-}
-
-fn read_varint(bytes: &[u8], pos: &mut usize) -> Option<u64> {
-    let first = *bytes.get(*pos)?;
-    *pos += 1;
-    match first {
-        0xff => read_u64_le(bytes, pos),
-        0xfe => read_u32_le(bytes, pos).map(|v| v as u64),
-        0xfd => read_u16_le(bytes, pos).map(|v| v as u64),
-        n => Some(n as u64),
-    }
-}
-
-fn skip(bytes: &[u8], pos: &mut usize, len: usize) -> Option<()> {
-    let end = pos.checked_add(len)?;
-    if end > bytes.len() {
-        return None;
-    }
-    *pos = end;
-    Some(())
-}
-
 fn parse_bitcoin_outputs(raw: &[u8]) -> Option<Vec<BitcoinOutput>> {
-    let mut pos = 0usize;
-    read_u32_le(raw, &mut pos)?;
-    let vin = read_varint(raw, &mut pos)?;
-    for _ in 0..vin {
-        skip(raw, &mut pos, 36)?;
-        let script_len = read_varint(raw, &mut pos)? as usize;
-        skip(raw, &mut pos, script_len)?;
-        skip(raw, &mut pos, 4)?;
-    }
-    let vout = read_varint(raw, &mut pos)?;
-    let mut outputs = Vec::new();
-    for _ in 0..vout {
-        let value = read_u64_le(raw, &mut pos)?;
-        let script_len = read_varint(raw, &mut pos)? as usize;
-        let end = pos.checked_add(script_len)?;
-        let script = raw.get(pos..end)?.to_vec();
-        pos = end;
-        outputs.push(BitcoinOutput { value, script });
-    }
-    read_u32_le(raw, &mut pos)?;
-    Some(outputs)
+    let tx = qlc_bitcoin::tx::Transaction::parse(raw).ok()?;
+    Some(
+        tx.outputs
+            .into_iter()
+            .map(|o| BitcoinOutput {
+                value: o.value,
+                script: o.script,
+            })
+            .collect(),
+    )
+}
+
+fn bitcoin_txid(raw: &[u8]) -> Option<[u8; 32]> {
+    qlc_bitcoin::tx::Transaction::parse(raw)
+        .ok()
+        .map(|tx| tx.txid())
 }
 
 const OP_1: u8 = 0x51;
@@ -528,6 +478,32 @@ impl PayoutWatcher for EvmPayoutWatcher {
 mod tests {
     use super::*;
     use crate::exits::EXIT_STATEMENT_VERSION;
+
+    #[test]
+    fn a_segwit_payout_is_identified_by_its_legacy_txid() {
+        let mut body = vec![1u8];
+        body.extend_from_slice(&[7u8; 36]);
+        body.push(0);
+        body.extend_from_slice(&[0xff; 4]);
+        body.push(1);
+        body.extend_from_slice(&5_000u64.to_le_bytes());
+        body.push(1);
+        body.push(0x51);
+        let mut legacy = 2u32.to_le_bytes().to_vec();
+        legacy.extend_from_slice(&body);
+        legacy.extend_from_slice(&0u32.to_le_bytes());
+        let mut segwit = 2u32.to_le_bytes().to_vec();
+        segwit.extend_from_slice(&[0x00, 0x01]);
+        segwit.extend_from_slice(&body);
+        segwit.extend_from_slice(&[1, 1, 0x01]);
+        segwit.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(bitcoin_txid(&segwit), Some(double_sha256(&legacy)));
+        assert_ne!(bitcoin_txid(&segwit), Some(double_sha256(&segwit)));
+        let outputs = parse_bitcoin_outputs(&segwit).expect("a segwit payout parses");
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].value, 5_000);
+    }
+    use qlc_bitcoin::double_sha256;
     use qlc_bitcoin::{BITCOIN, U256};
 
     const EASY: NetworkParams = NetworkParams {
