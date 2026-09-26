@@ -169,7 +169,7 @@ impl ReplayLedger for PersistentLedger {
     }
 
     fn forget(&mut self, burn_ref: &[u8; 32]) {
-        if self.released.remove(burn_ref) && self.compact().is_err() {
+        if self.released.remove(burn_ref) && !(0..3).any(|_| self.compact().is_ok()) {
             self.released.insert(*burn_ref);
         }
     }

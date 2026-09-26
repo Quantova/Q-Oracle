@@ -291,6 +291,7 @@ impl ExitJournal for NullJournal {
 pub struct PersistentJournal {
     events: Vec<ExitEvent>,
     store: ReplayStore,
+    poisoned: bool,
 }
 
 impl PersistentJournal {
@@ -304,7 +305,11 @@ impl PersistentJournal {
                 (Vec::new(), false)
             }
         };
-        let journal = PersistentJournal { events, store };
+        let journal = PersistentJournal {
+            events,
+            store,
+            poisoned: false,
+        };
         if torn {
             journal.compact()?;
         }
@@ -323,6 +328,9 @@ impl PersistentJournal {
 
 impl ExitJournal for PersistentJournal {
     fn append(&mut self, event: &ExitEvent) -> Result<(), ExitError> {
+        if self.poisoned {
+            return Err(ExitError::PersistFailed);
+        }
         if self.events.len() >= MAX_JOURNAL_ENTRIES as usize {
             return Err(ExitError::LedgerFull);
         }
@@ -331,7 +339,12 @@ impl ExitJournal for PersistentJournal {
                 self.events.push(event.clone());
                 Ok(())
             }
-            Err(_) => Err(ExitError::PersistFailed),
+            Err(_) => {
+                if !(0..3).any(|_| self.compact().is_ok()) {
+                    self.poisoned = true;
+                }
+                Err(ExitError::PersistFailed)
+            }
         }
     }
 
@@ -373,6 +386,38 @@ mod tests {
             issued_at: 900,
             deadline: 87_300,
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_append_rolls_the_file_back_so_a_retry_never_duplicates() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = temp_path("rollback");
+        let mut journal = PersistentJournal::open(ReplayStore::new(&path)).unwrap();
+        let first = ExitEvent::Open {
+            index: 0,
+            exit: an_exit(),
+        };
+        journal.append(&first).unwrap();
+        let stray = ExitEvent::Open {
+            index: 1,
+            exit: an_exit(),
+        };
+        ReplayStore::new(&path).append(&frame_of(&stray)).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        assert_eq!(journal.append(&stray), Err(ExitError::PersistFailed));
+        assert_eq!(
+            PersistentJournal::open(ReplayStore::new(&path))
+                .unwrap()
+                .events()
+                .len(),
+            1,
+            "the half written frame is gone once the append is refused"
+        );
+        journal.append(&stray).unwrap();
+        let reopened = PersistentJournal::open(ReplayStore::new(&path)).unwrap();
+        assert_eq!(reopened.events(), &[first, stray]);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
