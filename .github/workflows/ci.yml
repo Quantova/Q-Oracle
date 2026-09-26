@@ -37,13 +37,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/Quantova-Chain
-          ref: 4de22cb36d3520fd6d473da1f1a9440780a0b558
+          ref: 968a3423be679754991a3457b3da256018e2e8cf
           path: Quantova-Chain
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/QCore.rs
-          ref: 3bb4ffd6589bf738690ae4659eae71062375b243
+          ref: 67d8430dff56ea66766d05c7a712805b3c3d13a0
           path: QCore.rs
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
