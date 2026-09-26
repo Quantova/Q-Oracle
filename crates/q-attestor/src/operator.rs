@@ -1,7 +1,7 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use q_airlock::SignerSig;
 use q_codec::{attest_context, BridgeFact};
@@ -54,7 +54,7 @@ fn divergence_digest(lock: &ObservedLock, ctx: &CorridorContext) -> [u8; 32] {
 pub struct Operator<S: AttestationSigner> {
     signer: S,
     corridors: BTreeMap<u32, CorridorContext>,
-    signed_refs: BTreeSet<(u32, [u8; 32])>,
+    signed_refs: BTreeMap<(u32, [u8; 32]), u64>,
     seen_facts: BTreeMap<(u32, [u8; 32]), [u8; 32]>,
     state: OperatorState,
 }
@@ -64,7 +64,7 @@ impl<S: AttestationSigner> Operator<S> {
         Operator {
             signer,
             corridors: BTreeMap::new(),
-            signed_refs: BTreeSet::new(),
+            signed_refs: BTreeMap::new(),
             seen_facts: BTreeMap::new(),
             state: OperatorState::Running,
         }
@@ -124,7 +124,7 @@ impl<S: AttestationSigner> Operator<S> {
             _ => {}
         }
 
-        if self.signed_refs.contains(&key) {
+        if self.signed_refs.get(&key) == Some(&fact.expiry_height) {
             return Err(OperatorError::AlreadySigned);
         }
 
@@ -132,7 +132,7 @@ impl<S: AttestationSigner> Operator<S> {
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
         let signature = self.signer.sign(&message, &attest_context(&ctx.era));
-        self.signed_refs.insert(key);
+        self.signed_refs.insert(key, fact.expiry_height);
 
         Ok(SignedObservation {
             fact,
@@ -245,6 +245,23 @@ mod tests {
             Err(OperatorError::AlreadySigned)
         );
         assert_eq!(operator.state(), OperatorState::Running);
+    }
+
+    #[test]
+    fn an_operator_across_the_window_boundary_can_join_the_later_expiry() {
+        let mut operator = op();
+        let early = operator
+            .observe_and_sign(&lock(), 907_199)
+            .expect("first observation signs");
+        let late = operator
+            .observe_and_sign(&lock(), 907_200)
+            .expect("a later expiry window can be signed so operators converge");
+        assert!(late.fact.expiry_height > early.fact.expiry_height);
+        assert_eq!(
+            operator.observe_and_sign(&lock(), 907_300),
+            Err(OperatorError::AlreadySigned)
+        );
+        assert!(!operator.is_halted());
     }
 
     #[test]

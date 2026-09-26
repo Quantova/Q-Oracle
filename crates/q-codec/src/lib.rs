@@ -106,13 +106,13 @@ impl Writer {
     }
 
     pub fn bytes_u16(&mut self, v: &[u8]) {
-        let len = v.len() as u16;
+        let len = u16::try_from(v.len()).expect("a u16 length prefixed field fits its prefix");
         self.buf.extend_from_slice(&len.to_le_bytes());
         self.buf.extend_from_slice(v);
     }
 
     pub fn bytes_u32(&mut self, v: &[u8]) {
-        let len = v.len() as u32;
+        let len = u32::try_from(v.len()).expect("a u32 length prefixed field fits its prefix");
         self.buf.extend_from_slice(&len.to_le_bytes());
         self.buf.extend_from_slice(v);
     }
