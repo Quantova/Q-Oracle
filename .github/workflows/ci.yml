@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/Q-Lightclient
-          ref: 779f6d7aef13cebd935009578c3645e67512db74
+          ref: ea68c62c74a9c3b0150a6c3a4a03f1b7827f5bb0
           path: Q-Lightclient
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
