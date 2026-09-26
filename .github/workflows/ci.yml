@@ -68,6 +68,6 @@ jobs:
       - name: deny
         working-directory: Q-Oracle
         run: |
-          cargo install --locked cargo-deny --version 0.16.4
+          cargo install --locked cargo-deny --version 0.19.9
           cargo deny check bans licenses sources advisories
 
