@@ -67,7 +67,7 @@ impl ZeroizingSecretKey {
 pub trait AttestationSigner {
     fn operator_id(&self) -> u32;
     fn public_key(&self) -> PublicKey;
-    fn sign(&self, message: &[u8], context: &[u8]) -> Signature;
+    fn sign(&self, message: &[u8], context: &[u8]) -> Option<Signature>;
 }
 
 pub struct SoftSigner {
@@ -96,17 +96,15 @@ impl AttestationSigner for SoftSigner {
         self.public_key
     }
 
-    fn sign(&self, message: &[u8], context: &[u8]) -> Signature {
-        self.secret_key
-            .sign(message, context)
-            .expect("hedged ml-dsa sign with os entropy over an in-bounds context")
+    fn sign(&self, message: &[u8], context: &[u8]) -> Option<Signature> {
+        self.secret_key.sign(message, context)
     }
 }
 
 pub trait SigningBackend {
     fn operator_id(&self) -> u32;
     fn public_key(&self) -> PublicKey;
-    fn sign(&self, preimage: &[u8], context: &[u8]) -> Signature;
+    fn sign(&self, preimage: &[u8], context: &[u8]) -> Option<Signature>;
 }
 
 pub struct EnclaveSigner<B: SigningBackend> {
@@ -128,7 +126,7 @@ impl<B: SigningBackend> AttestationSigner for EnclaveSigner<B> {
         self.backend.public_key()
     }
 
-    fn sign(&self, message: &[u8], context: &[u8]) -> Signature {
+    fn sign(&self, message: &[u8], context: &[u8]) -> Option<Signature> {
         self.backend.sign(message, context)
     }
 }
@@ -159,10 +157,8 @@ impl SigningBackend for SoftBackend {
         self.public_key
     }
 
-    fn sign(&self, preimage: &[u8], context: &[u8]) -> Signature {
-        self.secret_key
-            .sign(preimage, context)
-            .expect("hedged ml-dsa sign with os entropy over an in-bounds context")
+    fn sign(&self, preimage: &[u8], context: &[u8]) -> Option<Signature> {
+        self.secret_key.sign(preimage, context)
     }
 }
 
@@ -236,10 +232,10 @@ impl<M: Pkcs11Module> SigningBackend for Pkcs11Backend<M> {
         self.public_key
     }
 
-    fn sign(&self, preimage: &[u8], context: &[u8]) -> Signature {
+    fn sign(&self, preimage: &[u8], context: &[u8]) -> Option<Signature> {
         self.module
             .sign(self.session, self.key_handle, preimage, context)
-            .expect("the operator key handle signs through the module")
+            .ok()
     }
 }
 
@@ -412,7 +408,7 @@ mod tests {
             self.inner.public_key()
         }
 
-        fn sign(&self, preimage: &[u8], context: &[u8]) -> Signature {
+        fn sign(&self, preimage: &[u8], context: &[u8]) -> Option<Signature> {
             self.calls.set(self.calls.get() + 1);
             self.inner.sign(preimage, context)
         }
@@ -425,7 +421,7 @@ mod tests {
         let signer = EnclaveSigner::new(backend);
 
         let message = b"observed fact";
-        let sig = signer.sign(message, CTX);
+        let sig = signer.sign(message, CTX).expect("the signer signs");
         assert_eq!(signer.operator_id(), 3);
         assert!(ml_dsa::verify(&pk, message, &sig, CTX));
     }
@@ -439,7 +435,9 @@ mod tests {
         let pk = custodian.public_key();
         let signer = EnclaveSigner::new(custodian);
 
-        let sig = signer.sign(b"observed fact", CTX);
+        let sig = signer
+            .sign(b"observed fact", CTX)
+            .expect("the signer signs");
         assert!(ml_dsa::verify(&pk, b"observed fact", &sig, CTX));
         assert_eq!(signer.backend.calls.get(), 1);
     }
@@ -508,7 +506,7 @@ mod tests {
         let signer = EnclaveSigner::new(backend);
 
         let message = b"observed lock on the source chain";
-        let sig = signer.sign(message, CTX);
+        let sig = signer.sign(message, CTX).expect("the signer signs");
         assert_eq!(signer.operator_id(), 7);
         assert!(ml_dsa::verify(&pk, message, &sig, CTX));
     }
@@ -536,7 +534,9 @@ mod tests {
         let signer = EnclaveSigner::new(backend);
 
         assert_eq!(signer.backend.module.sign_calls.get(), 0);
-        let sig = signer.sign(b"observed lock on the source chain", CTX);
+        let sig = signer
+            .sign(b"observed lock on the source chain", CTX)
+            .expect("the signer signs");
         assert!(ml_dsa::verify(
             &pk,
             b"observed lock on the source chain",
@@ -599,13 +599,13 @@ mod tests {
         let pairs = [
             (
                 soft.public_key(),
-                soft.sign(message, CTX),
-                soft.sign(message, CTX),
+                soft.sign(message, CTX).expect("signs"),
+                soft.sign(message, CTX).expect("signs"),
             ),
             (
                 backend.public_key(),
-                backend.sign(message, CTX),
-                backend.sign(message, CTX),
+                backend.sign(message, CTX).expect("signs"),
+                backend.sign(message, CTX).expect("signs"),
             ),
             (
                 token_pk,

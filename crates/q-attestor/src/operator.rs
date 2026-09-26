@@ -30,6 +30,7 @@ pub enum OperatorError {
     CorridorUnknown(u32),
     BelowFinality { got: u32, need: u32 },
     AlreadySigned,
+    SignerUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +132,10 @@ impl<S: AttestationSigner> Operator<S> {
         self.seen_facts.entry(key).or_insert(digest);
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
-        let signature = self.signer.sign(&message, &attest_context(&ctx.era));
+        let signature = self
+            .signer
+            .sign(&message, &attest_context(&ctx.era))
+            .ok_or(OperatorError::SignerUnavailable)?;
         self.signed_refs.insert(key, fact.expiry_height);
 
         Ok(SignedObservation {

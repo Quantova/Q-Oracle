@@ -65,7 +65,9 @@ pub fn attest<S: AttestationSigner>(
     era: &[u8; 32],
 ) -> AttestationEnvelope {
     let preimage = fact.attest_preimage(dest_chain_id);
-    let signature = signer.sign(&preimage, &attest_context(era));
+    let signature = signer
+        .sign(&preimage, &attest_context(era))
+        .expect("the signer produces a signature");
     AttestationEnvelope {
         fact: fact.clone(),
         signatures: vec![SignerSig {
