@@ -49,7 +49,9 @@ pub fn watch_and_admit<S: AttestationSigner>(
                 let _ = groups
                     .entry(lock.source_ref)
                     .or_insert_with(|| Aggregator::new(threshold))
-                    .add(&signed.fact, signed.sig);
+                    .add_verified(&signed.fact, signed.sig, |fact, sig| {
+                        gateway.attests(fact, sig)
+                    });
             }
         }
     }

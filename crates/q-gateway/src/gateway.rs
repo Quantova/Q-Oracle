@@ -941,6 +941,16 @@ impl Gateway {
         Ok(())
     }
 
+    pub fn attests(&self, fact: &BridgeFact, sig: &SignerSig) -> bool {
+        !verify_quorum(
+            &fact.attest_preimage(self.dest_chain_id),
+            &attest_context(&self.era),
+            std::slice::from_ref(sig),
+            &self.operators,
+        )
+        .is_empty()
+    }
+
     pub fn process_deposit(
         &mut self,
         env: &AttestationEnvelope,
