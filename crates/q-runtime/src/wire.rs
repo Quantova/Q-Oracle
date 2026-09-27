@@ -1667,6 +1667,7 @@ fn trustless_err_json(e: &TrustlessError) -> Json {
         ),
         TrustlessError::RecipientMismatch => tagged("trustless", "recipient_mismatch", vec![]),
         TrustlessError::AssetMismatch => tagged("trustless", "asset_mismatch", vec![]),
+        TrustlessError::MalformedFact => tagged("trustless", "malformed_fact", vec![]),
         TrustlessError::InsufficientConfirmations { have, need } => tagged(
             "trustless",
             "insufficient_confirmations",
@@ -1705,6 +1706,7 @@ fn trustless_err_from(j: &Json) -> Result<TrustlessError, WireError> {
         }),
         "recipient_mismatch" => Ok(TrustlessError::RecipientMismatch),
         "asset_mismatch" => Ok(TrustlessError::AssetMismatch),
+        "malformed_fact" => Ok(TrustlessError::MalformedFact),
         "insufficient_confirmations" => Ok(TrustlessError::InsufficientConfirmations {
             have: as_u32(field(j, "have")?, "have")?,
             need: as_u32(field(j, "need")?, "need")?,
