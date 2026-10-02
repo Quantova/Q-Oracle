@@ -204,7 +204,7 @@ impl ExitService {
 
     pub fn poll_burns(&mut self, now: u64) -> Result<Vec<ExitId>, FeedError> {
         self.feed
-            .drive(&self.source, &mut self.desk, self.vault_id, now)
+            .drive(&self.source, &mut self.desk, now)
     }
 
     pub fn poll_burns_from(
@@ -212,7 +212,7 @@ impl ExitService {
         source: &dyn QuantovaBurnSource,
         now: u64,
     ) -> Result<Vec<ExitId>, FeedError> {
-        self.feed.drive(source, &mut self.desk, self.vault_id, now)
+        self.feed.drive(source, &mut self.desk, now)
     }
 
     pub fn dead_letters(&self) -> Vec<DeadLetter> {
@@ -221,7 +221,7 @@ impl ExitService {
 
     pub fn retry_dead_letters(&mut self, now: u64) -> Result<Vec<ExitId>, FeedError> {
         self.feed
-            .retry_dead_letters(&self.source, &mut self.desk, self.vault_id, now)
+            .retry_dead_letters(&self.source, &mut self.desk, now)
     }
 
     pub fn settle(
