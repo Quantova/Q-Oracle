@@ -184,12 +184,15 @@ fn canonical_store_ops(proof: &ExistenceProof) -> Result<(), ProofError> {
     Ok(())
 }
 
-const DEPOSIT_REF_DOMAIN: &[u8] = b"QUANTOVA/COSMOS/DEPOSIT-REF/v2";
+const DEPOSIT_REF_DOMAIN: &[u8] = b"QUANTOVA/COSMOS/DEPOSIT-REF/v3";
 
-pub fn deposit_source_ref(store_name: &[u8], proof: &ExistenceProof) -> [u8; 32] {
-    let mut source_pre =
-        Vec::with_capacity(DEPOSIT_REF_DOMAIN.len() + 16 + store_name.len() + proof.key.len());
+pub fn deposit_source_ref(chain_id: &[u8], store_name: &[u8], proof: &ExistenceProof) -> [u8; 32] {
+    let mut source_pre = Vec::with_capacity(
+        DEPOSIT_REF_DOMAIN.len() + 24 + chain_id.len() + store_name.len() + proof.key.len(),
+    );
     source_pre.extend_from_slice(DEPOSIT_REF_DOMAIN);
+    source_pre.extend_from_slice(&(chain_id.len() as u64).to_le_bytes());
+    source_pre.extend_from_slice(chain_id);
     source_pre.extend_from_slice(&(store_name.len() as u64).to_le_bytes());
     source_pre.extend_from_slice(store_name);
     source_pre.extend_from_slice(&(proof.key.len() as u64).to_le_bytes());
@@ -199,6 +202,7 @@ pub fn deposit_source_ref(store_name: &[u8], proof: &ExistenceProof) -> [u8; 32]
 
 pub fn extract_deposit(
     app_hash: &[u8; 32],
+    chain_id: &[u8],
     store_name: &[u8],
     store_prefix: &[u8],
     proof: &ExistenceProof,
@@ -231,7 +235,7 @@ pub fn extract_deposit(
     asset_id.copy_from_slice(&proof.value[32..48]);
     let mut amount_bytes = [0u8; 16];
     amount_bytes.copy_from_slice(&proof.value[48..64]);
-    let source_ref = deposit_source_ref(store_name, proof);
+    let source_ref = deposit_source_ref(chain_id, store_name, proof);
 
     Ok(Deposit {
         source_ref,
@@ -247,6 +251,7 @@ mod tests {
 
     const STORE_PREFIX: &[u8] = b"bridge/deposits/";
     const STORE_NAME: &[u8] = b"bridge";
+    const CHAIN_ID: &[u8] = b"cosmoshub-4";
 
     fn sample_proof() -> (ExistenceProof, Deposit) {
         let recipient = [0x51u8; 32];
@@ -274,7 +279,7 @@ mod tests {
             store: None,
         };
         let deposit = Deposit {
-            source_ref: deposit_source_ref(STORE_NAME, &proof),
+            source_ref: deposit_source_ref(CHAIN_ID, STORE_NAME, &proof),
             asset_id,
             amount,
             recipient,
@@ -286,18 +291,18 @@ mod tests {
     fn the_source_ref_is_the_store_key_so_a_rewritten_record_cannot_mint_again() {
         let (iavl, _) = sample_proof();
         let (app_hash, proof) = wrap_store_layer(iavl.clone(), STORE_NAME);
-        let first = extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof).unwrap();
+        let first = extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof).unwrap();
 
         let mut rewritten = iavl.clone();
         rewritten.leaf.prefix = vec![LEAF_MARKER, 0x02, 0x0a];
         let (later_hash, later) = wrap_store_layer(rewritten, STORE_NAME);
-        let again = extract_deposit(&later_hash, STORE_NAME, STORE_PREFIX, &later).unwrap();
+        let again = extract_deposit(&later_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &later).unwrap();
         assert_eq!(first.source_ref, again.source_ref);
 
         let mut other = iavl;
         other.key.push(b'9');
         assert_ne!(
-            deposit_source_ref(STORE_NAME, &other),
+            deposit_source_ref(CHAIN_ID, STORE_NAME, &other),
             first.source_ref,
             "another deposit key is another deposit"
         );
@@ -309,7 +314,7 @@ mod tests {
         let (mut b, _) = sample_proof();
         a.key = b"cd".to_vec();
         b.key = b"bcd".to_vec();
-        assert_ne!(deposit_source_ref(b"ab", &a), deposit_source_ref(b"a", &b));
+        assert_ne!(deposit_source_ref(CHAIN_ID, b"ab", &a), deposit_source_ref(CHAIN_ID, b"a", &b));
     }
 
     #[test]
@@ -373,7 +378,7 @@ mod tests {
             store: None,
         }));
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &iavl),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &iavl),
             Ok(expected)
         );
 
@@ -382,7 +387,7 @@ mod tests {
             store.leaf.prefix = vec![LEAF_MARKER, 0x02, 0x02];
         }
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &stretched),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &stretched),
             Err(ProofError::MalformedProofOp)
         );
         let mut padded = iavl;
@@ -390,7 +395,7 @@ mod tests {
             store.path[0].suffix = vec![0u8; 1];
         }
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &padded),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &padded),
             Err(ProofError::MalformedProofOp)
         );
     }
@@ -400,7 +405,7 @@ mod tests {
         let (iavl, expected) = sample_proof();
         let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Ok(expected)
         );
     }
@@ -409,7 +414,7 @@ mod tests {
     fn the_amount_is_carried_in_base_units() {
         let (iavl, _) = sample_proof();
         let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
-        let deposit = extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof).unwrap();
+        let deposit = extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof).unwrap();
         assert_eq!(deposit.amount, 4_200_000_000u128);
     }
 
@@ -418,7 +423,7 @@ mod tests {
         let (iavl, _) = sample_proof();
         let (app_hash, proof) = wrap_store_layer(iavl, b"staking");
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::ForeignStore)
         );
     }
@@ -428,7 +433,7 @@ mod tests {
         let (proof, _) = sample_proof();
         let app_hash = proof.calculate_root();
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::MissingStoreProof)
         );
     }
@@ -439,7 +444,7 @@ mod tests {
         let (app_hash, mut proof) = wrap_store_layer(iavl, STORE_NAME);
         proof.value[48] ^= 0x01;
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::StoreRootMismatch)
         );
     }
@@ -450,7 +455,7 @@ mod tests {
         let (app_hash, mut proof) = wrap_store_layer(iavl, STORE_NAME);
         proof.key[20] ^= 0x01;
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::StoreRootMismatch)
         );
     }
@@ -461,7 +466,7 @@ mod tests {
         let (app_hash, mut proof) = wrap_store_layer(iavl, STORE_NAME);
         proof.path[1].suffix[0] ^= 0x01;
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::StoreRootMismatch)
         );
     }
@@ -472,7 +477,7 @@ mod tests {
         let (_app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         let foreign = [0x99u8; 32];
         assert_eq!(
-            extract_deposit(&foreign, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&foreign, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::RootMismatch)
         );
     }
@@ -502,7 +507,7 @@ mod tests {
         };
         let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::ForeignStoreKey)
         );
     }
@@ -512,7 +517,7 @@ mod tests {
         let (iavl, _) = sample_proof();
         let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, b"", &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, b"", &proof),
             Err(ProofError::ForeignStoreKey)
         );
     }
@@ -523,7 +528,7 @@ mod tests {
         iavl.path[0].prefix = vec![0x00, 0xaa];
         let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::MalformedProofOp)
         );
     }
@@ -534,7 +539,7 @@ mod tests {
         iavl.leaf.prefix = vec![0x01, 0x02, 0x00];
         let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
         assert_eq!(
-            extract_deposit(&app_hash, STORE_NAME, STORE_PREFIX, &proof),
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof),
             Err(ProofError::MalformedProofOp)
         );
     }

@@ -137,6 +137,7 @@ fn verify_deposit_core(
 
     let deposit = extract_deposit(
         &app_hash,
+        cfg.chain_id.as_bytes(),
         cfg.bridge_store_name,
         cfg.bridge_store_prefix,
         proof,
