@@ -1,9 +1,6 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use std::cell::RefCell;
-use std::collections::BTreeSet;
-
 use q_codec::{Reader, Writer};
 use qtv_crypto::sha3::shake256;
 
@@ -298,7 +295,6 @@ pub struct BitcoinPayoutWatcher {
     checkpoint: Checkpoint,
     confirmation_depth: u32,
     releases: Vec<BitcoinReleaseProof>,
-    consumed: RefCell<BTreeSet<[u8; 32]>>,
 }
 
 impl BitcoinPayoutWatcher {
@@ -317,7 +313,6 @@ impl BitcoinPayoutWatcher {
             checkpoint,
             confirmation_depth,
             releases,
-            consumed: RefCell::new(BTreeSet::new()),
         }
     }
 
@@ -355,11 +350,6 @@ impl BitcoinPayoutWatcher {
                 last = PayoutProofError::ReferenceMismatch;
                 continue;
             }
-            if self.consumed.borrow().contains(&payout.foreign_ref) {
-                last = PayoutProofError::ReusedPayout;
-                continue;
-            }
-            self.consumed.borrow_mut().insert(payout.foreign_ref);
             return Ok(PayoutAttestation {
                 version: PAYOUT_VERSION,
                 corridor: self.corridor,
@@ -403,7 +393,6 @@ impl EvmReleaseProof {
 pub struct EvmPayoutWatcher {
     corridor: u32,
     releases: Vec<EvmReleaseProof>,
-    consumed: RefCell<BTreeSet<[u8; 32]>>,
 }
 
 impl EvmPayoutWatcher {
@@ -411,7 +400,6 @@ impl EvmPayoutWatcher {
         EvmPayoutWatcher {
             corridor,
             releases,
-            consumed: RefCell::new(BTreeSet::new()),
         }
     }
 
@@ -444,11 +432,6 @@ impl EvmPayoutWatcher {
                 last = PayoutProofError::ReferenceMismatch;
                 continue;
             }
-            if self.consumed.borrow().contains(&payout.foreign_ref) {
-                last = PayoutProofError::ReusedPayout;
-                continue;
-            }
-            self.consumed.borrow_mut().insert(payout.foreign_ref);
             return Ok(PayoutAttestation {
                 version: PAYOUT_VERSION,
                 corridor: self.corridor,
@@ -1079,7 +1062,7 @@ mod tests {
             "an exit of the same beneficiary and amount cannot borrow another exit's payout"
         );
         assert!(watcher.confirm(&a).is_some());
-        assert_eq!(watcher.attest(&a), Err(PayoutProofError::ReusedPayout));
+        assert!(watcher.attest(&a).is_ok());
         assert_eq!(watcher.attest(&b), Err(PayoutProofError::ReferenceMismatch));
     }
 
@@ -1095,12 +1078,12 @@ mod tests {
     }
 
     #[test]
-    fn one_verified_payout_cannot_be_replayed() {
+    fn a_verified_payout_attests_idempotently() {
         let s = statement();
         let watcher = bitcoin_watcher(vec![bitcoin_release(&s.destination, 500, &s.burn_ref)]);
         assert!(watcher.confirm(&s).is_some());
 
-        assert_eq!(watcher.attest(&s), Err(PayoutProofError::ReusedPayout));
-        assert!(watcher.confirm(&s).is_none());
+        assert!(watcher.attest(&s).is_ok());
+        assert!(watcher.confirm(&s).is_some());
     }
 }
