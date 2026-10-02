@@ -249,7 +249,7 @@ fn the_feed_opens_a_vault_exit_from_a_watched_burn() {
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
     let opened = feed
-        .drive(&node, &mut desk, VAULT, 10)
+        .drive(&node, &mut desk, 10)
         .expect("the enabled feed drives");
     assert_eq!(opened.len(), 1, "the watched burn opens one exit");
     assert_eq!(feed.scanned_through(), HEIGHT);
@@ -273,7 +273,7 @@ fn a_burn_that_hits_a_thin_vault_is_retried_not_dropped() {
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
     let opened = feed
-        .drive(&node, &mut desk, VAULT, 10)
+        .drive(&node, &mut desk, 10)
         .expect("the enabled feed drives");
     assert_eq!(opened.len(), 0, "a thin vault opens nothing yet");
     assert_eq!(
@@ -288,7 +288,7 @@ fn a_burn_that_hits_a_thin_vault_is_retried_not_dropped() {
 
     desk.register_vault(VAULT, 100);
     let opened = feed
-        .drive(&node, &mut desk, VAULT, 11)
+        .drive(&node, &mut desk, 11)
         .expect("the feed drives again");
     assert_eq!(
         opened.len(),
@@ -315,7 +315,7 @@ fn a_burn_for_another_destination_is_dead_lettered_not_re_queued_forever() {
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
     let opened = feed
-        .drive(&node, &mut desk, VAULT, 10)
+        .drive(&node, &mut desk, 10)
         .expect("the feed drives");
     assert_eq!(opened.len(), 0);
     assert_eq!(
@@ -350,7 +350,7 @@ fn an_unfinalized_burn_is_retried_rather_than_dead_lettered() {
     let mut desk = ExitDesk::new(config(), anchor(&members, &beacon)).unwrap();
     desk.register_vault(VAULT, 2_000);
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-    let opened = feed.drive(&node, &mut desk, VAULT, 10).unwrap();
+    let opened = feed.drive(&node, &mut desk, 10).unwrap();
     assert!(opened.is_empty());
     assert_eq!(feed.scanned_through(), HEIGHT);
     assert_eq!(
@@ -377,12 +377,12 @@ fn a_dead_lettered_burn_survives_a_restart_and_opens_on_retry_once_it_is_served(
                 .unwrap();
         desk.register_vault(VAULT, 2_000);
         let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-        assert!(feed.drive(&node, &mut desk, VAULT, 10).unwrap().is_empty());
+        assert!(feed.drive(&node, &mut desk, 10).unwrap().is_empty());
         assert_eq!(feed.scanned_through(), HEIGHT);
         assert_eq!(feed.pending_len(), 0);
         let mut rescan = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
         assert!(rescan
-            .drive(&node, &mut desk, VAULT, 11)
+            .drive(&node, &mut desk, 11)
             .unwrap()
             .is_empty());
         let letters = desk.dead_letters();
@@ -403,11 +403,11 @@ fn a_dead_lettered_burn_survives_a_restart_and_opens_on_retry_once_it_is_served(
 
     let mut feed = BurnFeed::new(HEIGHT, ExitConfig { enabled: true });
     assert!(
-        feed.drive(&node, &mut desk, VAULT, 20).unwrap().is_empty(),
+        feed.drive(&node, &mut desk, 20).unwrap().is_empty(),
         "the cursor is already past the burn"
     );
     let opened = feed
-        .retry_dead_letters(&node, &mut desk, VAULT, 21)
+        .retry_dead_letters(&node, &mut desk, 21)
         .expect("the retry drives");
     assert_eq!(opened.len(), 1, "the retried burn opens its exit");
     assert!(desk.is_consumed(&BURN_REF));
@@ -417,7 +417,7 @@ fn a_dead_lettered_burn_survives_a_restart_and_opens_on_retry_once_it_is_served(
         "a dead letter that opened is no longer listed"
     );
     assert!(feed
-        .retry_dead_letters(&node, &mut desk, VAULT, 22)
+        .retry_dead_letters(&node, &mut desk, 22)
         .unwrap()
         .is_empty());
 
@@ -436,7 +436,7 @@ fn a_gated_off_feed_opens_nothing() {
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig::default());
     assert!(!feed.is_enabled());
     assert_eq!(
-        feed.drive(&node, &mut desk, VAULT, 10),
+        feed.drive(&node, &mut desk, 10),
         Err(FeedError::Disabled)
     );
     assert_eq!(desk.locked_collateral(VAULT), 0);
@@ -457,7 +457,7 @@ fn a_pending_exit_survives_a_restart_through_the_journal() {
             ExitDesk::with_journal(config(), anchor(&members, &beacon), Box::new(journal)).unwrap();
         desk.register_vault(VAULT, 2_000);
         let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-        let opened = feed.drive(&node, &mut desk, VAULT, 10).unwrap();
+        let opened = feed.drive(&node, &mut desk, 10).unwrap();
         assert_eq!(opened.len(), 1, "the first run opens the exit");
         deadline = desk.exit(opened[0]).unwrap().deadline;
         assert_eq!(desk.locked_collateral(VAULT), REQUIRED);
@@ -495,7 +495,7 @@ fn a_pending_exit_survives_a_restart_through_the_journal() {
 
     let node = node(&members, &beacon);
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-    let opened = feed.drive(&node, &mut desk, VAULT, 20).unwrap();
+    let opened = feed.drive(&node, &mut desk, 20).unwrap();
     assert!(
         opened.is_empty(),
         "the rebuilt exit is not opened a second time"
@@ -567,7 +567,7 @@ fn a_slashed_exit_is_not_reopened_after_a_restart() {
             ExitDesk::with_journal(config(), anchor(&members, &beacon), Box::new(journal)).unwrap();
         desk.register_vault(VAULT, 2_000);
         let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-        let id = feed.drive(&node, &mut desk, VAULT, 10).unwrap()[0];
+        let id = feed.drive(&node, &mut desk, 10).unwrap()[0];
         let deadline = desk.exit(id).unwrap().deadline;
         desk.slash(id, deadline + GRACE + 1).unwrap();
         assert_eq!(desk.exit(id).unwrap().state, ExitState::Slashed);
@@ -593,7 +593,7 @@ fn a_slashed_exit_is_not_reopened_after_a_restart() {
 
     let node = node(&members, &beacon);
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-    let opened = feed.drive(&node, &mut desk, VAULT, 20).unwrap();
+    let opened = feed.drive(&node, &mut desk, 20).unwrap();
     assert!(
         opened.is_empty(),
         "the burn of a slashed exit opens no new exit"

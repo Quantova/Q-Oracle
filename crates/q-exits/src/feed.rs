@@ -77,7 +77,6 @@ impl BurnFeed {
         &mut self,
         source: &dyn QuantovaBurnSource,
         desk: &mut ExitDesk,
-        vault_id: u32,
         now: u64,
     ) -> Result<Vec<ExitId>, FeedError> {
         if !self.enabled {
@@ -94,7 +93,7 @@ impl BurnFeed {
             .into_iter()
             .chain(proofs.into_iter())
         {
-            match desk.open_exit(&proof, vault_id, now) {
+            match desk.open_exit(&proof, now) {
                 Ok(id) => opened.push(id),
                 Err(ExitError::ReplayedExit) => {}
                 Err(e) if retryable(&e) => still_pending.push(proof),
@@ -113,7 +112,6 @@ impl BurnFeed {
         &mut self,
         source: &dyn QuantovaBurnSource,
         desk: &mut ExitDesk,
-        vault_id: u32,
         now: u64,
     ) -> Result<Vec<ExitId>, FeedError> {
         if !self.enabled {
@@ -128,7 +126,7 @@ impl BurnFeed {
                 continue;
             };
             for proof in burn_proofs_for_leaf(&block, &letter.leaf_digest) {
-                match desk.open_exit(&proof, vault_id, now) {
+                match desk.open_exit(&proof, now) {
                     Ok(id) => opened.push(id),
                     Err(e) if retryable(&e) && self.pending.len() < MAX_PENDING_BURNS => {
                         self.pending.push(proof)

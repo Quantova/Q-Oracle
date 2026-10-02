@@ -44,6 +44,25 @@ impl VaultBook {
         self.vaults.get(&vault_id).map(|v| v.locked).unwrap_or(0)
     }
 
+    pub fn lock_any(&mut self, amount: u128) -> Result<u32, ExitError> {
+        let chosen = self
+            .vaults
+            .values()
+            .filter(|v| v.free >= amount)
+            .min_by(|a, b| a.free.cmp(&b.free).then(a.vault_id.cmp(&b.vault_id)))
+            .map(|v| v.vault_id);
+        match chosen {
+            Some(vault_id) => {
+                self.lock(vault_id, amount)?;
+                Ok(vault_id)
+            }
+            None => Err(ExitError::ThinVault {
+                have: self.vaults.values().map(|v| v.free).max().unwrap_or(0),
+                need: amount,
+            }),
+        }
+    }
+
     pub fn lock(&mut self, vault_id: u32, amount: u128) -> Result<(), ExitError> {
         let vault = self
             .vaults

@@ -392,12 +392,7 @@ impl ExitDesk {
             .collect()
     }
 
-    pub fn open_exit(
-        &mut self,
-        proof: &ProofOfBurn,
-        vault_id: u32,
-        now: u64,
-    ) -> Result<ExitId, ExitError> {
+    pub fn open_exit(&mut self, proof: &ProofOfBurn, now: u64) -> Result<ExitId, ExitError> {
         let burn = proof.verify(&self.anchor)?;
         if burn.dest_chain != self.anchor.chain_id() {
             return Err(ExitError::WrongDestination {
@@ -429,7 +424,7 @@ impl ExitDesk {
             return Err(ExitError::ReplayedExit);
         }
         let required = self.required_collateral(statement.amount)?;
-        self.vaults.lock(vault_id, required)?;
+        let vault_id = self.vaults.lock_any(required)?;
         let issued_at = now;
         let deadline = now.saturating_add(self.cfg.window);
         let record = ExitEvent::Open {

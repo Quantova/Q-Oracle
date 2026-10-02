@@ -238,7 +238,7 @@ fn a_burn_of_an_unserved_asset_cannot_lock_the_corridor_vault() {
 
     let junk = [0xee; 16];
     let proof = proof_of_asset(&members, &beacon, [0x71; 32], junk, 600_000);
-    let opened = desk.open_exit(&proof, 1, 0);
+    let opened = desk.open_exit(&proof, 0);
     assert!(
         matches!(opened, Err(ExitError::UnservedAsset { .. })),
         "an unserved asset opened an exit against this vault, got {opened:?}"
@@ -251,7 +251,7 @@ fn a_burn_of_an_unserved_asset_cannot_lock_the_corridor_vault() {
 
     let honest = proof_of_asset(&members, &beacon, [0x72; 32], ASSET, 200_000);
     assert!(
-        desk.open_exit(&honest, 1, 0).is_ok(),
+        desk.open_exit(&honest, 0).is_ok(),
         "the corridor's own asset must still open"
     );
 }
@@ -407,7 +407,7 @@ fn opening_an_exit_locks_the_required_collateral() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
     assert_eq!(desk.locked_collateral(1), REQUIRED);
     assert_eq!(desk.free_collateral(1), 2_000 - REQUIRED);
@@ -425,7 +425,7 @@ fn a_thin_vault_is_refused_and_does_not_consume_the_burn() {
     let mut desk = desk();
     desk.register_vault(1, REQUIRED - 1);
     assert_eq!(
-        desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10),
+        desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 10),
         Err(ExitError::ThinVault {
             have: REQUIRED - 1,
             need: REQUIRED
@@ -435,13 +435,16 @@ fn a_thin_vault_is_refused_and_does_not_consume_the_burn() {
 }
 
 #[test]
-fn an_unknown_vault_is_refused() {
+fn an_exit_with_no_collateralized_vault_is_refused() {
     let members = attesters();
     let beacon = Beacon::genesis();
     let mut desk = desk();
     assert_eq!(
-        desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 7, 10),
-        Err(ExitError::UnknownVault(7))
+        desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 10),
+        Err(ExitError::ThinVault {
+            have: 0,
+            need: REQUIRED
+        })
     );
     assert!(!desk.is_consumed(&BURN_REF));
 }
@@ -453,7 +456,7 @@ fn settling_within_the_window_against_a_bitcoin_payout_releases_the_collateral()
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
 
     let watcher = bitcoin_watcher(release_around(release_tx(
@@ -475,7 +478,7 @@ fn a_payout_confirmed_after_the_window_still_settles_an_unslashed_exit() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
     let deadline = desk.exit(id).unwrap().deadline;
     assert!(
@@ -513,7 +516,7 @@ fn settle_refuses_when_the_watcher_cannot_prove_a_covering_payout() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
 
     let watcher = bitcoin_watcher(release_around(release_tx(
@@ -538,7 +541,7 @@ fn a_burn_for_another_destination_chain_cannot_open_an_exit() {
     desk.register_vault(1, 2_000);
     let leaf = burn_leaf_on(CHAIN_ID + 1, AMOUNT, ASSET, BENEFICIARY, BURN_REF);
     assert_eq!(
-        desk.open_exit(&proof_with_leaf(CHAIN_ID, &members, &beacon, leaf), 1, 10),
+        desk.open_exit(&proof_with_leaf(CHAIN_ID, &members, &beacon, leaf), 10),
         Err(ExitError::WrongDestination {
             got: CHAIN_ID + 1,
             expected: CHAIN_ID
@@ -566,7 +569,6 @@ fn a_mainnet_burn_is_matched_on_the_64_bit_chain_id_and_acked_under_the_bridge_d
     assert_eq!(
         desk.open_exit(
             &proof_with_leaf(MAINNET_CHAIN_ID, &members, &beacon, under_bridge_id),
-            1,
             10
         ),
         Err(ExitError::WrongDestination {
@@ -580,7 +582,6 @@ fn a_mainnet_burn_is_matched_on_the_64_bit_chain_id_and_acked_under_the_bridge_d
     let id = desk
         .open_exit(
             &proof_with_leaf(MAINNET_CHAIN_ID, &members, &beacon, mainnet),
-            1,
             10,
         )
         .expect("a burn on the mainnet chain id opens an exit");
@@ -605,7 +606,7 @@ fn the_window_elapsing_then_slash_leaves_the_holder_to_the_chain_re_mint() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
 
     let outcome = desk.slash(id, 200).unwrap();
@@ -631,7 +632,7 @@ fn the_exit_fact_carries_the_holder_for_credit_and_the_destination_for_payout() 
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
     let statement = desk.exit(id).unwrap().statement.clone();
 
@@ -661,7 +662,7 @@ fn slashing_before_the_deadline_is_refused() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
     assert_eq!(
         desk.slash(id, 100),
@@ -688,8 +689,8 @@ fn a_replayed_burn_opens_no_second_exit() {
     let mut desk = desk();
     desk.register_vault(1, 5_000);
     let proof = proof_of(&members, &beacon, BURN_REF);
-    desk.open_exit(&proof, 1, 10).unwrap();
-    assert_eq!(desk.open_exit(&proof, 1, 10), Err(ExitError::ReplayedExit));
+    desk.open_exit(&proof, 10).unwrap();
+    assert_eq!(desk.open_exit(&proof, 10), Err(ExitError::ReplayedExit));
     assert_eq!(desk.locked_collateral(1), REQUIRED);
 }
 
@@ -702,7 +703,7 @@ fn a_forged_header_cannot_open_an_exit() {
     let mut proof = proof_of(&members, &beacon, BURN_REF);
     proof.header_bytes[45] ^= 0xff;
     assert_eq!(
-        desk.open_exit(&proof, 1, 10),
+        desk.open_exit(&proof, 10),
         Err(ExitError::HeaderMismatch)
     );
     assert!(!desk.is_consumed(&BURN_REF));
@@ -718,7 +719,7 @@ fn an_exit_bound_to_one_burn_cannot_settle_against_a_payout_for_another() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id_a = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
 
     let payout_for_b = bitcoin_watcher(release_around(release_tx(
@@ -757,10 +758,10 @@ fn collateral_is_conserved_across_a_settle_and_a_slash() {
     desk.register_vault(1, INITIAL);
 
     let id_a = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
     let id_b = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF_B), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF_B), 10)
         .unwrap();
     assert_eq!(desk.locked_collateral(1), 2 * REQUIRED);
     assert_eq!(
@@ -840,7 +841,7 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
 
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    assert_eq!(desk.open_exit(&proof, 1, 10), Err(ExitError::NotFinalized));
+    assert_eq!(desk.open_exit(&proof, 10), Err(ExitError::NotFinalized));
     assert!(!desk.is_consumed(&BURN_REF));
     assert_eq!(desk.locked_collateral(1), 0);
 }
@@ -852,7 +853,7 @@ fn a_pending_exit_stays_settleable_and_turns_slashable_only_after_the_grace() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
 
     assert_eq!(desk.settleable(), vec![id]);
@@ -876,7 +877,7 @@ fn the_settle_sweep_order_takes_an_exit_off_the_slash_list() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     let id = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
     let watcher = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
@@ -897,7 +898,7 @@ fn a_settled_exit_is_never_offered_for_settling_again() {
     let beacon = Beacon::genesis();
     let mut desk = desk();
     desk.register_vault(1, 2_000);
-    desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+    desk.open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
     let watcher = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
@@ -942,10 +943,10 @@ fn a_payout_with_vault_change_settles_its_exit_and_never_a_second_one() {
     let mut desk = desk();
     desk.register_vault(1, 5_000);
     let id_a = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF), 10)
         .unwrap();
     let id_b = desk
-        .open_exit(&proof_of(&members, &beacon, BURN_REF_B), 1, 10)
+        .open_exit(&proof_of(&members, &beacon, BURN_REF_B), 10)
         .unwrap();
     let watcher = bitcoin_watcher(release_around(release_tx_with_change(
         &BENEFICIARY,
