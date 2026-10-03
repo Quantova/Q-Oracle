@@ -1286,6 +1286,7 @@ fn eth_err_json(e: &EthError) -> Json {
         EthError::BadAncestry => tagged("eth", "bad_ancestry", vec![]),
         EthError::BadExecutionProof => tagged("eth", "bad_execution_proof", vec![]),
         EthError::BadSyncCommitteeProof => tagged("eth", "bad_sync_committee_proof", vec![]),
+        EthError::UntrustedCheckpoint => tagged("eth", "untrusted_checkpoint", vec![]),
         EthError::BadSignature => tagged("eth", "bad_signature", vec![]),
         EthError::MissingReceipt => tagged("eth", "missing_receipt", vec![]),
         EthError::UnconfiguredDepositContract => {
@@ -1329,6 +1330,7 @@ fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
         "bad_ancestry" => Ok(EthError::BadAncestry),
         "bad_execution_proof" => Ok(EthError::BadExecutionProof),
         "bad_sync_committee_proof" => Ok(EthError::BadSyncCommitteeProof),
+        "untrusted_checkpoint" => Ok(EthError::UntrustedCheckpoint),
         "bad_signature" => Ok(EthError::BadSignature),
         "missing_receipt" => Ok(EthError::MissingReceipt),
         "unconfigured_deposit_contract" => Ok(EthError::UnconfiguredDepositContract),

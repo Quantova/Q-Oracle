@@ -17,6 +17,18 @@ const CLOCK_SLICE: Duration = Duration::from_millis(100);
 const MAX_BLOCKS_PER_SEC: u64 = 4;
 const CLOCK_SLACK_SECS: u64 = 60;
 const MIN_EPOCH_GAP: Duration = Duration::from_secs(6 * 60 * 60);
+const GENESIS_UNIX_SECS: u64 = 1_735_689_600;
+
+fn wall_clock_head_cap() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    now.saturating_sub(GENESIS_UNIX_SECS)
+        .saturating_add(CLOCK_SLACK_SECS)
+        .saturating_mul(MAX_BLOCKS_PER_SEC)
+}
 
 pub trait ChainHead {
     fn head_and_epoch(&self) -> Result<(u64, Option<u64>), String>;
@@ -81,7 +93,9 @@ impl<H: ChainHead> ChainClock<H> {
                 let restored = guard.gateway.current_height();
                 self.fresh = restored == 0;
                 if self.fresh {
-                    guard.gateway.advance_to(reported);
+                    guard
+                        .gateway
+                        .advance_to(reported.min(wall_clock_head_cap()));
                 }
                 let origin = (guard.gateway.current_height(), now);
                 self.origin = Some(origin);
@@ -91,7 +105,8 @@ impl<H: ChainHead> ChainClock<H> {
         let head = bounded_head(
             Some((origin_height, now.duration_since(origin_at))),
             reported,
-        );
+        )
+        .min(wall_clock_head_cap());
         guard.gateway.advance_to(head);
         if let Some(epoch) = epoch {
             let current = guard.gateway.current_epoch();
@@ -106,6 +121,7 @@ impl<H: ChainHead> ChainClock<H> {
             }
         }
         let accepted = guard.gateway.current_height();
+        self.origin = Some((accepted, now));
         drop(guard);
         Ok(accepted)
     }

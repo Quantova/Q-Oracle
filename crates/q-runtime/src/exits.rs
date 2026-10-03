@@ -487,7 +487,7 @@ mod tests {
             format!(
                 "1,100,{},64,{}",
                 "11".repeat(32),
-                "00".repeat(ATTEST_PK_BYTES)
+                "33".repeat(ATTEST_PK_BYTES)
             ),
         );
         map.insert(VAULTS_ENV.into(), "1:2000000,2:3000000".into());
