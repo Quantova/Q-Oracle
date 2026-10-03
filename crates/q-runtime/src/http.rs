@@ -665,7 +665,10 @@ fn route(
                     return Err(RouteFail::Panicked);
                 }
             };
-            persist_if_advanced(&guard, store, rev_before)?;
+            if persist_if_advanced(&guard, store, rev_before).is_err() {
+                let _ = guard.gateway.rehydrate_guard(&snapshot);
+                return Err(RouteFail::PersistFailed);
+            }
             Ok(response)
         }
     }
