@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use qtv_attest::{Attestation, Block, Certificate, Envelope, Parent};
@@ -65,7 +65,12 @@ impl RpcBurnSource {
     }
 
     fn request(&self, method: &str, body: &str) -> Result<(u16, String), BurnWatchError> {
-        let mut stream = TcpStream::connect((self.host.as_str(), self.port)).map_err(io_err)?;
+        let addr = (self.host.as_str(), self.port)
+            .to_socket_addrs()
+            .map_err(io_err)?
+            .next()
+            .ok_or_else(|| BurnWatchError::Rpc("the chain rpc host did not resolve".to_string()))?;
+        let mut stream = TcpStream::connect_timeout(&addr, self.timeout).map_err(io_err)?;
         stream.set_read_timeout(Some(self.timeout)).ok();
         stream.set_write_timeout(Some(self.timeout)).ok();
         let head = format!(
