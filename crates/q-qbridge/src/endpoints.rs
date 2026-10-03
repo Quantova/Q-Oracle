@@ -1617,6 +1617,7 @@ mod tests {
         bootstrap(
             eth_config::ethereum(),
             ETH_PERIOD,
+            checkpoint.hash_tree_root(),
             checkpoint,
             committee,
             eth_current_committee_branch(),
@@ -1699,6 +1700,7 @@ mod tests {
         let store = bootstrap(
             cfg.clone(),
             ETH_PERIOD,
+            checkpoint.hash_tree_root(),
             checkpoint,
             committee,
             eth_current_committee_branch(),

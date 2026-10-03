@@ -46,6 +46,7 @@ pub enum EthError {
     BadAncestry,
     BadExecutionProof,
     BadSyncCommitteeProof,
+    UntrustedCheckpoint,
     BadSignature,
     MissingReceipt,
     CapExceeded {
@@ -201,12 +202,16 @@ impl LightClientStore {
 pub fn bootstrap(
     config: EvmChainConfig,
     period: u64,
+    trusted_block_root: [u8; 32],
     checkpoint_header: BeaconBlockHeader,
     current_sync_committee: SyncCommittee,
     current_sync_committee_branch: Vec<[u8; 32]>,
 ) -> Result<LightClientStore, EthError> {
     if !config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
+    }
+    if checkpoint_header.hash_tree_root() != trusted_block_root {
+        return Err(EthError::UntrustedCheckpoint);
     }
     if period != config.sync_committee_period(checkpoint_header.slot) {
         return Err(EthError::BootstrapPeriodMismatch {
@@ -1351,14 +1356,29 @@ mod tests {
             state_root,
             body_root: [0x02; 32],
         };
-        let store = bootstrap(cfg, PERIOD, checkpoint, committee.clone(), branch.clone()).unwrap();
+        let store = bootstrap(
+            cfg,
+            PERIOD,
+            checkpoint.hash_tree_root(),
+            checkpoint,
+            committee.clone(),
+            branch.clone(),
+        )
+        .unwrap();
         assert_eq!(store.current_sync_committee(), &committee);
         assert_eq!(store.next_sync_committee(), None);
 
         let mut wrong = branch;
         wrong[0][0] ^= 0xff;
         assert_eq!(
-            bootstrap(config::ethereum(), PERIOD, checkpoint, committee, wrong),
+            bootstrap(
+                config::ethereum(),
+                PERIOD,
+                checkpoint.hash_tree_root(),
+                checkpoint,
+                committee,
+                wrong
+            ),
             Err(EthError::BadSyncCommitteeProof)
         );
     }
@@ -1383,7 +1403,14 @@ mod tests {
             body_root: [0x02; 32],
         };
         assert_eq!(
-            bootstrap(cfg, PERIOD + 1, checkpoint, committee, branch),
+            bootstrap(
+                cfg,
+                PERIOD + 1,
+                checkpoint.hash_tree_root(),
+                checkpoint,
+                committee,
+                branch
+            ),
             Err(EthError::BootstrapPeriodMismatch {
                 period: PERIOD + 1,
                 slot,
