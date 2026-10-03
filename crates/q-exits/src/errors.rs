@@ -29,6 +29,7 @@ pub enum ExitError {
     InvalidArtifact(CodecError),
     UnsetAnchor,
     BadPublicKeyLen,
+    DegenerateKey(u64),
     TauAboveCommittee,
     DuplicateMember(u64),
     TauBelowQuorum { tau: u64, need: u64 },

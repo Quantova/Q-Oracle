@@ -203,8 +203,7 @@ impl ExitService {
     }
 
     pub fn poll_burns(&mut self, now: u64) -> Result<Vec<ExitId>, FeedError> {
-        self.feed
-            .drive(&self.source, &mut self.desk, now)
+        self.feed.drive(&self.source, &mut self.desk, now)
     }
 
     pub fn poll_burns_from(
@@ -1327,7 +1326,7 @@ mod tests {
                 stake: 100,
                 root_digest: [0x11; 32],
                 root_slots: 64,
-                attest_pk: vec![0u8; ATTEST_PK_BYTES],
+                attest_pk: vec![0x33u8; ATTEST_PK_BYTES],
             }],
             bridge_dest_chain: 9000,
             corridor: 1,

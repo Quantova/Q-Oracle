@@ -47,6 +47,9 @@ impl QuantovaAnchor {
             if member.attest_pk.len() != ATTEST_PK_BYTES {
                 return Err(ExitError::BadPublicKeyLen);
             }
+            if member.attest_pk.iter().all(|&b| b == 0) {
+                return Err(ExitError::DegenerateKey(member.id));
+            }
             if keys.iter().any(|k| k.id == member.id) {
                 return Err(ExitError::DuplicateMember(member.id));
             }
@@ -107,7 +110,7 @@ mod tests {
             stake: 100,
             root_digest: [0x11; 32],
             root_slots: 64,
-            attest_pk: vec![0u8; ATTEST_PK_BYTES],
+            attest_pk: vec![0x33u8; ATTEST_PK_BYTES],
         }
     }
 

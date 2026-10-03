@@ -626,7 +626,7 @@ mod tests {
                 stake: 100,
                 root_digest: [0x11; 32],
                 root_slots: 64,
-                attest_pk: vec![0u8; crate::anchor::ATTEST_PK_BYTES],
+                attest_pk: vec![0x33u8; crate::anchor::ATTEST_PK_BYTES],
             }],
         )
         .unwrap()
@@ -1013,7 +1013,7 @@ mod settle_commit_order_tests {
                 stake: 100,
                 root_digest: [0x11; 32],
                 root_slots: 64,
-                attest_pk: vec![0u8; crate::anchor::ATTEST_PK_BYTES],
+                attest_pk: vec![0x33u8; crate::anchor::ATTEST_PK_BYTES],
             }],
         )
         .unwrap()

@@ -109,7 +109,7 @@ fn finalized_certificate(
     let atts: Vec<_> = members
         .iter()
         .map(|a| {
-            a.attest(
+            a.attest_forced(
                 CHAIN_ID,
                 height,
                 SLOT,
@@ -314,9 +314,7 @@ fn a_burn_for_another_destination_is_dead_lettered_not_re_queued_forever() {
     desk.register_vault(VAULT, 2_000);
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-    let opened = feed
-        .drive(&node, &mut desk, 10)
-        .expect("the feed drives");
+    let opened = feed.drive(&node, &mut desk, 10).expect("the feed drives");
     assert_eq!(opened.len(), 0);
     assert_eq!(
         feed.pending_len(),
@@ -381,10 +379,7 @@ fn a_dead_lettered_burn_survives_a_restart_and_opens_on_retry_once_it_is_served(
         assert_eq!(feed.scanned_through(), HEIGHT);
         assert_eq!(feed.pending_len(), 0);
         let mut rescan = BurnFeed::new(HEIGHT - 1, ExitConfig { enabled: true });
-        assert!(rescan
-            .drive(&node, &mut desk, 11)
-            .unwrap()
-            .is_empty());
+        assert!(rescan.drive(&node, &mut desk, 11).unwrap().is_empty());
         let letters = desk.dead_letters();
         assert_eq!(letters.len(), 1, "a rescan does not record the burn twice");
         assert_eq!(letters[0].reason, DeadReason::UnservedAsset);
@@ -435,10 +430,7 @@ fn a_gated_off_feed_opens_nothing() {
 
     let mut feed = BurnFeed::new(HEIGHT - 1, ExitConfig::default());
     assert!(!feed.is_enabled());
-    assert_eq!(
-        feed.drive(&node, &mut desk, 10),
-        Err(FeedError::Disabled)
-    );
+    assert_eq!(feed.drive(&node, &mut desk, 10), Err(FeedError::Disabled));
     assert_eq!(desk.locked_collateral(VAULT), 0);
     assert!(!desk.is_consumed(&BURN_REF));
 }

@@ -117,7 +117,7 @@ fn finalized_certificate_on(
     let atts: Vec<_> = members
         .iter()
         .map(|a| {
-            a.attest(
+            a.attest_forced(
                 chain_id,
                 HEIGHT,
                 SLOT,
@@ -702,10 +702,7 @@ fn a_forged_header_cannot_open_an_exit() {
     desk.register_vault(1, 2_000);
     let mut proof = proof_of(&members, &beacon, BURN_REF);
     proof.header_bytes[45] ^= 0xff;
-    assert_eq!(
-        desk.open_exit(&proof, 10),
-        Err(ExitError::HeaderMismatch)
-    );
+    assert_eq!(desk.open_exit(&proof, 10), Err(ExitError::HeaderMismatch));
     assert!(!desk.is_consumed(&BURN_REF));
     assert_eq!(desk.locked_collateral(1), 0);
 }
@@ -821,7 +818,7 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
     let commitment = committee(&members);
     let envelope = Envelope::new(HEIGHT, SLOT, block, &commitment);
     let lone = members[0]
-        .attest(
+        .attest_forced(
             CHAIN_ID,
             HEIGHT,
             SLOT,

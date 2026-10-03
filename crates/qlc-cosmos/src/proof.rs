@@ -296,7 +296,8 @@ mod tests {
         let mut rewritten = iavl.clone();
         rewritten.leaf.prefix = vec![LEAF_MARKER, 0x02, 0x0a];
         let (later_hash, later) = wrap_store_layer(rewritten, STORE_NAME);
-        let again = extract_deposit(&later_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &later).unwrap();
+        let again =
+            extract_deposit(&later_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &later).unwrap();
         assert_eq!(first.source_ref, again.source_ref);
 
         let mut other = iavl;
@@ -314,7 +315,10 @@ mod tests {
         let (mut b, _) = sample_proof();
         a.key = b"cd".to_vec();
         b.key = b"bcd".to_vec();
-        assert_ne!(deposit_source_ref(CHAIN_ID, b"ab", &a), deposit_source_ref(CHAIN_ID, b"a", &b));
+        assert_ne!(
+            deposit_source_ref(CHAIN_ID, b"ab", &a),
+            deposit_source_ref(CHAIN_ID, b"a", &b)
+        );
     }
 
     #[test]
@@ -414,7 +418,8 @@ mod tests {
     fn the_amount_is_carried_in_base_units() {
         let (iavl, _) = sample_proof();
         let (app_hash, proof) = wrap_store_layer(iavl, STORE_NAME);
-        let deposit = extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof).unwrap();
+        let deposit =
+            extract_deposit(&app_hash, CHAIN_ID, STORE_NAME, STORE_PREFIX, &proof).unwrap();
         assert_eq!(deposit.amount, 4_200_000_000u128);
     }
 

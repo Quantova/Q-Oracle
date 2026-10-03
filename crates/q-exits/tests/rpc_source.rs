@@ -104,7 +104,7 @@ fn finalized_certificate(
     let atts: Vec<_> = members
         .iter()
         .map(|a| {
-            a.attest(
+            a.attest_forced(
                 CHAIN_ID,
                 height,
                 SLOT,

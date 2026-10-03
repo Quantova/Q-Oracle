@@ -397,10 +397,7 @@ pub struct EvmPayoutWatcher {
 
 impl EvmPayoutWatcher {
     pub fn new(corridor: u32, releases: Vec<EvmReleaseProof>) -> EvmPayoutWatcher {
-        EvmPayoutWatcher {
-            corridor,
-            releases,
-        }
+        EvmPayoutWatcher { corridor, releases }
     }
 
     pub fn attest(&self, statement: &ExitStatement) -> Result<PayoutAttestation, PayoutProofError> {
