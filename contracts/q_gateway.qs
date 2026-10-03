@@ -12,6 +12,9 @@ domain EPOCH = "QUANTOVA/Q-ORACLE/EPOCH/v1";
 const DEPOSIT: u8 = 0;
 const BASE_TIER: u8 = 1;
 const WATCHDOG_WINDOW: Q_Height = 7200;
+const WATCHDOG_COOLDOWN: Q_Height = 57600;
+const RESUME_SKEW: Q_Height = 16;
+const RESUME_WINDOW: Q_Height = 600;
 
 record DepositFact {
   version: u8;
@@ -29,11 +32,14 @@ record DepositFact {
   expiry_height: u64;
 }
 
-record BatchMarker { net: Q_Net; index: u64; }
-record TierChange { net: Q_Net; tier: u8; }
-record FreezeOrder { until: Q_Height; }
-record WatchAlarm { until: Q_Height; }
-record ReorgReport { net: Q_Net; fork_depth: u32; }
+record BatchMarker { net: Q_Net; index: u64; dest: Q_Net; era: u64; }
+record TierChange { net: Q_Net; tier: u8; dest: Q_Net; era: u64; }
+record FreezeOrder { until: Q_Height; dest: Q_Net; era: u64; }
+record WatchAlarm { until: Q_Height; dest: Q_Net; era: u64; }
+record ReorgReport { net: Q_Net; fork_depth: u32; at_height: Q_Height; dest: Q_Net; era: u64; }
+record ResumeOrder { net: Q_Net; at_height: Q_Height; dest: Q_Net; era: u64; }
+record PauseOrder { dest: Q_Net; era: u64; nonce: u64; }
+record EpochOrder { dest: Q_Net; era: u64; nonce: u64; }
 record ExitRequest { destination: Q_Hash; }
 record ExitTicket { id: u64; origin: Q_Origin; amount: u128; destination: Q_Hash; unlock: Q_Height; }
 
@@ -41,9 +47,13 @@ contract QGateway {
   asset Bridged<Q_Origin>;
   state {
     network: Q_Net;
+    era: u64;
     operators: GuardianSet<9>;
     governance: GuardianSet<7>;
-    used_refs: Registry<Q_Hash>;
+    used_refs: Registry<(Q_Net, Q_Hash)>;
+    watchdog_last: Map<Q_Address, Q_Height>;
+    paused_since: Map<Q_Net, Q_Height>;
+    gov_nonce: u64;
     corridor_depth: Map<Q_Net, u32>;
     corridor_quorum: Map<Q_Net, u16>;
     corridor_tier: Map<Q_Net, u8>;
@@ -62,6 +72,7 @@ contract QGateway {
   }
   genesis {
     network = deploy_params.network;
+    era = deploy_params.era;
     operators = deploy_params.operators;
     governance = deploy_params.governance;
     corridor_depth = deploy_params.corridor_depth;
@@ -74,6 +85,7 @@ contract QGateway {
     frozen_until = 0;
     next_exit_id = 0;
     global_pause = false;
+    gov_nonce = 0;
   }
   invariant forall origin: minted[origin] <= caps[origin];
   invariant epoch_minted <= epoch_cap;
@@ -87,7 +99,7 @@ contract QGateway {
     denies now > deposit.expiry_height
     denies deposit.is_zero
     denies source_paused[deposit.source]
-    denies used_refs.contains(deposit.reference)
+    denies used_refs.contains((deposit.source, deposit.reference))
     limits minted[deposit.origin] + deposit.amount <= caps[deposit.origin]
     limits epoch_minted + deposit.amount <= epoch_cap
   {
@@ -100,7 +112,7 @@ contract QGateway {
     guard attestation.over(deposit);
     guard attestation.distinct >= corridor_quorum[deposit.source];
     guard attestation.distinct >= 6;
-    used_refs.insert(deposit.reference);
+    used_refs.insert((deposit.source, deposit.reference));
     minted[deposit.origin] += deposit.amount;
     epoch_minted += deposit.amount;
     send(deposit.recipient, mint(deposit.origin, deposit.amount));
@@ -114,6 +126,8 @@ contract QGateway {
     denies now < frozen_until
     denies source_paused[marker.net]
   {
+    guard marker.dest == network;
+    guard marker.era == era;
     guard corridor_active[marker.net];
     guard attestation.over(marker);
     guard attestation.distinct >= corridor_quorum[marker.net];
@@ -158,6 +172,8 @@ contract QGateway {
     writes(corridor_tier)
     reads(governance, corridor_active)
   {
+    guard change.dest == network;
+    guard change.era == era;
     guard corridor_active[change.net];
     guard change.tier > corridor_tier[change.net];
     corridor_tier[change.net] = change.tier;
@@ -168,55 +184,90 @@ contract QGateway {
     writes(frozen_until)
     reads(operators)
   {
+    guard order.dest == network;
+    guard order.era == era;
     guard order.until > frozen_until;
     frozen_until = order.until;
     emit Frozen(order.until, approvals.digest);
   }
 
   entry watchdog_freeze(alarm: WatchAlarm, watch: Watch<1 of operators, WATCHDOG>)
-    writes(frozen_until)
-    reads(operators)
+    writes(frozen_until, watchdog_last)
+    reads(operators, watchdog_last)
+    denies now < watchdog_last[watch.signer] + WATCHDOG_COOLDOWN
+    denies now < frozen_until
   {
+    guard alarm.dest == network;
+    guard alarm.era == era;
+    guard alarm.until > now;
     guard alarm.until <= now + WATCHDOG_WINDOW;
     guard alarm.until > frozen_until;
+    watchdog_last[watch.signer] = now;
     frozen_until = alarm.until;
     emit WatchdogFroze(watch.signer, alarm.until);
   }
 
   entry report_reorg(report: ReorgReport, approvals: Quorum<6 of 9, operators, REORG>)
-    writes(source_paused)
+    writes(source_paused, paused_since)
+    reads(network, era)
+    denies report.at_height > now + RESUME_SKEW
+    denies now > report.at_height + RESUME_WINDOW
   {
+    guard report.dest == network;
+    guard report.era == era;
     source_paused[report.net] = true;
+    paused_since[report.net] = now;
     emit ReorgPaused(report.net, report.fork_depth, approvals.digest);
   }
 
-  entry clear_reorg(net: Q_Net, approvals: Quorum<6 of 9, operators, REORG>)
+  entry clear_reorg(order: ResumeOrder, approvals: Quorum<6 of 9, operators, REORG>)
     writes(source_paused)
+    reads(network, era, source_paused)
+    denies order.at_height > now + RESUME_SKEW
+    denies now > order.at_height + RESUME_WINDOW
     after 24 hours from approvals.first
   {
-    source_paused[net] = false;
-    emit ReorgCleared(net, approvals.digest);
+    guard order.dest == network;
+    guard order.era == era;
+    guard source_paused[order.net];
+    source_paused[order.net] = false;
+    emit ReorgCleared(order.net, approvals.digest);
   }
 
-  entry pause(approvals: Quorum<6 of 9, operators, FREEZE>)
-    writes(global_pause)
+  entry pause(order: PauseOrder, approvals: Quorum<6 of 9, operators, FREEZE>)
+    writes(global_pause, gov_nonce)
+    reads(network, era, gov_nonce)
   {
+    guard order.dest == network;
+    guard order.era == era;
+    guard order.nonce == gov_nonce;
+    gov_nonce += 1;
     global_pause = true;
     emit GatewayPaused(approvals.digest);
   }
 
-  entry unpause(approvals: Quorum<6 of 9, operators, FREEZE>)
-    writes(global_pause)
+  entry unpause(order: PauseOrder, approvals: Quorum<6 of 9, operators, FREEZE>)
+    writes(global_pause, gov_nonce)
+    reads(network, era, gov_nonce)
     after 24 hours from approvals.first
   {
+    guard order.dest == network;
+    guard order.era == era;
+    guard order.nonce == gov_nonce;
+    gov_nonce += 1;
     global_pause = false;
     emit GatewayUnpaused(approvals.digest);
   }
 
-  entry roll_epoch(approvals: Quorum<6 of 9, operators, EPOCH>)
-    writes(epoch_minted)
+  entry roll_epoch(order: EpochOrder, approvals: Quorum<6 of 9, operators, EPOCH>)
+    writes(epoch_minted, gov_nonce)
+    reads(network, era, gov_nonce)
     after 24 hours from approvals.first
   {
+    guard order.dest == network;
+    guard order.era == era;
+    guard order.nonce == gov_nonce;
+    gov_nonce += 1;
     epoch_minted = 0;
     emit EpochRolled(approvals.digest);
   }
