@@ -1,4 +1,7 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::manual_is_multiple_of)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+#![allow(clippy::manual_repeat_n)]
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::useless_vec)]
 // Copyright 2026 Quantova Inc
