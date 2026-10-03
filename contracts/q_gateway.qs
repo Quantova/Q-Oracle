@@ -7,6 +7,7 @@ domain TIER = "QUANTOVA/Q-ORACLE/TIER/v1";
 domain FREEZE = "QUANTOVA/Q-ORACLE/FREEZE/v1";
 domain WATCHDOG = "QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 domain BATCH = "QUANTOVA/Q-ORACLE/BATCH/v1";
+domain EPOCH = "QUANTOVA/Q-ORACLE/EPOCH/v1";
 
 const DEPOSIT: u8 = 0;
 const BASE_TIER: u8 = 1;
@@ -96,6 +97,7 @@ contract QGateway {
     guard deposit.finality_depth >= corridor_depth[deposit.source];
     guard attestation.over(deposit);
     guard attestation.distinct >= corridor_quorum[deposit.source];
+    guard attestation.distinct >= 6;
     used_refs.insert(deposit.reference);
     minted[deposit.origin] += deposit.amount;
     epoch_minted += deposit.amount;
@@ -113,6 +115,7 @@ contract QGateway {
     guard corridor_active[marker.net];
     guard attestation.over(marker);
     guard attestation.distinct >= corridor_quorum[marker.net];
+    guard attestation.distinct >= 6;
     guard marker.index == corridor_cursor[marker.net];
     corridor_cursor[marker.net] = marker.index + 1;
     emit BatchAccepted(marker.net, marker.index, attestation.digest);
@@ -139,6 +142,9 @@ contract QGateway {
 
   entry finalize_exit(id: u64)
     writes(exits)
+    reads(global_pause, frozen_until)
+    denies global_pause
+    denies now < frozen_until
   {
     guard exits.contains(id);
     guard now >= exits[id].unlock;
@@ -205,8 +211,9 @@ contract QGateway {
     emit GatewayUnpaused(approvals.digest);
   }
 
-  entry roll_epoch(approvals: Quorum<6 of 9, operators>)
+  entry roll_epoch(approvals: Quorum<6 of 9, operators, EPOCH>)
     writes(epoch_minted)
+    after 24 hours from approvals.first
   {
     epoch_minted = 0;
     emit EpochRolled(approvals.digest);
