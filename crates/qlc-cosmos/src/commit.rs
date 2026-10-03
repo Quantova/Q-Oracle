@@ -175,6 +175,14 @@ pub fn tally_signed_power(
     }
     let mut signed: u128 = 0;
     let mut counted: HashSet<[u8; 20]> = HashSet::new();
+    let total = set.total_power();
+    let mut unresolved: u128 = commit
+        .signatures
+        .iter()
+        .filter(|s| s.flag == BlockIdFlag::Commit)
+        .filter_map(|s| by_address.get(&s.validator_address))
+        .map(|v| v.voting_power as u128)
+        .fold(0u128, u128::saturating_add);
 
     for sig in &commit.signatures {
         if sig.flag != BlockIdFlag::Commit {
@@ -187,6 +195,7 @@ pub fn tally_signed_power(
             Some(v) => *v,
             None => continue,
         };
+        unresolved = unresolved.saturating_sub(validator.voting_power as u128);
         if sig.signature.len() != 64 {
             continue;
         }
@@ -203,6 +212,9 @@ pub fn tally_signed_power(
         signature.copy_from_slice(&sig.signature);
         if verify(&validator.pubkey, &message, &signature) {
             signed += validator.voting_power as u128;
+        }
+        if !has_two_thirds(signed.saturating_add(unresolved), total) {
+            break;
         }
     }
 
