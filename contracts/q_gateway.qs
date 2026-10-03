@@ -26,6 +26,7 @@ record DepositFact {
   recipient: Q_Address;
   finality_depth: u32;
   observed_height: u64;
+  expiry_height: u64;
 }
 
 record BatchMarker { net: Q_Net; index: u64; }
@@ -83,6 +84,7 @@ contract QGateway {
     reads(network, operators, corridor_depth, corridor_quorum, corridor_active, caps, epoch_cap, source_paused, global_pause, frozen_until)
     denies global_pause
     denies now < frozen_until
+    denies now > deposit.expiry_height
     denies deposit.is_zero
     denies source_paused[deposit.source]
     denies used_refs.contains(deposit.reference)
