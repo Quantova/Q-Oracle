@@ -27,7 +27,7 @@ impl Aggregator {
         }
     }
 
-    pub fn add(&mut self, fact: &BridgeFact, sig: SignerSig) -> Result<(), AggregatorError> {
+    pub(crate) fn add(&mut self, fact: &BridgeFact, sig: SignerSig) -> Result<(), AggregatorError> {
         match &self.fact {
             None => self.fact = Some(fact.clone()),
             Some(existing) => {

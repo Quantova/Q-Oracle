@@ -33,7 +33,7 @@ fn real_attestation() -> q_airlock::AttestationEnvelope {
         .observe_and_sign(&lock, 900_000)
         .expect("a final lock signs");
     let mut agg = Aggregator::new(1);
-    agg.add(&observation.fact, observation.sig)
+    agg.add_verified(&observation.fact, observation.sig, |_, _| true)
         .expect("first signature seeds the fact");
     agg.try_finalize().expect("threshold of one finalizes")
 }

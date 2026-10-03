@@ -74,7 +74,7 @@ fn full_pipeline_from_watcher_to_mint() {
         let signed = op
             .observe_and_sign(&observed, 900_000)
             .expect("operator signs a final lock");
-        agg.add(&signed.fact, signed.sig)
+        agg.add_verified(&signed.fact, signed.sig, |_, _| true)
             .expect("bundle matching facts");
     }
     assert!(agg.ready());
@@ -185,7 +185,7 @@ fn a_forged_lock_on_a_minority_of_nodes_never_reaches_quorum() {
     for id in [0u32, 1] {
         let compromised = own_node(vec![forged.clone()]);
         for signed in sign_own_view(id, &compromised) {
-            agg.add(&signed.fact, signed.sig)
+            agg.add_verified(&signed.fact, signed.sig, |_, _| true)
                 .expect("compromised node signs the forgery");
         }
     }
@@ -193,7 +193,7 @@ fn a_forged_lock_on_a_minority_of_nodes_never_reaches_quorum() {
     for id in [2u32, 3, 4] {
         let honest = own_node(vec![]);
         for signed in sign_own_view(id, &honest) {
-            agg.add(&signed.fact, signed.sig)
+            agg.add_verified(&signed.fact, signed.sig, |_, _| true)
                 .expect("honest node sees nothing to sign");
         }
     }
