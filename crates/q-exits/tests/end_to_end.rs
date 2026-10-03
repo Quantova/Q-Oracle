@@ -117,7 +117,7 @@ fn finalized_certificate_on(
     let atts: Vec<_> = members
         .iter()
         .map(|a| {
-            a.attest_forced(
+            a.attest(
                 chain_id,
                 HEIGHT,
                 SLOT,
@@ -818,7 +818,7 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
     let commitment = committee(&members);
     let envelope = Envelope::new(HEIGHT, SLOT, block, &commitment);
     let lone = members[0]
-        .attest_forced(
+        .attest(
             CHAIN_ID,
             HEIGHT,
             SLOT,
