@@ -500,7 +500,7 @@ pub fn verify_deposit_update(
     Ok(evm_light_client(
         store.config.corridor_id,
         qlc_stark::QUANTOVA_DEST_CHAIN_ID,
-        core.block_number,
+        qlc_stark::corridors::nonce_from_source_ref(&core.source_ref),
         core.anchor,
         event,
         store.config.finality_depth,

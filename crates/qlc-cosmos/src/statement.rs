@@ -161,7 +161,7 @@ pub fn verify_deposit(
     let statement = cosmos_tendermint(
         cfg.corridor_id,
         qlc_stark::QUANTOVA_DEST_CHAIN_ID,
-        header.height as u64,
+        qlc_stark::corridors::nonce_from_source_ref(&deposit.source_ref),
         header.hash(),
         event_claim(&deposit),
         cfg.confirmation_depth,
@@ -377,7 +377,10 @@ mod tests {
         assert_eq!(lowered.kind, StatementKind::CosmosTendermint);
         assert_eq!(lowered.corridor_id, 16);
         assert_eq!(lowered.dest_chain_id, qlc_stark::QUANTOVA_DEST_CHAIN_ID);
-        assert_eq!(lowered.nonce, header.height as u64);
+        assert_eq!(
+            lowered.nonce,
+            qlc_stark::corridors::nonce_from_source_ref(&out.statement.event.source_ref)
+        );
         assert_eq!(
             lowered.public_input_digest,
             shake256_256(&out.statement.encode())
@@ -398,7 +401,10 @@ mod tests {
             wnow(),
         )
         .unwrap();
-        assert_eq!(out.statement.nonce, header.height as u64);
+        assert_eq!(
+            out.statement.nonce,
+            qlc_stark::corridors::nonce_from_source_ref(&out.statement.event.source_ref)
+        );
         assert_eq!(
             out.statement.dest_chain_id,
             qlc_stark::QUANTOVA_DEST_CHAIN_ID

@@ -63,18 +63,18 @@ impl From<AirlockError> for Refused {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Crossing {
+pub struct UnverifiedCrossing {
     pub kind: PqArtifact,
     pub artifact: Artifact,
 }
 
-pub fn admit(bytes: &[u8]) -> Result<Crossing, Refused> {
+pub fn admit(bytes: &[u8]) -> Result<UnverifiedCrossing, Refused> {
     let artifact = parse(bytes)?;
     let kind = classify(&artifact);
-    Ok(Crossing { kind, artifact })
+    Ok(UnverifiedCrossing { kind, artifact })
 }
 
-pub fn admit_artifact(artifact: &Artifact) -> Result<Crossing, Refused> {
+pub fn admit_artifact(artifact: &Artifact) -> Result<UnverifiedCrossing, Refused> {
     let bytes = match artifact {
         Artifact::Attestation(envelope) => envelope.encode(),
         Artifact::Stark(envelope) => envelope.encode(),

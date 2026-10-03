@@ -56,8 +56,17 @@ pub struct Operator<S: AttestationSigner> {
     signer: S,
     corridors: BTreeMap<u32, CorridorContext>,
     signed_refs: BTreeMap<(u32, [u8; 32]), u64>,
-    seen_facts: BTreeMap<(u32, [u8; 32]), [u8; 32]>,
+    seen_facts: BTreeMap<(u32, [u8; 32]), ([u8; 32], u64)>,
     state: OperatorState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DivergenceRecord {
+    pub source_chain: u32,
+    pub source_ref: [u8; 32],
+    pub digest: [u8; 32],
+    pub expiry_height: u64,
+    pub signed_expiry: u64,
 }
 
 impl<S: AttestationSigner> Operator<S> {
@@ -93,6 +102,41 @@ impl<S: AttestationSigner> Operator<S> {
         }
     }
 
+    pub fn prune_expired(&mut self, dest_height: u64) {
+        self.seen_facts
+            .retain(|_, (_, expiry)| *expiry >= dest_height);
+        self.signed_refs.retain(|_, expiry| *expiry >= dest_height);
+    }
+
+    pub fn export_divergence(&self) -> Vec<DivergenceRecord> {
+        self.seen_facts
+            .iter()
+            .map(
+                |(&(source_chain, source_ref), &(digest, expiry_height))| DivergenceRecord {
+                    source_chain,
+                    source_ref,
+                    digest,
+                    expiry_height,
+                    signed_expiry: self
+                        .signed_refs
+                        .get(&(source_chain, source_ref))
+                        .copied()
+                        .unwrap_or(0),
+                },
+            )
+            .collect()
+    }
+
+    pub fn restore_divergence(&mut self, records: &[DivergenceRecord]) {
+        for r in records {
+            let key = (r.source_chain, r.source_ref);
+            self.seen_facts.insert(key, (r.digest, r.expiry_height));
+            if r.signed_expiry != 0 {
+                self.signed_refs.insert(key, r.signed_expiry);
+            }
+        }
+    }
+
     pub fn observe_and_sign(
         &mut self,
         lock: &ObservedLock,
@@ -118,7 +162,7 @@ impl<S: AttestationSigner> Operator<S> {
         let digest = divergence_digest(lock, &ctx);
 
         match self.seen_facts.get(&key) {
-            Some(prev) if *prev != digest => {
+            Some((prev, _)) if *prev != digest => {
                 self.state = OperatorState::Halted(HaltReason::Divergence);
                 return Err(OperatorError::Halted(HaltReason::Divergence));
             }
@@ -129,7 +173,9 @@ impl<S: AttestationSigner> Operator<S> {
             return Err(OperatorError::AlreadySigned);
         }
 
-        self.seen_facts.entry(key).or_insert(digest);
+        self.seen_facts
+            .entry(key)
+            .or_insert((digest, fact.expiry_height));
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
         let signature = self

@@ -3,7 +3,7 @@
 
 use q_airlock::{Artifact, AttestationEnvelope, SignerSig, StarkEnvelope};
 use q_codec::{attest_context, AssetId, BridgeFact, Direction, Recipient, SourceRef, FACT_VERSION};
-use q_isolation::{admit_artifact, Crossing, Refused};
+use q_isolation::{admit_artifact, Refused, UnverifiedCrossing};
 use q_prover_bridge::{prove_statement, verify_statement, CommitmentProof, CorridorStatement};
 
 use crate::signer::AttestationSigner;
@@ -51,7 +51,7 @@ impl OutboundEnvelope {
         ]
     }
 
-    pub fn cross(&self) -> Result<[Crossing; 2], Refused> {
+    pub fn cross(&self) -> Result<[UnverifiedCrossing; 2], Refused> {
         let attestation = admit_artifact(&Artifact::Attestation(self.attestation.clone()))?;
         let stark = admit_artifact(&Artifact::Stark(self.stark.clone()))?;
         Ok([attestation, stark])
