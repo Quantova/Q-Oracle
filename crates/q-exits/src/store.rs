@@ -27,11 +27,22 @@ impl ReplayStore {
     }
 
     pub fn save(&self, encoded: &[u8]) -> io::Result<()> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
         let mut temp = self.path.clone().into_os_string();
-        temp.push(".tmp");
+        temp.push(format!(".tmp.{}.{nonce}", std::process::id()));
         let temp = PathBuf::from(temp);
         {
-            let mut file = File::create(&temp)?;
+            let mut opts = fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut file = opts.open(&temp)?;
             file.write_all(encoded)?;
             file.sync_all()?;
         }
@@ -47,10 +58,14 @@ impl ReplayStore {
     }
 
     pub fn append(&self, bytes: &[u8]) -> io::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
+        let mut opts = fs::OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(&self.path)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         Ok(())
