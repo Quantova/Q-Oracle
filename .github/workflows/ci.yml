@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/q-prover
-          ref: 91bb6e7e611b5e3fce58e9a02a26bbe60a2f056c
+          ref: bddf924e8e702bf72fd905b66558452c26520831
           path: q-prover
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -31,13 +31,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/QRC-CONSENSUS
-          ref: 47089aa62a703847291dd1d6ead5c3c1d3c9bdd8
+          ref: 7ef7e0920ff8ce600644a969740d4d4f3a486109
           path: QRC-CONSENSUS
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/Quantova-Chain
-          ref: ead67ab92a394b8123b616bb102400471dc5fd15
+          ref: a1469ba88a88e445e4bbf6e8708a460531f56add
           path: Quantova-Chain
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
