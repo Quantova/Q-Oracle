@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Result as IoResult, Write};
-use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -72,15 +72,27 @@ pub const REQUEST_DEADLINE: Duration = Duration::from_secs(8);
 
 pub const MAX_CONNECTIONS: usize = 512;
 
-pub const MAX_CONNECTIONS_PER_IP: usize = 32;
+pub const MAX_CONNECTIONS_PER_IP: usize = 8;
 
 pub const RATE_WINDOW: Duration = Duration::from_secs(1);
 
-pub const MAX_ADMITS_PER_WINDOW: usize = 256;
+pub const MAX_ADMITS_PER_WINDOW: usize = 1024;
 
 pub const MAX_ADMITS_PER_IP_PER_WINDOW: usize = 16;
 
 pub type SharedState = Arc<RwLock<BridgeState>>;
+
+fn client_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(Ipv6Addr::from(
+                u128::from(v6) & 0xffff_ffff_ffff_ffff_0000_0000_0000_0000,
+            )),
+        },
+    }
+}
 
 enum Admit {
     Ok,
@@ -105,7 +117,7 @@ impl Limiter {
         if inner.total >= total_cap {
             return Admit::TotalFull;
         }
-        let count = inner.per_ip.entry(ip).or_insert(0);
+        let count = inner.per_ip.entry(client_key(ip)).or_insert(0);
         if *count >= per_ip_cap {
             return Admit::IpFull;
         }
@@ -116,10 +128,11 @@ impl Limiter {
 
     fn release(&self, ip: IpAddr) {
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(count) = inner.per_ip.get_mut(&ip) {
+        let key = client_key(ip);
+        if let Some(count) = inner.per_ip.get_mut(&key) {
             *count -= 1;
             if *count == 0 {
-                inner.per_ip.remove(&ip);
+                inner.per_ip.remove(&key);
             }
         }
         inner.total = inner.total.saturating_sub(1);
@@ -160,7 +173,7 @@ impl RateLimiter {
         if inner.total >= total_cap {
             return false;
         }
-        let count = inner.per_ip.entry(ip).or_insert(0);
+        let count = inner.per_ip.entry(client_key(ip)).or_insert(0);
         if *count >= per_ip_cap {
             return false;
         }
