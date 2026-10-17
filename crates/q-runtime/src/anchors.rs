@@ -85,8 +85,24 @@ impl ProofAnchors {
 }
 
 pub fn read_anchor_file(path: &Path) -> Result<String, AnchorFileError> {
-    let meta = std::fs::symlink_metadata(path)
-        .map_err(|e| AnchorFileError::Unreadable(format!("{}: {e}", path.display())))?;
+    use std::io::Read;
+    let unreadable =
+        |e: std::io::Error| AnchorFileError::Unreadable(format!("{}: {e}", path.display()));
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path).map_err(|e| {
+        if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+            AnchorFileError::NotARegularFile
+        } else {
+            unreadable(e)
+        }
+    })?;
+    let meta = file.metadata().map_err(unreadable)?;
     if !meta.file_type().is_file() {
         return Err(AnchorFileError::NotARegularFile);
     }
@@ -101,8 +117,15 @@ pub fn read_anchor_file(path: &Path) -> Result<String, AnchorFileError> {
             return Err(AnchorFileError::NotOwnerOnly(mode));
         }
     }
-    std::fs::read_to_string(path)
-        .map_err(|e| AnchorFileError::Unreadable(format!("{}: {e}", path.display())))
+    let mut text = String::new();
+    file.by_ref()
+        .take(MAX_ANCHORS_FILE + 1)
+        .read_to_string(&mut text)
+        .map_err(unreadable)?;
+    if text.len() as u64 > MAX_ANCHORS_FILE {
+        return Err(AnchorFileError::TooLarge);
+    }
+    Ok(text)
 }
 
 pub fn load_anchor_file(path: &Path) -> Result<ProofAnchors, AnchorFileError> {

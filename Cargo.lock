@@ -191,6 +191,7 @@ dependencies = [
 name = "q-runtime"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "q-airlock",
  "q-assets",
  "q-codec",
