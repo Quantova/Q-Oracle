@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use q_airlock::AttestationEnvelope;
 use q_codec::BridgeFact;
 use q_qbridge::{
-    commit_deposit, verify_deposit, BitcoinProofMaterial, BridgeState, DepositProof,
-    DepositRequest, Response,
+    commit_deposit, prepare_deposit, verify_prepared, BitcoinProofMaterial, BridgeState,
+    DepositProof, DepositRequest, Response,
 };
 use qlc_cosmos::commit::{Commit, Header};
 use qlc_cosmos::proof::ExistenceProof;
@@ -43,6 +43,7 @@ fn within_bounds(proof: &DepositProof) -> bool {
             update.sync_aggregate.participation.len() <= MAX_PARTICIPATION
                 && update.finality_branch.len() <= MAX_BRANCH
                 && update.execution.execution_branch.len() <= MAX_BRANCH
+                && update.execution.block_number_branch.len() <= MAX_BRANCH
                 && deposit.receipt_proof.len() <= MAX_PROOF_NODES
         }
         DepositProof::Cosmos {
@@ -180,10 +181,11 @@ pub fn ingest_once(
             }
             let request = DepositRequest { proof };
             let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let plan = {
+                let prepared = {
                     let guard = state.read().unwrap_or_else(|e| e.into_inner());
-                    verify_deposit(&guard, &request)
+                    prepare_deposit(&guard, &request)
                 };
+                let plan = prepared.and_then(|prepared| verify_prepared(prepared, &request));
                 let plan = match plan {
                     Ok(plan) => plan,
                     Err(err) => return (Response::Error(err), Durability::NotPersisted),

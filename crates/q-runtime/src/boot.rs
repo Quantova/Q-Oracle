@@ -828,6 +828,19 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
         .registered_assets();
     reserves_cover(&registered, &reserves)?;
     apply_reserves(&state, &reserves);
+    let mut anchors = crate::anchors::anchors_from_env().map_err(|e| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("the proof anchor file is unusable, refusing to start: {e:?}"),
+        )
+    })?;
+    if anchors.is_empty() {
+        eprintln!(
+            "q-oracle: no proof anchor file is configured, so the bitcoin, ethereum and cosmos \
+             proof corridors refuse every deposit"
+        );
+    }
+    anchors.install(&mut state.write().unwrap_or_else(|e| e.into_inner()));
     let chain_rpc = std::env::var(crate::clock::CHAIN_RPC_ENV).map_err(|_| {
         std::io::Error::new(
             ErrorKind::InvalidInput,
@@ -841,7 +854,20 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
             "the chain head endpoint is not host:port, refusing to start",
         )
     })?;
-    let _clock = crate::clock::spawn_clock(state.clone(), RpcBurnSource::new(host, port));
+    let head_source = RpcBurnSource::new(host, port);
+    let _clock = match anchors.quantova.take() {
+        Some(committee) => crate::clock::spawn_clock(
+            state.clone(),
+            crate::clock::CertifiedHead::new(head_source, committee),
+        ),
+        None => {
+            eprintln!(
+                "q-oracle: no quantova committee is pinned in the anchor file, so the chain head \
+                 is taken unsigned and only bounded by the block rate"
+            );
+            crate::clock::spawn_clock(state.clone(), head_source)
+        }
+    };
     let _exits = start_exits_for(Some(state.clone()))?;
     run_with(addr, state, store.map(Arc::new))
 }

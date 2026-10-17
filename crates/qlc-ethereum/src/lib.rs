@@ -20,7 +20,8 @@ pub mod witness;
 pub use config::EvmChainConfig;
 pub use engine::{
     advance_period, apply_sync_committee_update, bootstrap, lower_to_stark, public_input_digest,
-    to_verified_event, verify_deposit_update, verify_trustless_deposit, DepositProof, EthError,
-    ExecutionCommit, LightClientStore, LightClientUpdate, SyncCommitteeUpdate, TrustlessDeposit,
+    rotate_sync_committee, to_verified_event, verify_deposit_update, verify_trustless_deposit,
+    DepositProof, EthError, ExecutionCommit, LightClientStore, LightClientUpdate,
+    SyncCommitteeUpdate, TrustlessDeposit,
 };
 pub use witness::{prove_ready_witness, EthereumCheckedFacts, ProveReadyWitness};

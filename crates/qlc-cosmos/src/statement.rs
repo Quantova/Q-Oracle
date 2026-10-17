@@ -3,7 +3,9 @@
 
 use crate::chain::ChainConfig;
 use crate::commit::{verify_commit, Commit, CommitError, Header};
-use crate::light::{check_anchor, check_trusting_commit, LightError, TrustedState};
+use crate::light::{
+    check_anchor, check_trusting_claim, check_trusting_commit, LightError, TrustedState,
+};
 use crate::proof::{extract_deposit, Deposit, ExistenceProof, ProofError};
 use crate::proto::Timestamp;
 use crate::validator::ValidatorSet;
@@ -125,16 +127,11 @@ fn verify_deposit_core(
         return Err(CorridorError::ChainMismatch);
     }
     check_anchor(cfg, trusted, header, set, now).map_err(CorridorError::Unanchored)?;
-    check_trusting_commit(cfg, trusted, header, commit).map_err(CorridorError::Unanchored)?;
-    let signed_power =
-        verify_commit(cfg.chain_id, header, commit, set).map_err(CorridorError::Commit)?;
-
     if header.app_hash.len() != 32 {
         return Err(CorridorError::MalformedAppHash);
     }
     let mut app_hash = [0u8; 32];
     app_hash.copy_from_slice(&header.app_hash);
-
     let deposit = extract_deposit(
         &app_hash,
         cfg.chain_id.as_bytes(),
@@ -143,6 +140,18 @@ fn verify_deposit_core(
         proof,
     )
     .map_err(CorridorError::Proof)?;
+    check_trusting_claim(cfg, trusted, commit).map_err(CorridorError::Unanchored)?;
+    let total = set.total_power();
+    let claimed = crate::commit::claimed_power(commit, set).map_err(CorridorError::Commit)?;
+    if !crate::validator::has_two_thirds(claimed, total) {
+        return Err(CorridorError::Commit(CommitError::NotEnoughVotingPower {
+            signed: claimed,
+            total,
+        }));
+    }
+    check_trusting_commit(cfg, trusted, header, commit).map_err(CorridorError::Unanchored)?;
+    let signed_power =
+        verify_commit(cfg.chain_id, header, commit, set).map_err(CorridorError::Commit)?;
     Ok((deposit, signed_power))
 }
 
@@ -356,7 +365,7 @@ mod tests {
         assert_eq!(out.statement.event.recipient, [0x51u8; 32]);
         assert_eq!(out.event.source_chain, 16);
         assert_eq!(out.event.height, 18_500_000);
-        assert_eq!(out.signed_power, 100);
+        assert_eq!(out.signed_power, 75);
     }
 
     #[test]
@@ -797,8 +806,8 @@ mod tests {
         let a2 = keyed(201, 1000);
         let forged = ValidatorSet::new(vec![t1.info, t2.info, t3.info, t4.info, a1.info, a2.info]);
 
-        let proof = deposit_proof();
-        let app_hash = proof.calculate_root();
+        let (app_hash, proof) =
+            crate::proof::wrap_store_layer(deposit_proof(), COSMOS_HUB.bridge_store_name);
         let header = Header {
             version_block: 11,
             version_app: 0,

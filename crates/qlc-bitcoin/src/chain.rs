@@ -159,11 +159,14 @@ pub fn heavier<'a>(a: &'a VerifiedChain, b: &'a VerifiedChain) -> &'a VerifiedCh
     }
 }
 
-pub fn pinned_checkpoint(network: crate::params::Network) -> Option<Checkpoint> {
-    match network {
-        crate::params::Network::Bitcoin => None,
-        crate::params::Network::BitcoinCash => None,
-    }
+pub const PINNED_CHECKPOINTS: &[(crate::params::Network, u32, [u8; 32])] = &[];
+
+pub fn checkpoint_is_pinned(network: crate::params::Network, checkpoint: &Checkpoint) -> bool {
+    PINNED_CHECKPOINTS
+        .iter()
+        .any(|(pinned_network, height, hash)| {
+            *pinned_network == network && *height == checkpoint.height && *hash == checkpoint.hash
+        })
 }
 
 impl VerifiedChain {

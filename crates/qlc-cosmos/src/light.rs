@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::chain::ChainConfig;
-use crate::commit::{tally_signed_power, verify_commit, Commit, CommitError, Header};
+use crate::commit::{tally_signed_power_until, verify_commit, Commit, CommitError, Header};
 use crate::proto::Timestamp;
 use crate::validator::{overlap_meets, ValidatorSet};
 
@@ -13,6 +13,20 @@ pub struct TrustedState {
     pub header_hash: [u8; 32],
     pub validators: ValidatorSet,
     pub next_validators_hash: Vec<u8>,
+}
+
+pub const PINNED_TRUSTED_STATES: &[(&str, i64, [u8; 32], [u8; 32])] = &[];
+
+pub fn trusted_state_is_pinned(chain_id: &str, trusted: &TrustedState) -> bool {
+    let validators_hash = trusted.validators.hash();
+    PINNED_TRUSTED_STATES
+        .iter()
+        .any(|(chain, height, header_hash, pinned_validators)| {
+            *chain == chain_id
+                && *height == trusted.height
+                && *header_hash == trusted.header_hash
+                && *pinned_validators == validators_hash
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +111,29 @@ fn check_header(
     Ok(())
 }
 
+fn trusting_reach(cfg: &ChainConfig, trusted_total: u128) -> impl Fn(u128) -> bool {
+    let numerator = cfg.overlap_numerator as u128;
+    let denominator = cfg.overlap_denominator as u128;
+    move |power: u128| numerator > 0 && power * denominator > trusted_total * numerator
+}
+
+pub fn check_trusting_claim(
+    cfg: &ChainConfig,
+    trusted: &TrustedState,
+    new_commit: &Commit,
+) -> Result<(), LightError> {
+    let trusted_total = trusted.validators.total_power();
+    let claimed = crate::commit::claimed_power(new_commit, &trusted.validators)
+        .map_err(LightError::Commit)?;
+    if !trusting_reach(cfg, trusted_total)(claimed) {
+        return Err(LightError::InsufficientTrustedSignatures {
+            signed: claimed,
+            trusted_total,
+        });
+    }
+    Ok(())
+}
+
 pub fn check_trusting_commit(
     cfg: &ChainConfig,
     trusted: &TrustedState,
@@ -104,21 +141,16 @@ pub fn check_trusting_commit(
     new_commit: &Commit,
 ) -> Result<(), LightError> {
     let trusted_total = trusted.validators.total_power();
-    let reaches = |power: u128| {
-        cfg.overlap_numerator > 0
-            && power * (cfg.overlap_denominator as u128)
-                > trusted_total * (cfg.overlap_numerator as u128)
-    };
-    let claimed = crate::commit::claimed_power(new_commit, &trusted.validators)
-        .map_err(LightError::Commit)?;
-    if !reaches(claimed) {
-        return Err(LightError::InsufficientTrustedSignatures {
-            signed: claimed,
-            trusted_total,
-        });
-    }
-    let signed = tally_signed_power(cfg.chain_id, new_header, new_commit, &trusted.validators)
-        .map_err(LightError::Commit)?;
+    let reaches = trusting_reach(cfg, trusted_total);
+    check_trusting_claim(cfg, trusted, new_commit)?;
+    let signed = tally_signed_power_until(
+        cfg.chain_id,
+        new_header,
+        new_commit,
+        &trusted.validators,
+        &reaches,
+    )
+    .map_err(LightError::Commit)?;
     if reaches(signed) {
         Ok(())
     } else {

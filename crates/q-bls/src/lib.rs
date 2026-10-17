@@ -1,11 +1,48 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use blst::min_pk::{PublicKey, Signature};
 use blst::BLST_ERROR;
 use qlc_ethereum::bls::{BlsAggregateVerifier, BlsPubkey, BlsSignature};
 
 pub const ETH_SYNC_COMMITTEE_DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_";
+
+pub const VALIDATED_KEY_CACHE: usize = 4096;
+
+type KeyCache = Mutex<HashMap<[u8; 48], PublicKey>>;
+
+fn key_cache() -> &'static KeyCache {
+    static CACHE: OnceLock<KeyCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn validated_keys(pubkeys: &[BlsPubkey]) -> Option<Vec<PublicKey>> {
+    let mut keys: Vec<Option<PublicKey>> = {
+        let cache = key_cache().lock().unwrap_or_else(|e| e.into_inner());
+        pubkeys.iter().map(|pk| cache.get(&pk.0).copied()).collect()
+    };
+    let mut fresh = Vec::new();
+    for (slot, pubkey) in keys.iter_mut().zip(pubkeys) {
+        if slot.is_none() {
+            let key = PublicKey::key_validate(&pubkey.0).ok()?;
+            fresh.push((pubkey.0, key));
+            *slot = Some(key);
+        }
+    }
+    if !fresh.is_empty() {
+        let mut cache = key_cache().lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len().saturating_add(fresh.len()) > VALIDATED_KEY_CACHE {
+            cache.clear();
+        }
+        for (bytes, key) in fresh.into_iter().take(VALIDATED_KEY_CACHE) {
+            cache.insert(bytes, key);
+        }
+    }
+    keys.into_iter().collect()
+}
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Bls12381AggregateVerifier;
@@ -26,13 +63,9 @@ impl BlsAggregateVerifier for Bls12381AggregateVerifier {
         if pubkeys.is_empty() {
             return false;
         }
-        let mut keys = Vec::with_capacity(pubkeys.len());
-        for pubkey in pubkeys {
-            match PublicKey::key_validate(&pubkey.0) {
-                Ok(key) => keys.push(key),
-                Err(_) => return false,
-            }
-        }
+        let Some(keys) = validated_keys(pubkeys) else {
+            return false;
+        };
         let signature = match Signature::from_bytes(&signature.0) {
             Ok(signature) => signature,
             Err(_) => return false,

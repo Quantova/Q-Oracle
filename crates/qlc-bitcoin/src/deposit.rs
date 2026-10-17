@@ -39,15 +39,12 @@ pub fn verify_trustless_deposit(
     coinbase: &CoinbaseProof<'_>,
     deposit_script: &[u8],
 ) -> Result<TrustlessDeposit, SpvError> {
-    let pinned;
-    let anchor = if params.requires_pinned_checkpoint {
-        pinned =
-            crate::chain::pinned_checkpoint(params.network).ok_or(SpvError::CheckpointNotArmed)?;
-        &pinned
-    } else {
-        checkpoint
-    };
-    chain.anchored_to(anchor)?;
+    if params.requires_pinned_checkpoint
+        && !crate::chain::checkpoint_is_pinned(params.network, checkpoint)
+    {
+        return Err(SpvError::CheckpointNotArmed);
+    }
+    chain.anchored_to(checkpoint)?;
     let first = Transaction::parse(coinbase.raw_tx)?;
     if !first.is_coinbase() || coinbase.branch.iter().any(|step| step.sibling_on_left) {
         return Err(SpvError::TransactionMismatch);

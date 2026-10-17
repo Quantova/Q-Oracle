@@ -154,6 +154,19 @@ pub fn tally_signed_power(
     commit: &Commit,
     set: &ValidatorSet,
 ) -> Result<u128, CommitError> {
+    let total = set.total_power();
+    tally_signed_power_until(chain_id, header, commit, set, |power| {
+        has_two_thirds(power, total)
+    })
+}
+
+pub fn tally_signed_power_until(
+    chain_id: &str,
+    header: &Header,
+    commit: &Commit,
+    set: &ValidatorSet,
+    reaches: impl Fn(u128) -> bool,
+) -> Result<u128, CommitError> {
     if set.validators.len() > crate::validator::MAX_VALIDATORS
         || commit.signatures.len() > crate::validator::MAX_VALIDATORS
     {
@@ -173,17 +186,8 @@ pub fn tally_signed_power(
     for v in &set.validators {
         by_address.entry(v.address()).or_insert(v);
     }
-    let mut signed: u128 = 0;
-    let mut counted: HashSet<[u8; 20]> = HashSet::new();
-    let total = set.total_power();
-    let mut unresolved: u128 = commit
-        .signatures
-        .iter()
-        .filter(|s| s.flag == BlockIdFlag::Commit)
-        .filter_map(|s| by_address.get(&s.validator_address))
-        .map(|v| v.voting_power as u128)
-        .fold(0u128, u128::saturating_add);
-
+    let mut counted: HashSet<[u8; 20]> = HashSet::with_capacity(commit.signatures.len());
+    let mut unresolved: u128 = 0;
     for sig in &commit.signatures {
         if sig.flag != BlockIdFlag::Commit {
             continue;
@@ -191,14 +195,27 @@ pub fn tally_signed_power(
         if !counted.insert(sig.validator_address) {
             return Err(CommitError::DuplicateSigner);
         }
+        if sig.signature.len() != 64 {
+            continue;
+        }
+        if let Some(v) = by_address.get(&sig.validator_address) {
+            unresolved = unresolved.saturating_add(v.voting_power as u128);
+        }
+    }
+
+    let mut signed: u128 = 0;
+    for sig in &commit.signatures {
+        if reaches(signed) || !reaches(signed.saturating_add(unresolved)) {
+            break;
+        }
+        if sig.flag != BlockIdFlag::Commit || sig.signature.len() != 64 {
+            continue;
+        }
         let validator = match by_address.get(&sig.validator_address) {
             Some(v) => *v,
             None => continue,
         };
         unresolved = unresolved.saturating_sub(validator.voting_power as u128);
-        if sig.signature.len() != 64 {
-            continue;
-        }
         let vote = CanonicalVote {
             vote_type: PRECOMMIT_TYPE,
             height: commit.height,
@@ -212,9 +229,6 @@ pub fn tally_signed_power(
         signature.copy_from_slice(&sig.signature);
         if verify(&validator.pubkey, &message, &signature) {
             signed += validator.voting_power as u128;
-        }
-        if !has_two_thirds(signed.saturating_add(unresolved), total) {
-            break;
         }
     }
 
@@ -338,7 +352,7 @@ mod tests {
     fn a_full_commit_reaches_the_total_power() {
         let vs = vec![keyed(1, 25), keyed(2, 25), keyed(3, 25), keyed(4, 25)];
         let (header, commit, set) = build(&vs, &[0, 1, 2, 3]);
-        assert_eq!(verify_commit(CHAIN_ID, &header, &commit, &set), Ok(100));
+        assert_eq!(verify_commit(CHAIN_ID, &header, &commit, &set), Ok(75));
     }
 
     #[test]

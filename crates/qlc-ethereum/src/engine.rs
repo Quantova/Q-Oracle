@@ -4,7 +4,8 @@
 use crate::beacon::{
     compute_domain, compute_signing_root, current_sync_committee_layout, finalized_root_layout,
     next_sync_committee_layout, participating_pubkeys, BeaconBlockHeader, SyncAggregate,
-    SyncCommittee, DOMAIN_SYNC_COMMITTEE, EXECUTION_RECEIPTS_DEPTH, EXECUTION_RECEIPTS_INDEX,
+    SyncCommittee, DOMAIN_SYNC_COMMITTEE, EXECUTION_BLOCK_NUMBER_INDEX, EXECUTION_RECEIPTS_DEPTH,
+    EXECUTION_RECEIPTS_INDEX,
 };
 use crate::bls::BlsAggregateVerifier;
 use crate::config::EvmChainConfig;
@@ -47,6 +48,7 @@ pub enum EthError {
     BadExecutionProof,
     BadSyncCommitteeProof,
     UntrustedCheckpoint,
+    UnpinnedChainConfig,
     BadSignature,
     MissingReceipt,
     CapExceeded {
@@ -63,6 +65,7 @@ pub struct ExecutionCommit {
     pub receipts_root: [u8; 32],
     pub block_number: u64,
     pub execution_branch: Vec<[u8; 32]>,
+    pub block_number_branch: Vec<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +186,24 @@ fn root_is_pinned(chain_id: u64, root: &[u8; 32]) -> bool {
             .any(|(chain, pinned)| *chain == chain_id && pinned == root)
 }
 
+fn consensus_is_pinned(config: &EvmChainConfig) -> bool {
+    if cfg!(any(test, feature = "test-util")) {
+        return true;
+    }
+    crate::config::all_presets().iter().any(|preset| {
+        preset.chain_id == config.chain_id
+            && preset.corridor_id == config.corridor_id
+            && preset.consensus == config.consensus
+            && preset.genesis_validators_root == config.genesis_validators_root
+            && preset.forks == config.forks
+            && preset.sync_committee_size == config.sync_committee_size
+            && preset.slots_per_epoch == config.slots_per_epoch
+            && preset.epochs_per_sync_committee_period == config.epochs_per_sync_committee_period
+            && preset.electra_epoch == config.electra_epoch
+            && config.finality_depth >= preset.finality_depth
+    })
+}
+
 impl LightClientStore {
     pub fn config(&self) -> &EvmChainConfig {
         &self.config
@@ -231,6 +252,9 @@ pub fn bootstrap(
 ) -> Result<LightClientStore, EthError> {
     if !config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
+    }
+    if !consensus_is_pinned(&config) {
+        return Err(EthError::UnpinnedChainConfig);
     }
     if !root_is_pinned(config.chain_id, &trusted_block_root)
         || checkpoint_header.hash_tree_root() != trusted_block_root
@@ -312,13 +336,11 @@ fn select_committee(
     }
 }
 
-fn verify_sync_aggregate(
-    store: &LightClientStore,
-    attested_header: &BeaconBlockHeader,
+fn check_participation<'a>(
+    store: &'a LightClientStore,
     sync_aggregate: &SyncAggregate,
     signature_slot: u64,
-    verifier: &dyn BlsAggregateVerifier,
-) -> Result<(), EthError> {
+) -> Result<&'a SyncCommittee, EthError> {
     let committee = select_committee(store, signature_slot)?;
     let expected = store.config.sync_committee_size;
     if committee.pubkeys.len() != expected || sync_aggregate.participation.len() != expected {
@@ -335,6 +357,17 @@ fn verify_sync_aggregate(
             needed,
         });
     }
+    Ok(committee)
+}
+
+fn verify_sync_aggregate(
+    store: &LightClientStore,
+    committee: &SyncCommittee,
+    attested_header: &BeaconBlockHeader,
+    sync_aggregate: &SyncAggregate,
+    signature_slot: u64,
+    verifier: &dyn BlsAggregateVerifier,
+) -> Result<(), EthError> {
     let fork_version = store
         .config
         .fork_version_at_slot(signature_slot.saturating_sub(1));
@@ -421,6 +454,12 @@ fn verify_execution(
         EXECUTION_RECEIPTS_DEPTH,
         EXECUTION_RECEIPTS_INDEX,
         &block.body_root,
+    ) || !ssz::is_valid_merkle_branch(
+        &ssz::uint64_root(execution.block_number),
+        &execution.block_number_branch,
+        EXECUTION_RECEIPTS_DEPTH,
+        EXECUTION_BLOCK_NUMBER_INDEX,
+        &block.body_root,
     ) {
         return Err(EthError::BadExecutionProof);
     }
@@ -450,13 +489,7 @@ fn verify_deposit_core(
         update.attested_header.slot,
         update.finalized_header.slot,
     )?;
-    verify_sync_aggregate(
-        store,
-        &update.attested_header,
-        &update.sync_aggregate,
-        update.signature_slot,
-        verifier,
-    )?;
+    let committee = check_participation(store, &update.sync_aggregate, update.signature_slot)?;
     let electra = store.config.is_electra_at_slot(update.attested_header.slot);
     verify_finality(update, electra)?;
     let block = if deposit.historical_branch.is_empty() {
@@ -491,20 +524,21 @@ fn verify_deposit_core(
             cap: store.config.max_deposit_base_units,
         });
     }
-
-    if update.execution.block_number != block.slot {
-        return Err(EthError::InconsistentSlots {
-            signature_slot: update.execution.block_number,
-            attested_slot: block.slot,
-        });
-    }
+    verify_sync_aggregate(
+        store,
+        committee,
+        &update.attested_header,
+        &update.sync_aggregate,
+        update.signature_slot,
+        verifier,
+    )?;
     let anchor = block.hash_tree_root();
     let source_ref = deposit_source_ref(&anchor, &key, raw.log_index);
     Ok(CoreDeposit {
         anchor,
         source_ref,
         raw,
-        block_number: block.slot,
+        block_number: update.execution.block_number,
     })
 }
 
@@ -598,13 +632,7 @@ pub fn apply_sync_committee_update(
     if attested_period < store.period || attested_period > reach {
         return Err(EthError::WrongPeriod);
     }
-    verify_sync_aggregate(
-        store,
-        &update.attested_header,
-        &update.sync_aggregate,
-        update.signature_slot,
-        verifier,
-    )?;
+    let committee = check_participation(store, &update.sync_aggregate, update.signature_slot)?;
     let electra = store.config.is_electra_at_slot(update.attested_header.slot);
     let (fin_index, fin_depth) = finalized_root_layout(electra);
     if !ssz::is_valid_merkle_branch(
@@ -633,6 +661,14 @@ pub fn apply_sync_committee_update(
     ) {
         return Err(EthError::BadSyncCommitteeProof);
     }
+    verify_sync_aggregate(
+        store,
+        committee,
+        &update.attested_header,
+        &update.sync_aggregate,
+        update.signature_slot,
+        verifier,
+    )?;
     if attested_period == store.period {
         store.next_sync_committee = Some(update.next_sync_committee.clone());
     }
@@ -640,6 +676,24 @@ pub fn apply_sync_committee_update(
         store.finalized_header = update.finalized_header;
     }
     Ok(())
+}
+
+pub fn rotate_sync_committee(
+    store: &mut LightClientStore,
+    update: &SyncCommitteeUpdate,
+    verifier: &dyn BlsAggregateVerifier,
+) -> Result<u64, EthError> {
+    let mut next = store.clone();
+    apply_sync_committee_update(&mut next, update, verifier)?;
+    let attested_period = next
+        .config
+        .sync_committee_period(update.attested_header.slot);
+    while advance_period(&mut next).is_ok() {}
+    if attested_period == next.period && next.next_sync_committee.is_none() {
+        next.next_sync_committee = Some(update.next_sync_committee.clone());
+    }
+    *store = next;
+    Ok(store.period)
 }
 
 pub fn advance_period(store: &mut LightClientStore) -> Result<(), EthError> {
@@ -674,6 +728,8 @@ mod tests {
     use crate::receipt::fixtures::deposit_receipt;
 
     const PERIOD: u64 = 870;
+
+    const EXECUTION_BLOCK_NUMBER: u64 = 21_000_000;
     const PERIOD_SLOTS: u64 = 32 * 256;
     const SIG_SLOT: u64 = PERIOD * PERIOD_SLOTS + 100;
 
@@ -819,13 +875,17 @@ mod tests {
         let receipts_root = builder::root_hash(&trie);
         let receipt_proof = builder::prove(&trie, &entries[3].0);
 
-        let execution_branch: Vec<[u8; 32]> = (0..EXECUTION_RECEIPTS_DEPTH)
-            .map(|i| [0xe0 + i as u8; 32])
-            .collect();
-        let body_root = ssz::merkle_root_from_branch(
-            &receipts_root,
-            &execution_branch,
-            EXECUTION_RECEIPTS_INDEX,
+        let (body_root, execution_branch, block_number_branch) = ssz::two_leaf_tree(
+            (
+                receipts_root,
+                EXECUTION_RECEIPTS_INDEX,
+                EXECUTION_RECEIPTS_DEPTH,
+            ),
+            (
+                ssz::uint64_root(EXECUTION_BLOCK_NUMBER),
+                crate::beacon::EXECUTION_BLOCK_NUMBER_INDEX,
+                EXECUTION_RECEIPTS_DEPTH,
+            ),
         );
 
         let finalized_header = BeaconBlockHeader {
@@ -872,8 +932,9 @@ mod tests {
             signature_slot: SIG_SLOT,
             execution: ExecutionCommit {
                 receipts_root,
-                block_number: PERIOD * PERIOD_SLOTS + 40,
+                block_number: EXECUTION_BLOCK_NUMBER,
                 execution_branch,
+                block_number_branch,
             },
         };
 
@@ -1374,6 +1435,41 @@ mod tests {
     }
 
     #[test]
+    fn rotation_carries_the_store_across_periods_and_learns_each_next_committee() {
+        let (current, _) = committee(0xaa);
+        let (next, _) = committee(0xbb);
+        let (after, _) = committee(0xcc);
+        let mut store = committee_store(current.clone());
+        let learn = committee_update(&current, &next, PERIOD * PERIOD_SLOTS + 40);
+        assert_eq!(
+            rotate_sync_committee(&mut store, &learn, &HashCommitmentBls),
+            Ok(PERIOD)
+        );
+        assert_eq!(store.next_sync_committee, Some(next.clone()));
+        let crossing =
+            committee_update_in(&next, &after, (PERIOD + 1) * PERIOD_SLOTS + 40, PERIOD + 1);
+        assert_eq!(
+            rotate_sync_committee(&mut store, &crossing, &HashCommitmentBls),
+            Ok(PERIOD + 1)
+        );
+        assert_eq!(store.current_sync_committee, next);
+        assert_eq!(store.next_sync_committee, Some(after));
+        let before = store.clone();
+        let mut forged = committee_update_in(
+            &next,
+            &current,
+            (PERIOD + 1) * PERIOD_SLOTS + 50,
+            PERIOD + 1,
+        );
+        forged.sync_aggregate.signature.0[0] ^= 0xff;
+        assert_eq!(
+            rotate_sync_committee(&mut store, &forged, &HashCommitmentBls),
+            Err(EthError::BadSignature)
+        );
+        assert_eq!(store, before);
+    }
+
+    #[test]
     fn a_next_committee_is_learned_only_behind_a_finalized_header_of_the_same_period() {
         let (current, _) = committee(0xaa);
         let (next, _) = committee(0xbb);
@@ -1544,7 +1640,7 @@ mod tests {
         assert_eq!(proven.amount, f.amount);
         assert_eq!(proven.recipient, f.recipient);
         assert_eq!(proven.asset_id, f.asset_id);
-        assert_eq!(proven.block_number, PERIOD * PERIOD_SLOTS + 40);
+        assert_eq!(proven.block_number, EXECUTION_BLOCK_NUMBER);
         assert_eq!(proven.finality_depth, 64);
         assert_ne!(proven.source_ref, [0u8; 32]);
     }

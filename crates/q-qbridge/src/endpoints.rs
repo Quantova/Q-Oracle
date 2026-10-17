@@ -6,8 +6,8 @@ use q_assets::Network;
 use q_codec::BridgeFact;
 use q_federated::{
     admit, admit_bitcoin_trustless, admit_cosmos_trustless, admit_ethereum_trustless, corridor_for,
-    install_all, install_pool, Corridor, FederatedError, PoolError, PoolRegistry, PoolRequest,
-    PoolSpec, SourceRegistry, Tier, TrustlessError, TrustlessMint,
+    install_all, install_pool, precheck_trustless, Corridor, FederatedError, PoolError,
+    PoolRegistry, PoolRequest, PoolSpec, SourceRegistry, Tier, TrustlessError, TrustlessMint,
 };
 use q_gateway::{Gateway, GatewayError, MintReceipt};
 use qlc_bitcoin::{
@@ -21,6 +21,7 @@ use qlc_cosmos::validator::ValidatorSet;
 use qlc_cosmos::{ChainConfig, CorridorError};
 use qlc_ethereum::{
     DepositProof as EthDepositProof, EthError, LightClientStore, LightClientUpdate,
+    SyncCommitteeUpdate,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +141,7 @@ pub enum Request {
     ResumeSource(ResumeSourceRequest),
     EmergencyFreeze(EmergencyFreezeRequest),
     WatchdogFreeze(WatchdogFreezeRequest),
+    RotateEthereumCommittee(SyncCommitteeUpdate),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +200,7 @@ pub enum ApiError {
     CorridorConfigLocked,
     ProofTierMismatch,
     NoAnchor(u32),
+    AnchorChanged(u32),
     BitcoinSpv(SpvError),
     EthereumVerify(EthError),
     CosmosVerify(CorridorError),
@@ -214,6 +217,7 @@ pub enum Response {
     SourcePaused { source_chain: u32, fork_depth: u32 },
     SourceResumed { source_chain: u32 },
     Frozen { until_height: u64 },
+    CommitteeRotated { period: u64, finalized_slot: u64 },
     Error(ApiError),
 }
 
@@ -371,7 +375,49 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
                 Err(err) => Response::Error(ApiError::Gateway(err)),
             }
         }
+        Request::RotateEthereumCommittee(update) => {
+            let rotated = state
+                .ethereum_store
+                .as_ref()
+                .ok_or(ApiError::NoAnchor(Network::Ethereum.id()))
+                .and_then(|store| rotate_ethereum_store(store, &update));
+            match rotated {
+                Ok(store) => install_ethereum_store(state, store),
+                Err(err) => Response::Error(err),
+            }
+        }
     }
+}
+
+pub fn rotate_ethereum_store(
+    store: &LightClientStore,
+    update: &SyncCommitteeUpdate,
+) -> Result<LightClientStore, ApiError> {
+    let mut next = store.clone();
+    let verifier = q_bls::Bls12381AggregateVerifier::new();
+    qlc_ethereum::rotate_sync_committee(&mut next, update, &verifier)
+        .map_err(ApiError::EthereumVerify)?;
+    Ok(next)
+}
+
+pub fn install_ethereum_store(state: &mut BridgeState, store: LightClientStore) -> Response {
+    let rotated = Response::CommitteeRotated {
+        period: store.period(),
+        finalized_slot: store.finalized_header().slot,
+    };
+    state.ethereum_store = Some(store);
+    rotated
+}
+
+pub fn install_ethereum_rotation(
+    state: &mut BridgeState,
+    before: &LightClientStore,
+    after: LightClientStore,
+) -> Response {
+    if state.ethereum_store.as_ref() != Some(before) {
+        return Response::Error(ApiError::AnchorChanged(Network::Ethereum.id()));
+    }
+    install_ethereum_store(state, after)
 }
 
 pub struct DepositPlan {
@@ -428,44 +474,88 @@ fn cosmos_wall_now() -> qlc_cosmos::proto::Timestamp {
     }
 }
 
-pub fn verify_deposit(
+pub struct PreparedDeposit {
+    corridor: Corridor,
+    check: PreparedCheck,
+}
+
+enum PreparedCheck {
+    Federated(AttestationEnvelope),
+    Bitcoin(BitcoinAnchor),
+    Ethereum(Box<LightClientStore>),
+    Cosmos(Box<CosmosAnchor>),
+}
+
+impl PreparedDeposit {
+    pub fn needs_proof_verification(&self) -> bool {
+        !matches!(self.check, PreparedCheck::Federated(_))
+    }
+}
+
+fn bitcoin_anchor_armed(anchor: &BitcoinAnchor) -> bool {
+    !anchor.checkpoint.min_work.is_zero()
+        && !anchor.bridge_script.is_empty()
+        && (cfg!(any(test, feature = "test-util"))
+            || anchor.params == qlc_bitcoin::network_params(anchor.params.network))
+}
+
+pub fn prepare_deposit(
     state: &BridgeState,
     request: &DepositRequest,
-) -> Result<DepositPlan, ApiError> {
+) -> Result<PreparedDeposit, ApiError> {
     let (tier, network, corridor) = resolve_corridor(state, &request.proof)?;
-    let kind = match (tier, network, &request.proof) {
+    let check = match (tier, network, &request.proof) {
         (Tier::Federated, _, DepositProof::Federated(env)) => {
             state
                 .gateway
                 .precheck_deposit(env)
                 .map_err(ApiError::Gateway)?;
-            PlanKind::Federated(env.clone())
+            PreparedCheck::Federated(env.clone())
         }
-        (Tier::ProofBacked, Network::Bitcoin, DepositProof::Bitcoin { material, fact }) => {
-            let (params, checkpoint, bridge_script) = {
-                let anchor = state
-                    .bitcoin_anchor
-                    .as_ref()
-                    .ok_or(ApiError::NoAnchor(Network::Bitcoin.id()))?;
-                if anchor.checkpoint.min_work.is_zero()
-                    || anchor.bridge_script.is_empty()
-                    || !(cfg!(any(test, feature = "test-util"))
-                        || anchor.params == qlc_bitcoin::network_params(anchor.params.network))
-                {
-                    return Err(ApiError::NoAnchor(Network::Bitcoin.id()));
-                }
-                (
-                    anchor.params,
-                    anchor.checkpoint.clone(),
-                    anchor.bridge_script.clone(),
-                )
-            };
-            let chain = verify_chain(&material.headers, material.start_height, &params)
+        (Tier::ProofBacked, Network::Bitcoin, DepositProof::Bitcoin { fact, .. }) => {
+            let anchor = state
+                .bitcoin_anchor
+                .as_ref()
+                .filter(|anchor| bitcoin_anchor_armed(anchor))
+                .ok_or(ApiError::NoAnchor(Network::Bitcoin.id()))?;
+            precheck_trustless(&state.gateway, fact).map_err(ApiError::Trustless)?;
+            PreparedCheck::Bitcoin(anchor.clone())
+        }
+        (Tier::ProofBacked, Network::Ethereum, DepositProof::Ethereum { fact, .. }) => {
+            let store = state
+                .ethereum_store
+                .as_ref()
+                .ok_or(ApiError::NoAnchor(Network::Ethereum.id()))?;
+            precheck_trustless(&state.gateway, fact).map_err(ApiError::Trustless)?;
+            PreparedCheck::Ethereum(Box::new(store.clone()))
+        }
+        (Tier::ProofBacked, Network::Cosmos, DepositProof::Cosmos { fact, .. }) => {
+            let anchor = state
+                .cosmos_anchor
+                .as_ref()
+                .ok_or(ApiError::NoAnchor(Network::Cosmos.id()))?;
+            precheck_trustless(&state.gateway, fact).map_err(ApiError::Trustless)?;
+            PreparedCheck::Cosmos(Box::new(anchor.clone()))
+        }
+        _ => return Err(ApiError::ProofTierMismatch),
+    };
+    Ok(PreparedDeposit { corridor, check })
+}
+
+pub fn verify_prepared(
+    prepared: PreparedDeposit,
+    request: &DepositRequest,
+) -> Result<DepositPlan, ApiError> {
+    let PreparedDeposit { corridor, check } = prepared;
+    let kind = match (check, &request.proof) {
+        (PreparedCheck::Federated(env), DepositProof::Federated(_)) => PlanKind::Federated(env),
+        (PreparedCheck::Bitcoin(anchor), DepositProof::Bitcoin { material, fact }) => {
+            let chain = verify_chain(&material.headers, material.start_height, &anchor.params)
                 .map_err(ApiError::BitcoinSpv)?;
             let proven = verify_trustless_deposit(
                 &chain,
-                &params,
-                &checkpoint,
+                &anchor.params,
+                &anchor.checkpoint,
                 material.deposit_height,
                 &material.branch,
                 &material.raw_tx,
@@ -473,7 +563,7 @@ pub fn verify_deposit(
                     raw_tx: &material.coinbase_tx,
                     branch: &material.coinbase_branch,
                 },
-                &bridge_script,
+                &anchor.bridge_script,
             )
             .map_err(ApiError::BitcoinSpv)?;
             PlanKind::Bitcoin {
@@ -482,20 +572,15 @@ pub fn verify_deposit(
             }
         }
         (
-            Tier::ProofBacked,
-            Network::Ethereum,
+            PreparedCheck::Ethereum(store),
             DepositProof::Ethereum {
                 update,
                 deposit,
                 fact,
             },
         ) => {
-            let store = state
-                .ethereum_store
-                .as_ref()
-                .ok_or(ApiError::NoAnchor(Network::Ethereum.id()))?;
             let verifier = q_bls::Bls12381AggregateVerifier::new();
-            let proven = qlc_ethereum::verify_trustless_deposit(store, update, deposit, &verifier)
+            let proven = qlc_ethereum::verify_trustless_deposit(&store, update, deposit, &verifier)
                 .map_err(ApiError::EthereumVerify)?;
             PlanKind::Ethereum {
                 proven,
@@ -503,8 +588,7 @@ pub fn verify_deposit(
             }
         }
         (
-            Tier::ProofBacked,
-            Network::Cosmos,
+            PreparedCheck::Cosmos(anchor),
             DepositProof::Cosmos {
                 header,
                 commit,
@@ -513,10 +597,6 @@ pub fn verify_deposit(
                 fact,
             },
         ) => {
-            let anchor = state
-                .cosmos_anchor
-                .as_ref()
-                .ok_or(ApiError::NoAnchor(Network::Cosmos.id()))?;
             let proven = qlc_cosmos::verify_trustless_deposit(
                 &anchor.config,
                 &anchor.trusted,
@@ -535,6 +615,13 @@ pub fn verify_deposit(
         _ => return Err(ApiError::ProofTierMismatch),
     };
     Ok(DepositPlan { corridor, kind })
+}
+
+pub fn verify_deposit(
+    state: &BridgeState,
+    request: &DepositRequest,
+) -> Result<DepositPlan, ApiError> {
+    verify_prepared(prepare_deposit(state, request)?, request)
 }
 
 pub fn commit_deposit(
@@ -1545,6 +1632,8 @@ mod tests {
     use qlc_ethereum::{bootstrap, rlp, ssz, ExecutionCommit};
 
     const ETH_PERIOD: u64 = 870;
+
+    const EXECUTION_BLOCK_NUMBER: u64 = 21_000_000;
     const ETH_PERIOD_SLOTS: u64 = 32 * 256;
     const ETH_SIG_SLOT: u64 = ETH_PERIOD * ETH_PERIOD_SLOTS + 100;
 
@@ -1615,20 +1704,6 @@ mod tests {
         }
     }
 
-    fn eth_bootstrapped_store(seed: u8) -> LightClientStore {
-        let (committee, _) = eth_committee(seed);
-        let checkpoint = eth_checkpoint(&committee);
-        bootstrap(
-            eth_config::ethereum(),
-            ETH_PERIOD,
-            checkpoint.hash_tree_root(),
-            checkpoint,
-            committee,
-            eth_current_committee_branch(),
-        )
-        .unwrap()
-    }
-
     fn ethereum_fixture(
         asset_id: [u8; 16],
         recipient: [u8; 32],
@@ -1669,13 +1744,17 @@ mod tests {
         let receipts_root = mpt_builder::root_hash(&trie);
         let receipt_proof = mpt_builder::prove(&trie, &entries[3].0);
 
-        let execution_branch: Vec<[u8; 32]> = (0..EXECUTION_RECEIPTS_DEPTH)
-            .map(|i| [0xe0 + i as u8; 32])
-            .collect();
-        let body_root = ssz::merkle_root_from_branch(
-            &receipts_root,
-            &execution_branch,
-            EXECUTION_RECEIPTS_INDEX,
+        let (body_root, execution_branch, block_number_branch) = ssz::two_leaf_tree(
+            (
+                receipts_root,
+                EXECUTION_RECEIPTS_INDEX,
+                EXECUTION_RECEIPTS_DEPTH,
+            ),
+            (
+                ssz::uint64_root(EXECUTION_BLOCK_NUMBER),
+                qlc_ethereum::beacon::EXECUTION_BLOCK_NUMBER_INDEX,
+                EXECUTION_RECEIPTS_DEPTH,
+            ),
         );
 
         let finalized_header = BeaconBlockHeader {
@@ -1732,8 +1811,9 @@ mod tests {
             signature_slot: ETH_SIG_SLOT,
             execution: ExecutionCommit {
                 receipts_root,
-                block_number: ETH_PERIOD * ETH_PERIOD_SLOTS + 40,
+                block_number: EXECUTION_BLOCK_NUMBER,
                 execution_branch,
+                block_number_branch,
             },
         };
         let deposit = EthDepositProof {
@@ -1827,8 +1907,19 @@ mod tests {
         let mut state = empty_state(0);
         let view = ethereum_pool(&mut state);
         let recipient = [0x5cu8; 32];
-        let (_store, update, deposit) = ethereum_fixture(view.asset_id, recipient, 250_000);
-        state.set_ethereum_anchor(eth_bootstrapped_store(0x22));
+        let (store, update, deposit) = ethereum_fixture(view.asset_id, recipient, 250_000);
+        let (foreign, _) = eth_committee(0x22);
+        let checkpoint = eth_checkpoint(&foreign);
+        let foreign_store = bootstrap(
+            store.config().clone(),
+            ETH_PERIOD,
+            checkpoint.hash_tree_root(),
+            checkpoint,
+            foreign,
+            eth_current_committee_branch(),
+        )
+        .unwrap();
+        state.set_ethereum_anchor(foreign_store);
         let fact = ethereum_fact(view.asset_id, [0x77u8; 32], 250_000, recipient);
         let response = handle(
             &mut state,

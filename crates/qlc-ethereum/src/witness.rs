@@ -86,6 +86,8 @@ mod tests {
     use crate::ssz;
 
     const PERIOD: u64 = 870;
+
+    const EXECUTION_BLOCK_NUMBER: u64 = 21_000_000;
     const PERIOD_SLOTS: u64 = 32 * 256;
     const SIG_SLOT: u64 = PERIOD * PERIOD_SLOTS + 100;
 
@@ -178,13 +180,17 @@ mod tests {
         let receipts_root = builder::root_hash(&trie);
         let receipt_proof = builder::prove(&trie, &entries[3].0);
 
-        let execution_branch: Vec<[u8; 32]> = (0..EXECUTION_RECEIPTS_DEPTH)
-            .map(|i| [0xe0 + i as u8; 32])
-            .collect();
-        let body_root = ssz::merkle_root_from_branch(
-            &receipts_root,
-            &execution_branch,
-            EXECUTION_RECEIPTS_INDEX,
+        let (body_root, execution_branch, block_number_branch) = ssz::two_leaf_tree(
+            (
+                receipts_root,
+                EXECUTION_RECEIPTS_INDEX,
+                EXECUTION_RECEIPTS_DEPTH,
+            ),
+            (
+                ssz::uint64_root(EXECUTION_BLOCK_NUMBER),
+                crate::beacon::EXECUTION_BLOCK_NUMBER_INDEX,
+                EXECUTION_RECEIPTS_DEPTH,
+            ),
         );
 
         let finalized_header = BeaconBlockHeader {
@@ -228,8 +234,9 @@ mod tests {
             signature_slot: SIG_SLOT,
             execution: ExecutionCommit {
                 receipts_root,
-                block_number: PERIOD * PERIOD_SLOTS + 40,
+                block_number: EXECUTION_BLOCK_NUMBER,
                 execution_branch,
+                block_number_branch,
             },
         };
 

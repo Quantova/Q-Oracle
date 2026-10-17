@@ -22,11 +22,14 @@ use qlc_cosmos::proof::{ExistenceProof, InnerOp, LeafOp, ProofError};
 use qlc_cosmos::proto::{BlockId, Timestamp};
 use qlc_cosmos::validator::{ValidatorInfo, ValidatorSet};
 use qlc_cosmos::CorridorError;
-use qlc_ethereum::beacon::{BeaconBlockHeader, SyncAggregate};
-use qlc_ethereum::bls::BlsSignature;
+use qlc_ethereum::beacon::{BeaconBlockHeader, SyncAggregate, SyncCommittee};
+use qlc_ethereum::bls::{BlsPubkey, BlsSignature};
 use qlc_ethereum::mpt::MptError;
 use qlc_ethereum::receipt::ReceiptError;
-use qlc_ethereum::{DepositProof as EthDepositProof, EthError, ExecutionCommit, LightClientUpdate};
+use qlc_ethereum::{
+    DepositProof as EthDepositProof, EthError, ExecutionCommit, LightClientUpdate,
+    SyncCommitteeUpdate,
+};
 
 use crate::json::{from_hex, object, to_hex, Json};
 
@@ -81,11 +84,11 @@ impl WireError {
     }
 }
 
-fn field<'a>(j: &'a Json, key: &'static str) -> Result<&'a Json, WireError> {
+pub(crate) fn field<'a>(j: &'a Json, key: &'static str) -> Result<&'a Json, WireError> {
     j.get(key).ok_or(WireError::Missing(key))
 }
 
-fn as_str<'a>(j: &'a Json, name: &'static str) -> Result<&'a str, WireError> {
+pub(crate) fn as_str<'a>(j: &'a Json, name: &'static str) -> Result<&'a str, WireError> {
     j.as_str().ok_or(WireError::BadType(name))
 }
 
@@ -93,11 +96,11 @@ fn as_bool(j: &Json, name: &'static str) -> Result<bool, WireError> {
     j.as_bool().ok_or(WireError::BadType(name))
 }
 
-fn as_u64(j: &Json, name: &'static str) -> Result<u64, WireError> {
+pub(crate) fn as_u64(j: &Json, name: &'static str) -> Result<u64, WireError> {
     j.as_u64().ok_or(WireError::BadType(name))
 }
 
-fn as_u32(j: &Json, name: &'static str) -> Result<u32, WireError> {
+pub(crate) fn as_u32(j: &Json, name: &'static str) -> Result<u32, WireError> {
     let n = as_u64(j, name)?;
     u32::try_from(n).map_err(|_| WireError::BadNumber(name))
 }
@@ -111,7 +114,7 @@ fn as_usize(j: &Json, name: &'static str) -> Result<usize, WireError> {
     usize::try_from(as_u64(j, name)?).map_err(|_| WireError::BadNumber(name))
 }
 
-fn as_i64(j: &Json, name: &'static str) -> Result<i64, WireError> {
+pub(crate) fn as_i64(j: &Json, name: &'static str) -> Result<i64, WireError> {
     i64::try_from(as_u64(j, name)?).map_err(|_| WireError::BadNumber(name))
 }
 
@@ -119,7 +122,7 @@ fn as_i32(j: &Json, name: &'static str) -> Result<i32, WireError> {
     i32::try_from(as_u64(j, name)?).map_err(|_| WireError::BadNumber(name))
 }
 
-fn as_u128(j: &Json, name: &'static str) -> Result<u128, WireError> {
+pub(crate) fn as_u128(j: &Json, name: &'static str) -> Result<u128, WireError> {
     match j {
         Json::Str(s) => s.parse::<u128>().map_err(|_| WireError::BadNumber(name)),
         Json::Int(n) => Ok(*n as u128),
@@ -127,11 +130,14 @@ fn as_u128(j: &Json, name: &'static str) -> Result<u128, WireError> {
     }
 }
 
-fn as_hex(j: &Json, name: &'static str) -> Result<Vec<u8>, WireError> {
+pub(crate) fn as_hex(j: &Json, name: &'static str) -> Result<Vec<u8>, WireError> {
     from_hex(as_str(j, name)?).map_err(|_| WireError::BadHex(name))
 }
 
-fn hex_array<const N: usize>(j: &Json, name: &'static str) -> Result<[u8; N], WireError> {
+pub(crate) fn hex_array<const N: usize>(
+    j: &Json,
+    name: &'static str,
+) -> Result<[u8; N], WireError> {
     let bytes = as_hex(j, name)?;
     if bytes.len() != N {
         return Err(WireError::BadLen {
@@ -192,6 +198,7 @@ pub fn method_of(req: &Request) -> &'static str {
         Request::ResumeSource(_) => "resume_source",
         Request::EmergencyFreeze(_) => "emergency_freeze",
         Request::WatchdogFreeze(_) => "watchdog_freeze",
+        Request::RotateEthereumCommittee(_) => "rotate_ethereum_committee",
     }
 }
 
@@ -236,7 +243,70 @@ pub fn encode_request(req: &Request) -> Json {
             ("until_height", Json::Int(r.until_height)),
             ("signature", signer_sig_json(&r.signature)),
         ]),
+        Request::RotateEthereumCommittee(u) => object(vec![
+            ("attested_header", header_json(&u.attested_header)),
+            ("finalized_header", header_json(&u.finalized_header)),
+            ("finality_branch", roots_json(&u.finality_branch)),
+            (
+                "next_sync_committee",
+                committee_json(&u.next_sync_committee),
+            ),
+            (
+                "next_sync_committee_branch",
+                roots_json(&u.next_sync_committee_branch),
+            ),
+            (
+                "participation",
+                Json::Array(
+                    u.sync_aggregate
+                        .participation
+                        .iter()
+                        .map(|b| Json::Bool(*b))
+                        .collect(),
+                ),
+            ),
+            ("signature", hexs(&u.sync_aggregate.signature.0)),
+            ("signature_slot", Json::Int(u.signature_slot)),
+        ]),
     }
+}
+
+pub(crate) fn committee_json(c: &SyncCommittee) -> Json {
+    object(vec![
+        (
+            "pubkeys",
+            Json::Array(c.pubkeys.iter().map(|k| hexs(&k.0)).collect()),
+        ),
+        ("aggregate_pubkey", hexs(&c.aggregate_pubkey.0)),
+    ])
+}
+
+pub(crate) fn committee_from(j: &Json) -> Result<SyncCommittee, WireError> {
+    let items = field(j, "pubkeys")?
+        .as_array()
+        .ok_or(WireError::BadType("pubkeys"))?;
+    if items.len() > MAX_PARTICIPATION {
+        return Err(WireError::BadField("pubkeys"));
+    }
+    let mut pubkeys = Vec::with_capacity(items.len());
+    for item in items {
+        pubkeys.push(BlsPubkey(hex_array::<48>(item, "pubkeys")?));
+    }
+    Ok(SyncCommittee {
+        pubkeys,
+        aggregate_pubkey: BlsPubkey(hex_array::<48>(
+            field(j, "aggregate_pubkey")?,
+            "aggregate_pubkey",
+        )?),
+    })
+}
+
+fn participation_from(j: &Json) -> Result<Vec<bool>, WireError> {
+    let items = j.as_array().ok_or(WireError::BadType("participation"))?;
+    if items.len() > MAX_PARTICIPATION {
+        return Err(WireError::BadField("participation"));
+    }
+    items.iter().map(|p| as_bool(p, "participation")).collect()
 }
 
 fn signer_sig_json(s: &SignerSig) -> Json {
@@ -378,6 +448,26 @@ pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
             until_height: as_u64(field(body, "until_height")?, "until_height")?,
             signature: signer_sig_from(field(body, "signature")?)?,
         })),
+        "rotate_ethereum_committee" => Ok(Request::RotateEthereumCommittee(SyncCommitteeUpdate {
+            attested_header: header_from(field(body, "attested_header")?)?,
+            finalized_header: header_from(field(body, "finalized_header")?)?,
+            finality_branch: roots_from(
+                field(body, "finality_branch")?,
+                "finality_branch",
+                MAX_BRANCH,
+            )?,
+            next_sync_committee: committee_from(field(body, "next_sync_committee")?)?,
+            next_sync_committee_branch: roots_from(
+                field(body, "next_sync_committee_branch")?,
+                "next_sync_committee_branch",
+                MAX_BRANCH,
+            )?,
+            sync_aggregate: SyncAggregate {
+                participation: participation_from(field(body, "participation")?)?,
+                signature: BlsSignature(hex_array::<96>(field(body, "signature")?, "signature")?),
+            },
+            signature_slot: as_u64(field(body, "signature_slot")?, "signature_slot")?,
+        })),
         other => Err(WireError::UnknownMethod(other.to_string())),
     }
 }
@@ -464,6 +554,10 @@ fn encode_proof(proof: &DepositProof) -> Json {
                 "execution_branch",
                 roots_json(&update.execution.execution_branch),
             ),
+            (
+                "block_number_branch",
+                roots_json(&update.execution.block_number_branch),
+            ),
             ("receipt_index", Json::Int(deposit.receipt_index)),
             ("log_index", Json::Int(u64::from(deposit.log_index))),
             (
@@ -504,7 +598,7 @@ fn header_json(h: &BeaconBlockHeader) -> Json {
     ])
 }
 
-fn header_from(j: &Json) -> Result<BeaconBlockHeader, WireError> {
+pub(crate) fn header_from(j: &Json) -> Result<BeaconBlockHeader, WireError> {
     Ok(BeaconBlockHeader {
         slot: as_u64(field(j, "slot")?, "slot")?,
         proposer_index: as_u64(field(j, "proposer_index")?, "proposer_index")?,
@@ -518,7 +612,11 @@ fn roots_json(roots: &[[u8; 32]]) -> Json {
     Json::Array(roots.iter().map(|r| hexs(r)).collect())
 }
 
-fn roots_from(j: &Json, name: &'static str, max: usize) -> Result<Vec<[u8; 32]>, WireError> {
+pub(crate) fn roots_from(
+    j: &Json,
+    name: &'static str,
+    max: usize,
+) -> Result<Vec<[u8; 32]>, WireError> {
     let items = j.as_array().ok_or(WireError::BadType(name))?;
     if items.len() > max {
         return Err(WireError::BadField(name));
@@ -642,6 +740,11 @@ fn decode_proof(j: &Json) -> Result<DepositProof, WireError> {
                         "execution_branch",
                         MAX_BRANCH,
                     )?,
+                    block_number_branch: roots_from(
+                        field(j, "block_number_branch")?,
+                        "block_number_branch",
+                        MAX_BRANCH,
+                    )?,
                 },
             };
             let ancestry = match j.get("ancestry") {
@@ -731,7 +834,7 @@ fn timestamp_json(t: &Timestamp) -> Json {
     ])
 }
 
-fn timestamp_from(j: &Json) -> Result<Timestamp, WireError> {
+pub(crate) fn timestamp_from(j: &Json) -> Result<Timestamp, WireError> {
     Ok(Timestamp {
         seconds: as_i64(field(j, "seconds")?, "seconds")?,
         nanos: as_i32(field(j, "nanos")?, "nanos")?,
@@ -838,7 +941,7 @@ fn validators_json(set: &ValidatorSet) -> Json {
     Json::Array(set.validators.iter().map(validator_json).collect())
 }
 
-fn validators_from(j: &Json) -> Result<ValidatorSet, WireError> {
+pub(crate) fn validators_from(j: &Json) -> Result<ValidatorSet, WireError> {
     let items = j.as_array().ok_or(WireError::BadType("validators"))?;
     if items.len() > MAX_VALIDATORS {
         return Err(WireError::BadField("validators"));
@@ -1017,6 +1120,14 @@ pub fn encode_response(resp: &Response) -> Json {
             ("result", Json::str("frozen")),
             ("until_height", Json::Int(*until_height)),
         ]),
+        Response::CommitteeRotated {
+            period,
+            finalized_slot,
+        } => object(vec![
+            ("result", Json::str("committee_rotated")),
+            ("period", Json::Int(*period)),
+            ("finalized_slot", Json::Int(*finalized_slot)),
+        ]),
         Response::SourcePaused {
             source_chain,
             fork_depth,
@@ -1073,6 +1184,10 @@ pub fn decode_response(j: &Json) -> Result<Response, WireError> {
         )?)?)),
         "frozen" => Ok(Response::Frozen {
             until_height: as_u64(field(j, "until_height")?, "until_height")?,
+        }),
+        "committee_rotated" => Ok(Response::CommitteeRotated {
+            period: as_u64(field(j, "period")?, "period")?,
+            finalized_slot: as_u64(field(j, "finalized_slot")?, "finalized_slot")?,
         }),
         "source_paused" => Ok(Response::SourcePaused {
             source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
@@ -1131,6 +1246,9 @@ fn api_json(api: &ApiError) -> Json {
         ApiError::CorridorConfigLocked => tagged("api", "corridor_config_locked", vec![]),
         ApiError::ProofTierMismatch => tagged("api", "proof_tier_mismatch", vec![]),
         ApiError::NoAnchor(id) => tagged("api", "no_anchor", vec![("network_id", u32j(*id))]),
+        ApiError::AnchorChanged(id) => {
+            tagged("api", "anchor_changed", vec![("network_id", u32j(*id))])
+        }
         ApiError::BitcoinSpv(e) => tagged("api", "bitcoin_spv", vec![("spv", spv_err_json(e))]),
         ApiError::EthereumVerify(e) => {
             tagged("api", "ethereum_verify", vec![("eth", eth_err_json(e))])
@@ -1287,6 +1405,7 @@ fn eth_err_json(e: &EthError) -> Json {
         EthError::BadExecutionProof => tagged("eth", "bad_execution_proof", vec![]),
         EthError::BadSyncCommitteeProof => tagged("eth", "bad_sync_committee_proof", vec![]),
         EthError::UntrustedCheckpoint => tagged("eth", "untrusted_checkpoint", vec![]),
+        EthError::UnpinnedChainConfig => tagged("eth", "unpinned_chain_config", vec![]),
         EthError::BadSignature => tagged("eth", "bad_signature", vec![]),
         EthError::MissingReceipt => tagged("eth", "missing_receipt", vec![]),
         EthError::UnconfiguredDepositContract => {
@@ -1331,6 +1450,7 @@ fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
         "bad_execution_proof" => Ok(EthError::BadExecutionProof),
         "bad_sync_committee_proof" => Ok(EthError::BadSyncCommitteeProof),
         "untrusted_checkpoint" => Ok(EthError::UntrustedCheckpoint),
+        "unpinned_chain_config" => Ok(EthError::UnpinnedChainConfig),
         "bad_signature" => Ok(EthError::BadSignature),
         "missing_receipt" => Ok(EthError::MissingReceipt),
         "unconfigured_deposit_contract" => Ok(EthError::UnconfiguredDepositContract),
@@ -1571,6 +1691,10 @@ fn api_from(j: &Json) -> Result<ApiError, WireError> {
             "corridor_config_locked" => Ok(ApiError::CorridorConfigLocked),
             "proof_tier_mismatch" => Ok(ApiError::ProofTierMismatch),
             "no_anchor" => Ok(ApiError::NoAnchor(as_u32(
+                field(j, "network_id")?,
+                "network_id",
+            )?)),
+            "anchor_changed" => Ok(ApiError::AnchorChanged(as_u32(
                 field(j, "network_id")?,
                 "network_id",
             )?)),
@@ -2147,6 +2271,33 @@ mod tests {
         round_response(Response::Frozen {
             until_height: 4_096,
         });
+        let header = BeaconBlockHeader {
+            slot: 7_127_000,
+            proposer_index: 3,
+            parent_root: [0x11; 32],
+            state_root: [0x22; 32],
+            body_root: [0x33; 32],
+        };
+        round_request(Request::RotateEthereumCommittee(SyncCommitteeUpdate {
+            attested_header: header,
+            finalized_header: header,
+            finality_branch: vec![[0xf0; 32]],
+            next_sync_committee: SyncCommittee {
+                pubkeys: vec![BlsPubkey([0x81; 48]), BlsPubkey([0x82; 48])],
+                aggregate_pubkey: BlsPubkey([0x83; 48]),
+            },
+            next_sync_committee_branch: vec![[0xe0; 32], [0xe1; 32]],
+            sync_aggregate: SyncAggregate {
+                participation: vec![true, false],
+                signature: BlsSignature([0x9c; 96]),
+            },
+            signature_slot: 7_127_100,
+        }));
+        round_response(Response::CommitteeRotated {
+            period: 870,
+            finalized_slot: 7_127_000,
+        });
+        round_response(Response::Error(ApiError::AnchorChanged(2)));
 
         let sigs: Vec<Json> = (0..MAX_OPERATOR_SIGS + 1)
             .map(|i| {
@@ -2310,6 +2461,7 @@ mod tests {
                 receipts_root: [0x44; 32],
                 block_number: 20_000_000,
                 execution_branch: vec![[0xe0; 32]],
+                block_number_branch: vec![[0xe1; 32]],
             },
         };
         let deposit = EthDepositProof {

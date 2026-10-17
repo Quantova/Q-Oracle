@@ -791,8 +791,8 @@ impl Gateway {
         Ok(ticket)
     }
 
-    pub fn admit_trustless(
-        &mut self,
+    pub fn precheck_trustless(
+        &self,
         asset_id: [u8; 16],
         source_ref: [u8; 32],
         amount: u128,
@@ -839,7 +839,6 @@ impl Gateway {
                 add: amount,
             });
         }
-        let asset_after = minted.saturating_add(amount);
         let epoch_after =
             self.epoch_minted
                 .checked_add(amount)
@@ -855,11 +854,23 @@ impl Gateway {
                 add: amount,
             });
         }
-        self.charge_asset_epoch(&asset_id, amount)?;
+        self.charge_asset_epoch(&asset_id, amount)
+    }
+
+    pub fn admit_trustless(
+        &mut self,
+        asset_id: [u8; 16],
+        source_ref: [u8; 32],
+        amount: u128,
+        source_chain: u32,
+    ) -> Result<(), GatewayError> {
+        self.precheck_trustless(asset_id, source_ref, amount, source_chain)?;
+        let minted = *self.per_asset_minted.get(&asset_id).unwrap_or(&0);
         self.used_refs.insert((source_chain, source_ref));
         self.refs_any_chain.insert(source_ref);
-        self.per_asset_minted.insert(asset_id, asset_after);
-        self.epoch_minted = epoch_after;
+        self.per_asset_minted
+            .insert(asset_id, minted.saturating_add(amount));
+        self.epoch_minted = self.epoch_minted.saturating_add(amount);
         self.record_asset_epoch(asset_id, amount);
         self.touch_guard();
         Ok(())

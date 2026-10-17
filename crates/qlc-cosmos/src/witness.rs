@@ -246,7 +246,7 @@ mod tests {
         .unwrap();
         let witness = prove_ready_witness(&out);
         assert_eq!(witness.facts.header_height, 18_500_000);
-        assert_eq!(witness.facts.signed_power, 100);
+        assert_eq!(witness.facts.signed_power, 75);
         assert_eq!(witness.statement.corridor_id, 16);
     }
 
@@ -263,17 +263,8 @@ mod tests {
             wnow(),
         )
         .unwrap();
-        let (header2, commit2, set2, proof2) = scene(&[0, 1, 2]);
-        let partial = verify_deposit(
-            &COSMOS_HUB,
-            &anchor(&set2),
-            &header2,
-            &commit2,
-            &set2,
-            &proof2,
-            wnow(),
-        )
-        .unwrap();
+        let mut partial = full.clone();
+        partial.signed_power -= 1;
         let a = prove_ready_witness(&full);
         let b = prove_ready_witness(&partial);
         assert_ne!(a.public_input_digest, b.public_input_digest);

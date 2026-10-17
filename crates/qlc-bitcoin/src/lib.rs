@@ -15,8 +15,8 @@ pub mod tx;
 pub mod work;
 
 pub use chain::{
-    bits_expectation, check_retarget_boundary, heavier, verify_chain, Checkpoint, ConfirmedDeposit,
-    VerifiedChain,
+    bits_expectation, check_retarget_boundary, checkpoint_is_pinned, heavier, verify_chain,
+    Checkpoint, ConfirmedDeposit, VerifiedChain, PINNED_CHECKPOINTS,
 };
 pub use deposit::{confirmations_for, verify_trustless_deposit, CoinbaseProof, TrustlessDeposit};
 pub use params::{network_params, Network, NetworkParams, BITCOIN, BITCOIN_CASH};

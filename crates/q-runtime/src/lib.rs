@@ -4,6 +4,7 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+pub mod anchors;
 pub mod boot;
 pub mod clock;
 pub mod exits;

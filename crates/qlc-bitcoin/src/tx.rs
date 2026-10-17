@@ -58,15 +58,19 @@ impl<'a> Cursor<'a> {
 
     fn varint(&mut self) -> Result<u64, SpvError> {
         let first = self.take(1)?[0];
-        match first {
-            0xff => self.u64_le(),
-            0xfe => Ok(self.u32_le()? as u64),
+        let (value, floor) = match first {
+            0xff => (self.u64_le()?, 0x1_0000_0000),
+            0xfe => (self.u32_le()? as u64, 0x1_0000),
             0xfd => {
                 let b = self.take(2)?;
-                Ok(u16::from_le_bytes([b[0], b[1]]) as u64)
+                (u16::from_le_bytes([b[0], b[1]]) as u64, 0xfd)
             }
-            n => Ok(n as u64),
+            n => return Ok(n as u64),
+        };
+        if value < floor {
+            return Err(SpvError::MalformedTransaction);
         }
+        Ok(value)
     }
 }
 
@@ -94,13 +98,16 @@ impl Transaction {
         let mut c = Cursor::new(bytes);
         let version = c.u32_le()?;
 
-        let segwit = bytes.len() >= 6 && bytes[4] == 0x00 && bytes[5] == 0x01;
+        let segwit = bytes.len() >= 6 && bytes[4] == 0x00;
         if segwit {
+            if bytes[5] != 0x01 {
+                return Err(SpvError::MalformedTransaction);
+            }
             c.take(2)?;
         }
 
         let input_count = c.varint()?;
-        if input_count > MAX_COUNT {
+        if input_count == 0 || input_count > MAX_COUNT {
             return Err(SpvError::MalformedTransaction);
         }
         let mut inputs = Vec::with_capacity((input_count as usize).min(bytes.len() / 41));
@@ -116,27 +123,34 @@ impl Transaction {
         }
 
         let output_count = c.varint()?;
-        if output_count > MAX_COUNT {
+        if output_count == 0 || output_count > MAX_COUNT {
             return Err(SpvError::MalformedTransaction);
         }
         let mut outputs = Vec::with_capacity((output_count as usize).min(bytes.len() / 9));
+        let mut total: u64 = 0;
         for _ in 0..output_count {
             let value = c.u64_le()?;
-            if value > MAX_MONEY {
-                return Err(SpvError::MalformedTransaction);
-            }
+            total = total
+                .checked_add(value)
+                .filter(|total| *total <= MAX_MONEY)
+                .ok_or(SpvError::MalformedTransaction)?;
             let script_len = c.varint()?;
             let script = c.take(script_len as usize)?.to_vec();
             outputs.push(TxOutput { value, script });
         }
 
         if segwit {
+            let mut witnessed = false;
             for _ in 0..input_count {
                 let items = c.varint()?;
+                witnessed |= items > 0;
                 for _ in 0..items {
                     let len = c.varint()?;
                     c.take(len as usize)?;
                 }
+            }
+            if !witnessed {
+                return Err(SpvError::MalformedTransaction);
             }
         }
 
@@ -439,5 +453,27 @@ mod tests {
             parsed.deposit_to(&bridge).is_none(),
             "two op returns name no single recipient"
         );
+    }
+
+    fn legacy(outputs: Vec<TxOutput>) -> Vec<u8> {
+        serialize_legacy(&build(outputs))
+    }
+
+    #[test]
+    fn outputs_summing_past_the_money_supply_are_refused() {
+        let each = 15_000_000 * 100_000_000;
+        assert!(matches!(
+            Transaction::parse(&legacy(vec![
+                TxOutput {
+                    value: each,
+                    script: p2pkh([0x11; 20]),
+                },
+                TxOutput {
+                    value: each,
+                    script: p2pkh([0x12; 20]),
+                },
+            ])),
+            Err(SpvError::MalformedTransaction)
+        ));
     }
 }

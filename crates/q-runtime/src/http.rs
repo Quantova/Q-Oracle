@@ -10,7 +10,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use q_qbridge::{
-    commit_deposit, handle, handle_read, verify_deposit, BridgeState, Request, Response,
+    commit_deposit, handle, handle_read, install_ethereum_rotation, prepare_deposit,
+    rotate_ethereum_store, verify_prepared, ApiError, BridgeState, DepositProof, Request, Response,
 };
 
 use crate::json::{self, object, Json};
@@ -79,6 +80,46 @@ pub const RATE_WINDOW: Duration = Duration::from_secs(1);
 pub const MAX_ADMITS_PER_WINDOW: usize = 1024;
 
 pub const MAX_ADMITS_PER_IP_PER_WINDOW: usize = 16;
+
+pub const MAX_PROOF_VERIFICATIONS: usize = 4;
+
+pub const MAX_PROOFS_PER_WINDOW: usize = 64;
+
+pub const MAX_PROOFS_PER_IP_PER_WINDOW: usize = 2;
+
+#[derive(Default)]
+struct ProofSlots {
+    busy: AtomicUsize,
+}
+
+struct ProofSlot<'a> {
+    slots: &'a ProofSlots,
+}
+
+impl ProofSlots {
+    fn try_acquire(&self) -> Option<ProofSlot<'_>> {
+        self.busy
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |busy| {
+                (busy < MAX_PROOF_VERIFICATIONS).then_some(busy + 1)
+            })
+            .ok()
+            .map(|_| ProofSlot { slots: self })
+    }
+}
+
+impl Drop for ProofSlot<'_> {
+    fn drop(&mut self) {
+        self.slots.busy.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn carries_proof(request: &Request) -> bool {
+    match request {
+        Request::SubmitDeposit(deposit) => !matches!(deposit.proof, DepositProof::Federated(_)),
+        Request::RotateEthereumCommittee(_) => true,
+        _ => false,
+    }
+}
 
 pub type SharedState = Arc<RwLock<BridgeState>>;
 
@@ -233,6 +274,7 @@ pub fn serve_with(
     thread::spawn(move || {
         let limiter = Arc::new(Limiter::default());
         let rate = Arc::new(RateLimiter::default());
+        let proofs = Arc::new(ProofGate::default());
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             let ip = stream
@@ -290,13 +332,20 @@ pub fn serve_with(
             let limiter = limiter.clone();
             let store = store.clone();
             let rate = rate.clone();
+            let proofs = proofs.clone();
             let header = proxied.then(|| trust.header.clone());
             thread::spawn(move || {
                 let _slot = SlotGuard { limiter, ip };
-                let _ = handle_connection(stream, state, store, rate, header);
+                let _ = handle_connection(stream, state, store, rate, proofs, ip, header);
             });
         }
     });
+}
+
+#[derive(Default)]
+struct ProofGate {
+    slots: ProofSlots,
+    rate: RateLimiter,
 }
 
 struct SlotGuard {
@@ -315,6 +364,8 @@ fn handle_connection(
     state: SharedState,
     store: Option<Arc<GuardStore>>,
     rate: Arc<RateLimiter>,
+    proofs: Arc<ProofGate>,
+    peer: IpAddr,
     client_header: Option<String>,
 ) -> IoResult<()> {
     stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
@@ -575,7 +626,24 @@ fn handle_connection(
         }
     };
 
-    let response = match route(&state, store.as_deref(), request) {
+    if carries_proof(&request)
+        && !proofs.rate.allow(
+            forwarded.unwrap_or(peer),
+            Instant::now(),
+            RATE_WINDOW,
+            MAX_PROOFS_PER_WINDOW,
+            MAX_PROOFS_PER_IP_PER_WINDOW,
+        )
+    {
+        return write_error(
+            &mut stream,
+            429,
+            "rate_limited",
+            "too many proofs from this address, slow down",
+        );
+    }
+
+    let response = match route(&state, store.as_deref(), &proofs.slots, request) {
         Ok(response) => response,
         Err(RouteFail::Panicked) => {
             return write_error(
@@ -593,6 +661,14 @@ fn handle_connection(
                 "the admission could not be persisted",
             )
         }
+        Err(RouteFail::Busy) => {
+            return write_error(
+                &mut stream,
+                503,
+                "busy",
+                "every proof verifier is in use, retry shortly",
+            )
+        }
     };
     write_response(&mut stream, 200, &encode_response(&response).render())
 }
@@ -600,6 +676,7 @@ fn handle_connection(
 enum RouteFail {
     Panicked,
     PersistFailed,
+    Busy,
 }
 
 fn persist_if_advanced(
@@ -621,6 +698,7 @@ fn persist_if_advanced(
 fn route(
     state: &SharedState,
     store: Option<&GuardStore>,
+    slots: &ProofSlots,
     request: Request,
 ) -> Result<Response, RouteFail> {
     {
@@ -629,15 +707,30 @@ fn route(
             return Ok(response);
         }
     }
+    let unwound = |_| RouteFail::Panicked;
     match request {
         Request::SubmitDeposit(deposit) => {
-            let verified = {
+            let prepared = {
                 let guard = state.read().unwrap_or_else(|e| e.into_inner());
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    verify_deposit(&guard, &deposit)
+                    prepare_deposit(&guard, &deposit)
                 }))
-                .map_err(|_| RouteFail::Panicked)?
+                .map_err(unwound)?
             };
+            let prepared = match prepared {
+                Ok(prepared) => prepared,
+                Err(err) => return Ok(Response::Error(err)),
+            };
+            let slot = if prepared.needs_proof_verification() {
+                Some(slots.try_acquire().ok_or(RouteFail::Busy)?)
+            } else {
+                None
+            };
+            let verified = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                verify_prepared(prepared, &deposit)
+            }))
+            .map_err(unwound)?;
+            drop(slot);
             let plan = match verified {
                 Ok(plan) => plan,
                 Err(err) => return Ok(Response::Error(err)),
@@ -660,6 +753,30 @@ fn route(
                         Durability::PersistFailed => Err(RouteFail::PersistFailed),
                         _ => Ok(Response::DepositAdmitted(outcome)),
                     }
+                }
+                Err(err) => Ok(Response::Error(err)),
+            }
+        }
+        Request::RotateEthereumCommittee(update) => {
+            let before = {
+                let guard = state.read().unwrap_or_else(|e| e.into_inner());
+                guard.ethereum_store.clone()
+            };
+            let Some(before) = before else {
+                return Ok(Response::Error(ApiError::NoAnchor(
+                    q_assets::Network::Ethereum.id(),
+                )));
+            };
+            let slot = slots.try_acquire().ok_or(RouteFail::Busy)?;
+            let rotated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rotate_ethereum_store(&before, &update)
+            }))
+            .map_err(unwound)?;
+            drop(slot);
+            match rotated {
+                Ok(after) => {
+                    let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
+                    Ok(install_ethereum_rotation(&mut guard, &before, after))
                 }
                 Err(err) => Ok(Response::Error(err)),
             }
