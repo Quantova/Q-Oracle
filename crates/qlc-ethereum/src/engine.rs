@@ -167,14 +167,35 @@ struct CoreDeposit {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LightClientStore {
-    pub config: EvmChainConfig,
-    pub period: u64,
+    config: EvmChainConfig,
+    period: u64,
     current_sync_committee: SyncCommittee,
     next_sync_committee: Option<SyncCommittee>,
-    pub finalized_header: BeaconBlockHeader,
+    finalized_header: BeaconBlockHeader,
+}
+
+pub const PINNED_BLOCK_ROOTS: &[(u64, [u8; 32])] = &[];
+
+fn root_is_pinned(chain_id: u64, root: &[u8; 32]) -> bool {
+    cfg!(any(test, feature = "test-util"))
+        || PINNED_BLOCK_ROOTS
+            .iter()
+            .any(|(chain, pinned)| *chain == chain_id && pinned == root)
 }
 
 impl LightClientStore {
+    pub fn config(&self) -> &EvmChainConfig {
+        &self.config
+    }
+
+    pub fn period(&self) -> u64 {
+        self.period
+    }
+
+    pub fn finalized_header(&self) -> &BeaconBlockHeader {
+        &self.finalized_header
+    }
+
     pub fn current_sync_committee(&self) -> &SyncCommittee {
         &self.current_sync_committee
     }
@@ -183,6 +204,7 @@ impl LightClientStore {
         self.next_sync_committee.as_ref()
     }
 
+    #[cfg(any(test, feature = "test-util"))]
     pub fn from_trusted_committee(
         config: EvmChainConfig,
         period: u64,
@@ -210,7 +232,9 @@ pub fn bootstrap(
     if !config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
-    if checkpoint_header.hash_tree_root() != trusted_block_root {
+    if !root_is_pinned(config.chain_id, &trusted_block_root)
+        || checkpoint_header.hash_tree_root() != trusted_block_root
+    {
         return Err(EthError::UntrustedCheckpoint);
     }
     if period != config.sync_committee_period(checkpoint_header.slot) {
