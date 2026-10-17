@@ -9,6 +9,7 @@ use qtv_attest::{Attestation, Block, Certificate, Envelope, Parent};
 use qtv_block::header_from_bytes;
 use qtv_codec::Decoder;
 use qtv_crypto::ml_dsa::{Signature, SIGNATURE_BYTES};
+use qtv_sampler::committee::PublishedReveal;
 use qtv_sampler::onetime::{MerklePath, NODE_BYTES, PREIMAGE_BYTES};
 use qtv_sampler::sortition::Credential;
 
@@ -18,6 +19,9 @@ use crate::watch::{BurnWatchError, FinalizedBlock, QuantovaBurnSource};
 const PARENT_GENESIS: u8 = 0;
 const PARENT_VALUE: u8 = 1;
 const STAGE_ONE: u8 = 1;
+const MAX_ATTESTATIONS: u64 = 4096;
+const MAX_COMMITTEE_REVEALS: u64 = 4096;
+const MAX_CREDENTIAL_SIBLINGS: u64 = 64;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
@@ -273,11 +277,27 @@ fn decode_certificate(bytes: &[u8]) -> Result<Certificate, BurnWatchError> {
     let certificate = match decoder.get_u8().map_err(codec_err)? {
         STAGE_ONE => {
             let count = decoder.get_u64().map_err(codec_err)?;
+            if count > MAX_ATTESTATIONS {
+                return Err(BurnWatchError::Rpc(
+                    "the certificate carries too many attestations".to_string(),
+                ));
+            }
             let mut attestations = Vec::new();
             for _ in 0..count {
                 attestations.push(decode_attestation(&mut decoder)?);
             }
-            Certificate::new(envelope, attestations)
+            let reveal_count = decoder.get_u64().map_err(codec_err)?;
+            if reveal_count > MAX_COMMITTEE_REVEALS {
+                return Err(BurnWatchError::Rpc(
+                    "the certificate carries too many committee reveals".to_string(),
+                ));
+            }
+            let mut reveals = Vec::new();
+            for _ in 0..reveal_count {
+                let id = decoder.get_u64().map_err(codec_err)?;
+                reveals.push(PublishedReveal::new(id, decode_credential(&mut decoder)?));
+            }
+            Certificate::new(envelope, attestations).with_committee_reveals(reveals)
         }
         stage => {
             return Err(BurnWatchError::Rpc(format!(
@@ -346,6 +366,11 @@ fn decode_credential(decoder: &mut Decoder<'_>) -> Result<Credential, BurnWatchE
     let position = decoder.get_u64().map_err(codec_err)?;
     let preimage: [u8; PREIMAGE_BYTES] = read_array(decoder)?;
     let count = decoder.get_u64().map_err(codec_err)?;
+    if count > MAX_CREDENTIAL_SIBLINGS {
+        return Err(BurnWatchError::Rpc(
+            "a credential path is too long".to_string(),
+        ));
+    }
     let mut siblings = Vec::new();
     for _ in 0..count {
         let sibling: [u8; NODE_BYTES] = read_array(decoder)?;

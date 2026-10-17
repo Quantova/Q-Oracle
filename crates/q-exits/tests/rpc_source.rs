@@ -206,6 +206,11 @@ fn certificate_to_bytes(certificate: &Certificate) -> Vec<u8> {
     for attestation in &certificate.attestations {
         encode_attestation(&mut encoder, attestation);
     }
+    encoder.put_u64(certificate.committee_reveals.len() as u64);
+    for reveal in &certificate.committee_reveals {
+        encoder.put_u64(reveal.id);
+        encode_credential(&mut encoder, &reveal.credential);
+    }
     encoder.into_bytes()
 }
 
