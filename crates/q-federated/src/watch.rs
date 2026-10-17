@@ -40,7 +40,7 @@ pub fn watch_and_admit<S: AttestationSigner>(
     threshold: usize,
     feeds: &mut [OperatorFeed<S>],
 ) -> Vec<Result<MintReceipt, WatchError>> {
-    let mut groups: BTreeMap<[u8; 32], Aggregator> = BTreeMap::new();
+    let mut groups: BTreeMap<[u8; 32], BTreeMap<Vec<u8>, Aggregator>> = BTreeMap::new();
     let dest_height = gateway.current_height();
     for feed in feeds.iter_mut() {
         let locks = feed.watchers.poll(corridor.chain_id).unwrap_or_default();
@@ -48,6 +48,8 @@ pub fn watch_and_admit<S: AttestationSigner>(
             if let Ok(signed) = feed.operator.observe_and_sign(&lock, dest_height) {
                 let _ = groups
                     .entry(lock.source_ref)
+                    .or_default()
+                    .entry(signed.fact.encode())
                     .or_insert_with(|| Aggregator::new(threshold))
                     .add_verified(&signed.fact, signed.sig, |fact, sig| {
                         gateway.attests(fact, sig)
@@ -57,12 +59,18 @@ pub fn watch_and_admit<S: AttestationSigner>(
     }
     groups
         .into_values()
-        .map(|agg| match agg.try_finalize() {
-            Some(envelope) => Ok(admit(gateway, corridor, sources, &envelope)?),
-            None => Err(WatchError::NoQuorumObserved {
-                distinct: agg.distinct(),
+        .map(|by_fact| {
+            let mut best = 0;
+            for agg in by_fact.values() {
+                if let Some(envelope) = agg.try_finalize() {
+                    return Ok(admit(gateway, corridor, sources, &envelope)?);
+                }
+                best = best.max(agg.distinct());
+            }
+            Err(WatchError::NoQuorumObserved {
+                distinct: best,
                 threshold,
-            }),
+            })
         })
         .collect()
 }

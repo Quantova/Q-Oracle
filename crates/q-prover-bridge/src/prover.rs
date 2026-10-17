@@ -9,7 +9,7 @@ use qtv_stark::stark::{prove_with_domain, verify_with_domain, StarkParams};
 use crate::statement::{CorridorStatement, STATEMENT_DIGEST_LEN};
 
 pub const BRIDGE_BLOWUP: usize = 128;
-pub const BRIDGE_QUERIES: usize = 86;
+pub const BRIDGE_QUERIES: usize = 155;
 
 fn params() -> StarkParams {
     StarkParams {
@@ -92,28 +92,42 @@ mod tests {
         }
     }
 
+    fn proximity_bits(blowup: usize, queries: usize) -> f64 {
+        if !blowup.is_power_of_two() || blowup < 2 {
+            return 0.0;
+        }
+        let rate = 1.0 / blowup as f64;
+        queries as f64 * -((1.0 + rate) / 2.0).log2()
+    }
+
+    fn composition_bits(max_degree: usize, blowup: usize, queries: usize) -> f64 {
+        let factor = max_degree.next_power_of_two();
+        if factor == 0 || blowup < factor {
+            return 0.0;
+        }
+        proximity_bits(blowup / factor, queries)
+    }
+
     #[test]
     fn the_bridge_parameters_meet_the_target_soundness() {
         use qtv_stark::sponge::{absorb_trace, SHAKE256_RATE};
         let s = statement();
         let preimage = s.preimage();
         let instance = absorb_trace(SHAKE256_RATE, &preimage);
-        let air = instance.air;
-        let n = air.length();
-        let size = n * BRIDGE_BLOWUP;
-        let comp_bound = air.max_degree().next_power_of_two() * n;
-        let comp_fri_blowup = size / comp_bound;
-        let bits = BRIDGE_QUERIES as f64 * 0.5 * (comp_fri_blowup as f64).log2();
+        let max_degree = instance.air.max_degree();
+        let bits = composition_bits(max_degree, BRIDGE_BLOWUP, BRIDGE_QUERIES);
         assert!(
             bits >= 128.0,
             "bridge statement composition soundness {bits} bits below the 128 target \
-             (queries {BRIDGE_QUERIES}, composition blowup {comp_fri_blowup})"
+             (queries {BRIDGE_QUERIES}, composition blowup {})",
+            BRIDGE_BLOWUP / max_degree.next_power_of_two()
         );
-        let trace_bits = BRIDGE_QUERIES as f64 * 0.5 * (BRIDGE_BLOWUP as f64).log2();
+        let trace_bits = proximity_bits(BRIDGE_BLOWUP, BRIDGE_QUERIES);
         assert!(
             trace_bits >= bits,
             "trace soundness {trace_bits} fell below the composition layer {bits}"
         );
+        assert!(max_degree.next_power_of_two() * 2 <= BRIDGE_BLOWUP);
     }
 
     fn statement() -> CorridorStatement {

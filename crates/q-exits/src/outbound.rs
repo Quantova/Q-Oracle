@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(bytes[1], ENVELOPE_VERSION);
     }
 
-    fn operator(seed_byte: u8) -> (AckOperator, [u8; SECRET_KEY_BYTES]) {
+    fn operator(seed_byte: u8) -> (AckOperator, qtv_crypto::ml_dsa::SecretKey) {
         let mut seed = [0u8; 32];
         seed[0] = seed_byte;
         let (public_key, sk) = ml_dsa::keygen(&seed);
@@ -490,7 +490,7 @@ mod tests {
     fn envelope_signed_by(
         decision: &ExitDecision,
         chain_id: u64,
-        signers: &[(AckOperator, [u8; SECRET_KEY_BYTES])],
+        signers: &[(AckOperator, qtv_crypto::ml_dsa::SecretKey)],
     ) -> ExitEnvelope {
         ExitEnvelope {
             decision: decision.clone(),

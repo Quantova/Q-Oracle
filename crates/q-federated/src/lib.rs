@@ -22,8 +22,8 @@ pub use pools::{
 pub use sources::{IndependenceReport, SourceEndpoint, SourceRegistry};
 pub use trustless::{
     admit_bitcoin_trustless, admit_cosmos_trustless, admit_ethereum_trustless,
-    match_bitcoin_deposit, match_cosmos_deposit, match_ethereum_deposit, TrustlessError,
-    TrustlessMint,
+    match_bitcoin_deposit, match_cosmos_deposit, match_ethereum_deposit, precheck_trustless,
+    TrustlessError, TrustlessMint,
 };
 pub use watch::{watch_and_admit, OperatorFeed, WatchError};
 

@@ -9,7 +9,10 @@ pub mod translator;
 pub mod watcher;
 
 pub use aggregator::{Aggregator, AggregatorError};
-pub use operator::{HaltReason, Operator, OperatorError, OperatorState, SignedObservation};
+pub use operator::{
+    DivergenceJournal, DivergenceRecord, HaltReason, Operator, OperatorError, OperatorState,
+    SignedObservation,
+};
 pub use signer::{
     AttestationSigner, EnclaveSigner, ObjectHandle, Pkcs11Backend, Pkcs11Error, Pkcs11Module,
     SessionHandle, SigningBackend, SlotId, SoftBackend, SoftSigner, SoftwareHsm,

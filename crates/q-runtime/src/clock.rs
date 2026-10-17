@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use q_exits::RpcBurnSource;
+use q_exits::{QuantovaAnchor, RpcBurnSource};
 
 use crate::http::SharedState;
 
@@ -39,6 +39,25 @@ pub trait ChainHead {
 impl ChainHead for RpcBurnSource {
     fn head_and_epoch(&self) -> Result<(u64, Option<u64>), String> {
         self.finalized_head_and_epoch()
+            .map_err(|e| format!("{e:?}"))
+    }
+}
+
+pub struct CertifiedHead {
+    source: RpcBurnSource,
+    anchor: QuantovaAnchor,
+}
+
+impl CertifiedHead {
+    pub fn new(source: RpcBurnSource, anchor: QuantovaAnchor) -> CertifiedHead {
+        CertifiedHead { source, anchor }
+    }
+}
+
+impl ChainHead for CertifiedHead {
+    fn head_and_epoch(&self) -> Result<(u64, Option<u64>), String> {
+        self.source
+            .certified_head_and_epoch(&self.anchor)
             .map_err(|e| format!("{e:?}"))
     }
 }

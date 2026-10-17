@@ -9,6 +9,7 @@ domain UNPAUSE = "QUANTOVA/Q-ORACLE/UNPAUSE/v1";
 domain WATCHDOG = "QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 domain BATCH = "QUANTOVA/Q-ORACLE/BATCH/v1";
 domain EPOCH = "QUANTOVA/Q-ORACLE/EPOCH/v1";
+domain ESCROW = "QUANTOVA/Q-ORACLE/ESCROW/v1";
 
 const DEPOSIT: u8 = 0;
 const BASE_TIER: u8 = 1;
@@ -16,6 +17,7 @@ const WATCHDOG_WINDOW: Q_Height = 7200;
 const WATCHDOG_COOLDOWN: Q_Height = 57600;
 const RESUME_SKEW: Q_Height = 16;
 const RESUME_WINDOW: Q_Height = 1728600;
+const EPOCH_MIN_BLOCKS: Q_Height = 432000;
 
 record DepositFact {
   version: u8;
@@ -41,6 +43,7 @@ record ReorgReport { net: Q_Net; fork_depth: u32; at_height: Q_Height; dest: Q_N
 record ResumeOrder { net: Q_Net; at_height: Q_Height; dest: Q_Net; era: u64; }
 record PauseOrder { dest: Q_Net; era: u64; nonce: u64; }
 record EpochOrder { dest: Q_Net; era: u64; nonce: u64; }
+record EscrowReport { origin: Q_Origin; escrowed: u128; dest: Q_Net; era: u64; nonce: u64; }
 record ExitRequest { destination: Q_Hash; }
 record ExitTicket { id: u64; origin: Q_Origin; amount: u128; destination: Q_Hash; unlock: Q_Height; }
 
@@ -62,7 +65,13 @@ contract QGateway {
     corridor_active: Map<Q_Net, bool>;
     corridor_cursor: Map<Q_Net, u64>;
     minted: Map<Q_Origin, u128>;
+    pending_exit: Map<Q_Origin, u128>;
     caps: Map<Q_Origin, u128>;
+    escrowed: Map<Q_Origin, u128>;
+    asset_epoch_caps: Map<Q_Origin, u128>;
+    asset_epoch_minted: Map<(Q_Origin, u64), u128>;
+    epoch: u64;
+    epoch_rolled_at: Q_Height;
     epoch_minted: u128;
     epoch_cap: u128;
     exit_delay: Q_Height;
@@ -83,6 +92,10 @@ contract QGateway {
     corridor_tier = deploy_params.corridor_tier;
     corridor_active = deploy_params.corridor_active;
     caps = deploy_params.caps;
+    escrowed = deploy_params.escrowed;
+    asset_epoch_caps = deploy_params.asset_epoch_caps;
+    epoch = 0;
+    epoch_rolled_at = 0;
     epoch_cap = deploy_params.epoch_cap;
     exit_delay = deploy_params.exit_delay;
     frozen_until = 0;
@@ -90,20 +103,23 @@ contract QGateway {
     global_pause = false;
     gov_nonce = 0;
   }
-  invariant forall origin: minted[origin] <= caps[origin];
+  invariant forall origin: minted[origin] + pending_exit[origin] <= caps[origin];
+  invariant forall origin: asset_epoch_minted[(origin, epoch)] <= asset_epoch_caps[origin];
   invariant epoch_minted <= epoch_cap;
 
   entry mint_deposit(deposit: DepositFact, attestation: Attestation<operators, ATTEST>)
     mints Bridged
-    writes(used_refs, minted, epoch_minted)
-    reads(network, chain_id, era, operators, corridor_depth, corridor_quorum, corridor_active, caps, epoch_cap, source_paused, global_pause, frozen_until)
+    writes(used_refs, minted, epoch_minted, asset_epoch_minted)
+    reads(network, chain_id, era, operators, corridor_depth, corridor_quorum, corridor_active, caps, escrowed, pending_exit, asset_epoch_caps, epoch, epoch_cap, source_paused, global_pause, frozen_until)
     denies global_pause
     denies now < frozen_until
     denies now > deposit.expiry_height
     denies deposit.is_zero
     denies source_paused[deposit.source]
     denies used_refs.contains((deposit.source, deposit.reference))
-    limits minted[deposit.origin] + deposit.amount <= caps[deposit.origin]
+    limits minted[deposit.origin] + pending_exit[deposit.origin] + deposit.amount <= caps[deposit.origin]
+    limits minted[deposit.origin] + pending_exit[deposit.origin] + deposit.amount <= escrowed[deposit.origin]
+    limits asset_epoch_minted[(deposit.origin, epoch)] + deposit.amount <= asset_epoch_caps[deposit.origin]
     limits epoch_minted + deposit.amount <= epoch_cap
   {
     guard deposit.version == 1;
@@ -117,6 +133,7 @@ contract QGateway {
     guard attestation.distinct >= 6;
     used_refs.insert((deposit.source, deposit.reference));
     minted[deposit.origin] += deposit.amount;
+    asset_epoch_minted[(deposit.origin, epoch)] += deposit.amount;
     epoch_minted += deposit.amount;
     send(deposit.recipient, mint(deposit.origin, deposit.amount));
     emit Minted(deposit.recipient, deposit.origin, deposit.amount, deposit.reference, attestation.digest);
@@ -142,12 +159,13 @@ contract QGateway {
 
   entry request_exit(units: Bridged<origin>, request: ExitRequest)
     burns Bridged
-    writes(minted, exits, next_exit_id)
+    writes(minted, pending_exit, exits, next_exit_id)
     reads(exit_delay)
   {
     guard units.amount > 0;
     guard minted[units.origin] >= units.amount;
     minted[units.origin] -= units.amount;
+    pending_exit[units.origin] += units.amount;
     exits[next_exit_id] = ExitTicket {
       id: next_exit_id,
       origin: units.origin,
@@ -160,13 +178,14 @@ contract QGateway {
   }
 
   entry finalize_exit(id: u64)
-    writes(exits)
+    writes(exits, pending_exit)
     reads(global_pause, frozen_until)
     denies global_pause
     denies now < frozen_until
   {
     guard exits.contains(id);
     guard now >= exits[id].unlock;
+    pending_exit[exits[id].origin] -= exits[id].amount;
     emit ExitFinalized(exits[id].id, exits[id].origin, exits[id].amount, exits[id].destination);
     exits.remove(id);
   }
@@ -263,16 +282,31 @@ contract QGateway {
   }
 
   entry roll_epoch(order: EpochOrder, approvals: Quorum<6 of 9, operators, EPOCH>)
-    writes(epoch_minted, gov_nonce)
-    reads(network, era, gov_nonce)
+    writes(epoch_minted, epoch, epoch_rolled_at, gov_nonce)
+    reads(network, era, gov_nonce, epoch, epoch_rolled_at)
     after 24 hours from approvals.first
   {
     guard order.dest == network;
     guard order.era == era;
     guard order.nonce == gov_nonce;
+    guard now >= epoch_rolled_at + EPOCH_MIN_BLOCKS;
     gov_nonce += 1;
+    epoch += 1;
+    epoch_rolled_at = now;
     epoch_minted = 0;
-    emit EpochRolled(approvals.digest);
+    emit EpochRolled(epoch, approvals.digest);
+  }
+
+  entry report_escrow(report: EscrowReport, approvals: Quorum<6 of 9, operators, ESCROW>)
+    writes(escrowed, gov_nonce)
+    reads(network, era, gov_nonce)
+  {
+    guard report.dest == network;
+    guard report.era == era;
+    guard report.nonce == gov_nonce;
+    gov_nonce += 1;
+    escrowed[report.origin] = report.escrowed;
+    emit EscrowReported(report.origin, report.escrowed, approvals.digest);
   }
 
   event Minted(to: Q_Address, origin: Q_Origin, amount: u128, reference: Q_Hash, digest: Q_Hash);
@@ -286,5 +320,6 @@ contract QGateway {
   event ReorgCleared(net: Q_Net, digest: Q_Hash);
   event GatewayPaused(digest: Q_Hash);
   event GatewayUnpaused(digest: Q_Hash);
-  event EpochRolled(digest: Q_Hash);
+  event EpochRolled(epoch: u64, digest: Q_Hash);
+  event EscrowReported(origin: Q_Origin, escrowed: u128, digest: Q_Hash);
 }

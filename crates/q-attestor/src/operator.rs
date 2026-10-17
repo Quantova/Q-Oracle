@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::collections::BTreeMap;
+use std::io::{self, ErrorKind, Write};
+use std::path::{Path, PathBuf};
 
 use q_airlock::SignerSig;
 use q_codec::{attest_context, BridgeFact};
@@ -31,6 +33,7 @@ pub enum OperatorError {
     BelowFinality { got: u32, need: u32 },
     AlreadySigned,
     SignerUnavailable,
+    JournalUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +61,7 @@ pub struct Operator<S: AttestationSigner> {
     signed_refs: BTreeMap<(u32, [u8; 32]), u64>,
     seen_facts: BTreeMap<(u32, [u8; 32]), ([u8; 32], u64)>,
     state: OperatorState,
+    journal: Option<DivergenceJournal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +73,113 @@ pub struct DivergenceRecord {
     pub signed_expiry: u64,
 }
 
+const JOURNAL_MAGIC: &[u8; 4] = b"QDIV";
+const JOURNAL_VERSION: u8 = 1;
+const JOURNAL_RECORD_LEN: usize = 4 + 32 + 32 + 8 + 8;
+const JOURNAL_MAX_RECORDS: usize = 1 << 20;
+
+pub struct DivergenceJournal {
+    path: PathBuf,
+}
+
+impl DivergenceJournal {
+    pub fn new<P: Into<PathBuf>>(path: P) -> DivergenceJournal {
+        DivergenceJournal { path: path.into() }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn encode(records: &[DivergenceRecord]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(9 + records.len() * JOURNAL_RECORD_LEN + 32);
+        out.extend_from_slice(JOURNAL_MAGIC);
+        out.push(JOURNAL_VERSION);
+        out.extend_from_slice(&(records.len() as u32).to_le_bytes());
+        for r in records {
+            out.extend_from_slice(&r.source_chain.to_le_bytes());
+            out.extend_from_slice(&r.source_ref);
+            out.extend_from_slice(&r.digest);
+            out.extend_from_slice(&r.expiry_height.to_le_bytes());
+            out.extend_from_slice(&r.signed_expiry.to_le_bytes());
+        }
+        let check = sha3_256(&out);
+        out.extend_from_slice(&check);
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Vec<DivergenceRecord>> {
+        let (body, check) = bytes.split_at_checked(bytes.len().checked_sub(32)?)?;
+        if sha3_256(body) != check || body.len() < 9 || &body[..4] != JOURNAL_MAGIC {
+            return None;
+        }
+        if body[4] != JOURNAL_VERSION {
+            return None;
+        }
+        let count = u32::from_le_bytes(body[5..9].try_into().ok()?) as usize;
+        let rest = &body[9..];
+        if count > JOURNAL_MAX_RECORDS || rest.len() != count.checked_mul(JOURNAL_RECORD_LEN)? {
+            return None;
+        }
+        let mut records = Vec::with_capacity(count);
+        for chunk in rest.as_chunks::<JOURNAL_RECORD_LEN>().0 {
+            records.push(DivergenceRecord {
+                source_chain: u32::from_le_bytes(chunk[0..4].try_into().ok()?),
+                source_ref: chunk[4..36].try_into().ok()?,
+                digest: chunk[36..68].try_into().ok()?,
+                expiry_height: u64::from_le_bytes(chunk[68..76].try_into().ok()?),
+                signed_expiry: u64::from_le_bytes(chunk[76..84].try_into().ok()?),
+            });
+        }
+        Some(records)
+    }
+
+    pub fn load(&self) -> io::Result<Vec<DivergenceRecord>> {
+        match std::fs::read(&self.path) {
+            Ok(bytes) => DivergenceJournal::decode(&bytes).ok_or_else(|| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "the divergence journal at {} is corrupt",
+                        self.path.display()
+                    ),
+                )
+            }),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn save(&self, records: &[DivergenceRecord]) -> io::Result<()> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut temp = self.path.clone().into_os_string();
+        temp.push(format!(".tmp.{}.{nonce}", std::process::id()));
+        let temp = PathBuf::from(temp);
+        {
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut file = opts.open(&temp)?;
+            file.write_all(&DivergenceJournal::encode(records))?;
+            file.sync_all()?;
+        }
+        std::fs::rename(&temp, &self.path)?;
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::File::open(parent)?.sync_all()?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<S: AttestationSigner> Operator<S> {
     pub fn new(signer: S) -> Operator<S> {
         Operator {
@@ -77,7 +188,16 @@ impl<S: AttestationSigner> Operator<S> {
             signed_refs: BTreeMap::new(),
             seen_facts: BTreeMap::new(),
             state: OperatorState::Running,
+            journal: None,
         }
+    }
+
+    pub fn with_journal(signer: S, journal: DivergenceJournal) -> io::Result<Operator<S>> {
+        let records = journal.load()?;
+        let mut operator = Operator::new(signer);
+        operator.restore_divergence(&records);
+        operator.journal = Some(journal);
+        Ok(operator)
     }
 
     pub fn configure_corridor(&mut self, ctx: CorridorContext) {
@@ -174,16 +294,33 @@ impl<S: AttestationSigner> Operator<S> {
             return Err(OperatorError::AlreadySigned);
         }
 
+        let fresh_seen = !self.seen_facts.contains_key(&key);
+        let previous_signed = self.signed_refs.get(&key).copied();
         self.seen_facts
             .entry(key)
             .or_insert((digest, fact.expiry_height));
+        self.signed_refs.insert(key, fact.expiry_height);
+        if let Some(journal) = &self.journal {
+            if journal.save(&self.export_divergence()).is_err() {
+                if fresh_seen {
+                    self.seen_facts.remove(&key);
+                }
+                match previous_signed {
+                    Some(expiry) => self.signed_refs.insert(key, expiry),
+                    None => self.signed_refs.remove(&key),
+                };
+                return Err(OperatorError::JournalUnavailable);
+            }
+        }
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
-        let signature = self
-            .signer
-            .sign(&message, &attest_context(&ctx.era))
-            .ok_or(OperatorError::SignerUnavailable)?;
-        self.signed_refs.insert(key, fact.expiry_height);
+        let Some(signature) = self.signer.sign(&message, &attest_context(&ctx.era)) else {
+            match previous_signed {
+                Some(expiry) => self.signed_refs.insert(key, expiry),
+                None => self.signed_refs.remove(&key),
+            };
+            return Err(OperatorError::SignerUnavailable);
+        };
 
         Ok(SignedObservation {
             fact,

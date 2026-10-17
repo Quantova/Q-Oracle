@@ -47,8 +47,8 @@ pub use payout::{
     PAYOUT_VERSION,
 };
 pub use rpc::{
-    decode_finalized_block, decode_finalized_head, decode_finalized_head_epoch,
-    decode_heights_after, RpcBurnSource,
+    decode_certified_head, decode_finalized_block, decode_finalized_head,
+    decode_finalized_head_epoch, decode_heights_after, RpcBurnSource,
 };
 pub use store::ReplayStore;
 pub use vault::{Vault, VaultBook};

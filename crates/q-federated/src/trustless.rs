@@ -94,6 +94,31 @@ pub fn admit_bitcoin_trustless(
     Ok(mint)
 }
 
+fn trustless_gateway_error(e: GatewayError) -> TrustlessError {
+    match e {
+        GatewayError::ReplayedReference => TrustlessError::ReplayedReference,
+        GatewayError::AssetNotRegistered => TrustlessError::AssetNotRegistered,
+        GatewayError::AssetCapExceeded { minted, cap, add } => {
+            TrustlessError::AssetCapExceeded { minted, cap, add }
+        }
+        other => TrustlessError::Gateway(other),
+    }
+}
+
+pub fn precheck_trustless(gateway: &Gateway, fact: &BridgeFact) -> Result<(), TrustlessError> {
+    if gateway.dest_chain_id() == 0 || fact.dest_chain != gateway.chain_id() {
+        return Err(TrustlessError::Gateway(GatewayError::WrongDestination));
+    }
+    gateway
+        .precheck_trustless(
+            fact.asset_id.0,
+            fact.source_ref.0,
+            fact.amount,
+            fact.source_chain,
+        )
+        .map_err(trustless_gateway_error)
+}
+
 fn apply_replay_and_cap(
     gateway: &mut Gateway,
     mint: &TrustlessMint,
@@ -109,14 +134,7 @@ fn apply_replay_and_cap(
             mint.amount,
             mint.source_chain,
         )
-        .map_err(|e| match e {
-            GatewayError::ReplayedReference => TrustlessError::ReplayedReference,
-            GatewayError::AssetNotRegistered => TrustlessError::AssetNotRegistered,
-            GatewayError::AssetCapExceeded { minted, cap, add } => {
-                TrustlessError::AssetCapExceeded { minted, cap, add }
-            }
-            other => TrustlessError::Gateway(other),
-        })
+        .map_err(trustless_gateway_error)
 }
 
 pub fn match_ethereum_deposit(

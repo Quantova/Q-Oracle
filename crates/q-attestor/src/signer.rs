@@ -29,20 +29,18 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 struct ZeroizingSecretKey {
-    bytes: Zeroizing<SecretKey>,
+    bytes: SecretKey,
 }
 
 impl ZeroizingSecretKey {
     #[cfg(test)]
     fn new(bytes: SecretKey) -> ZeroizingSecretKey {
-        ZeroizingSecretKey {
-            bytes: Zeroizing::new(bytes),
-        }
+        ZeroizingSecretKey { bytes }
     }
 
     fn derive(seed: &[u8; SEED_BYTES]) -> (PublicKey, ZeroizingSecretKey) {
         let mut held = ZeroizingSecretKey {
-            bytes: Zeroizing::new([0u8; ml_dsa::SECRET_KEY_BYTES]),
+            bytes: SecretKey::zeroed(),
         };
         let public_key = ml_dsa::keygen_into(seed, &mut held.bytes);
         (public_key, held)
@@ -60,7 +58,7 @@ impl ZeroizingSecretKey {
 
     #[cfg(test)]
     fn clear_for_test(&mut self) {
-        zeroize::Zeroize::zeroize(&mut self.bytes);
+        zeroize::Zeroize::zeroize(&mut self.bytes[..]);
     }
 }
 

@@ -259,3 +259,31 @@ fn vector_reference_is_consumed_before_any_second_mint() {
     );
     assert_eq!(gw.minted_of_asset(&ASSET), 500);
 }
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn vector_the_signed_deposit_record_is_pinned_byte_for_byte() {
+    let fact = deposit([0x11; 32], 500);
+    let era = [0x42u8; 32];
+    assert_eq!(
+        hex(&fact.attest_preimage(DEST_ID)),
+        concat!(
+            "5155414e544f56412f512d4f5241434c452f4154544553542f7631",
+            "0101000000282300000100000000010000000000000011111111111111111111111111",
+            "11111111111111111111111111111111111111a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "f401000000000000000000000000000055555555555555555555555555555555555555",
+            "555555555555555555555555550600000000350c0000000000a0bb0d00000000002823",
+            "00002a000000"
+        )
+    );
+    assert_eq!(
+        hex(&attest_context(&era)),
+        concat!(
+            "5155414e544f56412f512d4f5241434c452f4154544553542f7631",
+            "4242424242424242424242424242424242424242424242424242424242424242"
+        )
+    );
+}

@@ -6,11 +6,13 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use qtv_attest::{Attestation, Block, Certificate, Envelope, Parent};
+use qtv_block::header_from_bytes;
 use qtv_codec::Decoder;
 use qtv_crypto::ml_dsa::{Signature, SIGNATURE_BYTES};
 use qtv_sampler::onetime::{MerklePath, NODE_BYTES, PREIMAGE_BYTES};
 use qtv_sampler::sortition::Credential;
 
+use crate::anchor::QuantovaAnchor;
 use crate::watch::{BurnWatchError, FinalizedBlock, QuantovaBurnSource};
 
 const PARENT_GENESIS: u8 = 0;
@@ -41,6 +43,19 @@ impl RpcBurnSource {
             port,
             timeout,
         }
+    }
+
+    pub fn certified_head_and_epoch(
+        &self,
+        anchor: &QuantovaAnchor,
+    ) -> Result<(u64, Option<u64>), BurnWatchError> {
+        let (status, text) = self.request("finalized_head", "{}")?;
+        if status != 200 {
+            return Err(BurnWatchError::Rpc(format!(
+                "finalized_head returned status {status}"
+            )));
+        }
+        decode_certified_head(&text, anchor)
     }
 
     pub fn finalized_head_and_epoch(&self) -> Result<(u64, Option<u64>), BurnWatchError> {
@@ -137,6 +152,48 @@ pub fn decode_finalized_head_epoch(body: &str) -> Result<(u64, Option<u64>), Bur
         .and_then(Json::as_u64)
         .ok_or_else(|| BurnWatchError::Rpc("finalized_head has no head field".to_string()))?;
     let epoch = value.get("bridge_epoch").and_then(Json::as_u64);
+    Ok((head, epoch))
+}
+
+pub fn decode_certified_head(
+    body: &str,
+    anchor: &QuantovaAnchor,
+) -> Result<(u64, Option<u64>), BurnWatchError> {
+    let (head, epoch) = decode_finalized_head_epoch(body)?;
+    let value = parse_json(body)?;
+    let header_hex = value
+        .get("header_bytes")
+        .and_then(Json::as_str)
+        .ok_or_else(|| BurnWatchError::Rpc("finalized_head carries no header".to_string()))?;
+    let cert_hex = value
+        .get("certificate")
+        .and_then(Json::as_str)
+        .ok_or_else(|| BurnWatchError::Rpc("finalized_head carries no certificate".to_string()))?;
+    let header = header_from_bytes(&decode_hex(header_hex)?)
+        .map_err(|_| BurnWatchError::Rpc("the head header does not decode".to_string()))?;
+    let certificate = decode_certificate(&decode_hex(cert_hex)?)?;
+    if header.height() != head
+        || certificate.envelope.block.val != header.hash()
+        || certificate.envelope.block.height != head
+        || certificate.envelope.height != head
+    {
+        return Err(BurnWatchError::Rpc(
+            "the head certificate is for another block".to_string(),
+        ));
+    }
+    if !certificate
+        .verify(
+            anchor.chain_id(),
+            anchor.commitment(),
+            anchor.beacon(),
+            anchor.tau(),
+        )
+        .is_verified()
+    {
+        return Err(BurnWatchError::Rpc(
+            "the head certificate does not verify against the pinned committee".to_string(),
+        ));
+    }
     Ok((head, epoch))
 }
 
