@@ -22,7 +22,7 @@ A proof backed deposit is admitted here but not minted here. The authoritative o
 
 ## Running it
 
-The oracle keeps its sense of time from the Quantova chain head it reads at the address in `Q_ORACLE_CHAIN_RPC`. That head is not signed, so it must come from a node the operator runs, over loopback or a private link that no one else can reach or sit in the middle of. The oracle already refuses a head that moves backwards and caps how far one answer can move it, but a head source on an open network could still push its windows forward faster than the chain.
+The oracle keeps its sense of time from the Quantova chain head it reads at the address in `Q_ORACLE_CHAIN_RPC`. That head is not signed, so it must come from a node the operator runs, over loopback or a private link that no one else can reach or sit in the middle of. The oracle already refuses a head that moves backwards and caps how far one answer can move it, but a head source on an open network could still push its windows forward faster than the chain. On a first boot with no saved height the oracle takes no head on trust, so the operator sets `Q_ORACLE_EXPECTED_HEAD` to the current chain height and `Q_ORACLE_EXPECTED_EPOCH` to the current bridge epoch, and the first answer is capped at those values.
 
 The Cosmos verifier checks Ed25519 more strictly than the ZIP 215 rules CometBFT uses. It refuses small order keys and commitments and non canonical encodings, and it uses the cofactorless check. A signature the Cosmos chain accepts under the looser rules can be ignored here, so a commit can fall short of two thirds and the light client stops until a later commit clears it. It never accepts a signature the chain would refuse.
 

@@ -11,11 +11,13 @@ use q_exits::RpcBurnSource;
 use crate::http::SharedState;
 
 pub const CHAIN_RPC_ENV: &str = "Q_ORACLE_CHAIN_RPC";
+pub const EXPECTED_HEAD_ENV: &str = "Q_ORACLE_EXPECTED_HEAD";
+pub const EXPECTED_EPOCH_ENV: &str = "Q_ORACLE_EXPECTED_EPOCH";
 
 const CLOCK_POLL: Duration = Duration::from_secs(5);
 const CLOCK_SLICE: Duration = Duration::from_millis(100);
-const MAX_BLOCKS_PER_SEC: u64 = 4;
-const CLOCK_SLACK_SECS: u64 = 60;
+const MAX_BLOCKS_PER_SEC: u64 = 20;
+const CLOCK_SLACK_BLOCKS: u64 = 240;
 const MIN_EPOCH_GAP: Duration = Duration::from_secs(6 * 60 * 60);
 const GENESIS_UNIX_SECS: u64 = 1_735_689_600;
 
@@ -26,8 +28,8 @@ fn wall_clock_head_cap() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     now.saturating_sub(GENESIS_UNIX_SECS)
-        .saturating_add(CLOCK_SLACK_SECS)
         .saturating_mul(MAX_BLOCKS_PER_SEC)
+        .saturating_add(CLOCK_SLACK_BLOCKS)
 }
 
 pub trait ChainHead {
@@ -59,8 +61,8 @@ pub fn bounded_head(last: Option<(u64, Duration)>, reported: u64) -> u64 {
         Some((height, elapsed)) => {
             let allowed = elapsed
                 .as_secs()
-                .saturating_add(CLOCK_SLACK_SECS)
-                .saturating_mul(MAX_BLOCKS_PER_SEC);
+                .saturating_mul(MAX_BLOCKS_PER_SEC)
+                .saturating_add(CLOCK_SLACK_BLOCKS);
             reported.min(height.saturating_add(allowed))
         }
     }
@@ -71,6 +73,7 @@ pub struct ChainClock<H: ChainHead> {
     origin: Option<(u64, Instant)>,
     epoch_moved: Option<Instant>,
     fresh: bool,
+    first_boot: Option<(u64, u64)>,
 }
 
 impl<H: ChainHead> ChainClock<H> {
@@ -80,6 +83,14 @@ impl<H: ChainHead> ChainClock<H> {
             origin: None,
             epoch_moved: None,
             fresh: false,
+            first_boot: None,
+        }
+    }
+
+    pub fn with_first_boot(head: H, expected_head: u64, expected_epoch: u64) -> ChainClock<H> {
+        ChainClock {
+            first_boot: Some((expected_head, expected_epoch)),
+            ..ChainClock::new(head)
         }
     }
 
@@ -93,9 +104,15 @@ impl<H: ChainHead> ChainClock<H> {
                 let restored = guard.gateway.current_height();
                 self.fresh = restored == 0;
                 if self.fresh {
+                    let (expected_head, _) = self.first_boot.ok_or_else(|| {
+                        format!(
+                            "a first boot with no saved height needs {EXPECTED_HEAD_ENV} set to the \
+                             current chain height, the clock will not take an unsigned head on trust"
+                        )
+                    })?;
                     guard
                         .gateway
-                        .advance_to(reported.min(wall_clock_head_cap()));
+                        .advance_to(reported.min(expected_head).min(wall_clock_head_cap()));
                 }
                 let origin = (guard.gateway.current_height(), now);
                 self.origin = Some(origin);
@@ -113,7 +130,8 @@ impl<H: ChainHead> ChainClock<H> {
             let spaced = self
                 .epoch_moved
                 .is_none_or(|at| now.duration_since(at) >= MIN_EPOCH_GAP);
-            if (self.fresh && self.epoch_moved.is_none() && epoch > current)
+            let first_epoch = self.first_boot.map_or(0, |(_, e)| e);
+            if (self.fresh && self.epoch_moved.is_none() && epoch > current && epoch <= first_epoch)
                 || (epoch == current.saturating_add(1) && spaced)
             {
                 guard.gateway.advance_epoch_to(epoch);
@@ -121,7 +139,6 @@ impl<H: ChainHead> ChainClock<H> {
             }
         }
         let accepted = guard.gateway.current_height();
-        self.origin = Some((accepted, now));
         drop(guard);
         Ok(accepted)
     }
@@ -145,7 +162,17 @@ pub fn spawn_clock<H: ChainHead + Send + 'static>(state: SharedState, head: H) -
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let thread = thread::spawn(move || {
-        let mut clock = ChainClock::new(head);
+        let expected = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+        };
+        let mut clock = match expected(EXPECTED_HEAD_ENV) {
+            Some(height) => {
+                ChainClock::with_first_boot(head, height, expected(EXPECTED_EPOCH_ENV).unwrap_or(0))
+            }
+            None => ChainClock::new(head),
+        };
         let mut failing = false;
         while !flag.load(Ordering::SeqCst) {
             match clock.tick(&state) {
@@ -191,8 +218,11 @@ mod tests {
     #[test]
     fn the_clock_carries_the_chain_head_into_the_gateway() {
         let state = shared(boot_configured());
-        let mut clock =
-            ChainClock::new(Scripted(RefCell::new(vec![(120, Some(0)), (125, Some(0))])));
+        let mut clock = ChainClock::with_first_boot(
+            Scripted(RefCell::new(vec![(120, Some(0)), (125, Some(0))])),
+            1_000,
+            0,
+        );
         assert_eq!(clock.tick(&state).unwrap(), 120);
         assert_eq!(clock.tick(&state).unwrap(), 125);
         assert_eq!(state.read().unwrap().gateway.current_height(), 125);
@@ -201,7 +231,11 @@ mod tests {
     #[test]
     fn a_head_that_goes_backwards_never_rewinds_the_clock() {
         let state = shared(boot_configured());
-        let mut clock = ChainClock::new(Scripted(RefCell::new(vec![(500, None), (10, None)])));
+        let mut clock = ChainClock::with_first_boot(
+            Scripted(RefCell::new(vec![(500, None), (10, None)])),
+            1_000,
+            0,
+        );
         clock.tick(&state).unwrap();
         assert_eq!(clock.tick(&state).unwrap(), 500);
     }
@@ -209,15 +243,16 @@ mod tests {
     #[test]
     fn a_leap_past_real_time_is_taken_only_as_far_as_time_allows() {
         let state = shared(boot_configured());
-        let mut clock = ChainClock::new(Scripted(RefCell::new(vec![
-            (1_000, None),
-            (u64::MAX, None),
-        ])));
+        let mut clock = ChainClock::with_first_boot(
+            Scripted(RefCell::new(vec![(1_000, None), (u64::MAX, None)])),
+            1_000,
+            0,
+        );
         clock.tick(&state).unwrap();
         let moved = clock.tick(&state).unwrap();
         assert!(moved > 1_000, "the clock still advances");
         assert!(
-            moved <= 1_000 + (CLOCK_SLACK_SECS + 1) * MAX_BLOCKS_PER_SEC,
+            moved <= 1_000 + CLOCK_SLACK_BLOCKS + MAX_BLOCKS_PER_SEC,
             "but one answer cannot carry it to the end of time"
         );
     }
@@ -225,7 +260,11 @@ mod tests {
     #[test]
     fn the_chain_epoch_rolls_the_epoch_caps() {
         let state = shared(boot_configured());
-        let mut clock = ChainClock::new(Scripted(RefCell::new(vec![(10, Some(3)), (11, Some(2))])));
+        let mut clock = ChainClock::with_first_boot(
+            Scripted(RefCell::new(vec![(10, Some(3)), (11, Some(2))])),
+            1_000,
+            3,
+        );
         clock.tick(&state).unwrap();
         assert_eq!(state.read().unwrap().gateway.current_epoch(), 3);
         clock.tick(&state).unwrap();
@@ -242,7 +281,7 @@ mod tests {
         state.write().unwrap().gateway.advance_to(5_000);
         let mut clock = ChainClock::new(Scripted(RefCell::new(vec![(u64::MAX, None)])));
         let moved = clock.tick(&state).unwrap();
-        assert!(moved <= 5_000 + (CLOCK_SLACK_SECS + 1) * MAX_BLOCKS_PER_SEC);
+        assert!(moved <= 5_000 + CLOCK_SLACK_BLOCKS + MAX_BLOCKS_PER_SEC);
     }
 
     #[test]
