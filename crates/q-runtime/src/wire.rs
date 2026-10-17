@@ -13,7 +13,7 @@ use q_qbridge::{
     ApiError, BitcoinProofMaterial, DepositOutcome, DepositProof, DepositRequest,
     DepositStatusRequest, DepositStatusView, EmergencyFreezeRequest, GetPoolRequest,
     ListPoolsRequest, PoolView, ReportReorgRequest, Request, Response, ResumeSourceRequest,
-    WatchdogFreezeRequest,
+    SetCorridorTierRequest, WatchdogFreezeRequest,
 };
 use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
 use qlc_cosmos::commit::{BlockIdFlag, Commit, CommitError, CommitSig, Header};
@@ -199,6 +199,7 @@ pub fn method_of(req: &Request) -> &'static str {
         Request::EmergencyFreeze(_) => "emergency_freeze",
         Request::WatchdogFreeze(_) => "watchdog_freeze",
         Request::RotateEthereumCommittee(_) => "rotate_ethereum_committee",
+        Request::SetCorridorTier(_) => "set_corridor_tier",
     }
 }
 
@@ -242,6 +243,11 @@ pub fn encode_request(req: &Request) -> Json {
         Request::WatchdogFreeze(r) => object(vec![
             ("until_height", Json::Int(r.until_height)),
             ("signature", signer_sig_json(&r.signature)),
+        ]),
+        Request::SetCorridorTier(r) => object(vec![
+            ("source_chain", u32j(r.source_chain)),
+            ("tier", Json::Int(r.tier as u64)),
+            ("signatures", signer_sigs_json(&r.signatures)),
         ]),
         Request::RotateEthereumCommittee(u) => object(vec![
             ("attested_header", header_json(&u.attested_header)),
@@ -327,7 +333,7 @@ fn signer_sig_from(j: &Json) -> Result<SignerSig, WireError> {
     })
 }
 
-fn signer_sigs_from(j: &Json) -> Result<Vec<SignerSig>, WireError> {
+pub(crate) fn signer_sigs_from(j: &Json) -> Result<Vec<SignerSig>, WireError> {
     let items = j.as_array().ok_or(WireError::BadType("signatures"))?;
     if items.len() > MAX_OPERATOR_SIGS {
         return Err(WireError::BadField("signatures"));
@@ -447,6 +453,11 @@ pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
         "watchdog_freeze" => Ok(Request::WatchdogFreeze(WatchdogFreezeRequest {
             until_height: as_u64(field(body, "until_height")?, "until_height")?,
             signature: signer_sig_from(field(body, "signature")?)?,
+        })),
+        "set_corridor_tier" => Ok(Request::SetCorridorTier(SetCorridorTierRequest {
+            source_chain: as_u32(field(body, "source_chain")?, "source_chain")?,
+            tier: as_u8(field(body, "tier")?, "tier")?,
+            signatures: signer_sigs_from(field(body, "signatures")?)?,
         })),
         "rotate_ethereum_committee" => Ok(Request::RotateEthereumCommittee(SyncCommitteeUpdate {
             attested_header: header_from(field(body, "attested_header")?)?,
@@ -1140,6 +1151,11 @@ pub fn encode_response(resp: &Response) -> Json {
             ("result", Json::str("source_resumed")),
             ("source_chain", u32j(*source_chain)),
         ]),
+        Response::CorridorTierSet { source_chain, tier } => object(vec![
+            ("result", Json::str("corridor_tier_set")),
+            ("source_chain", u32j(*source_chain)),
+            ("tier", Json::Int(*tier as u64)),
+        ]),
         Response::DepositAdmitted(outcome) => object(vec![
             ("result", Json::str("deposit_admitted")),
             ("outcome", outcome_json(outcome)),
@@ -1195,6 +1211,10 @@ pub fn decode_response(j: &Json) -> Result<Response, WireError> {
         }),
         "source_resumed" => Ok(Response::SourceResumed {
             source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
+        }),
+        "corridor_tier_set" => Ok(Response::CorridorTierSet {
+            source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
+            tier: as_u8(field(j, "tier")?, "tier")?,
         }),
         "status" => Ok(Response::Status(DepositStatusView {
             source_ref: hex_array::<32>(field(j, "source_ref")?, "source_ref")?,
@@ -1408,6 +1428,7 @@ fn eth_err_json(e: &EthError) -> Json {
         EthError::UnpinnedChainConfig => tagged("eth", "unpinned_chain_config", vec![]),
         EthError::BadSignature => tagged("eth", "bad_signature", vec![]),
         EthError::MissingReceipt => tagged("eth", "missing_receipt", vec![]),
+        EthError::UpdateChangesNothing => tagged("eth", "update_changes_nothing", vec![]),
         EthError::UnconfiguredDepositContract => {
             tagged("eth", "unconfigured_deposit_contract", vec![])
         }
@@ -1454,6 +1475,7 @@ fn eth_err_from(j: &Json) -> Result<EthError, WireError> {
         "bad_signature" => Ok(EthError::BadSignature),
         "missing_receipt" => Ok(EthError::MissingReceipt),
         "unconfigured_deposit_contract" => Ok(EthError::UnconfiguredDepositContract),
+        "update_changes_nothing" => Ok(EthError::UpdateChangesNothing),
         "cap_exceeded" => Ok(EthError::CapExceeded {
             amount: as_u128(field(j, "amount")?, "amount")?,
             cap: as_u128(field(j, "cap")?, "cap")?,
@@ -2103,6 +2125,24 @@ fn gateway_err_json(e: &GatewayError) -> Json {
                 ("high_water", Json::Int(*high_water)),
             ],
         ),
+        GatewayError::ReserveStale(asset_id) => tagged(
+            "gateway",
+            "reserve_stale",
+            vec![("asset_id", hexs(asset_id))],
+        ),
+        GatewayError::ReserveReportsNotRequired => {
+            tagged("gateway", "reserve_reports_not_required", vec![])
+        }
+        GatewayError::ReserveReportOutOfWindow { at, now } => tagged(
+            "gateway",
+            "reserve_report_out_of_window",
+            vec![("at", Json::Int(*at)), ("now", Json::Int(*now))],
+        ),
+        GatewayError::ReserveReportReplayed { at, last } => tagged(
+            "gateway",
+            "reserve_report_replayed",
+            vec![("at", Json::Int(*at)), ("last", Json::Int(*last))],
+        ),
     }
 }
 
@@ -2218,6 +2258,19 @@ fn gateway_err_from(j: &Json) -> Result<GatewayError, WireError> {
         "stale_or_replayed_nonce" => Ok(GatewayError::StaleOrReplayedNonce {
             got: as_u64(field(j, "got")?, "got")?,
             high_water: as_u64(field(j, "high_water")?, "high_water")?,
+        }),
+        "reserve_stale" => Ok(GatewayError::ReserveStale(hex_array::<16>(
+            field(j, "asset_id")?,
+            "asset_id",
+        )?)),
+        "reserve_reports_not_required" => Ok(GatewayError::ReserveReportsNotRequired),
+        "reserve_report_out_of_window" => Ok(GatewayError::ReserveReportOutOfWindow {
+            at: as_u64(field(j, "at")?, "at")?,
+            now: as_u64(field(j, "now")?, "now")?,
+        }),
+        "reserve_report_replayed" => Ok(GatewayError::ReserveReportReplayed {
+            at: as_u64(field(j, "at")?, "at")?,
+            last: as_u64(field(j, "last")?, "last")?,
         }),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }

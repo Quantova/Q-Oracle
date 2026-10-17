@@ -7,6 +7,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+publish = false
 description = "Wires the real hash-based STARK prover into the oracle. An operator whose light client has verified a foreign corridor event turns the fixed-width bridge fact into a Quantova-native commitment and proves, with a SHAKE256 sponge arithmetized as a Goldilocks STARK, that it computed the SHA-3 digest of that exact statement. The statement is public and the proof needs no key, so anyone can build it. It shows only that the digest was computed and carries no authority, nothing admits a fact on it, and authority comes from the ML-DSA operator attestation quorum. The in-circuit check of the foreign signature itself is the deep circuit still to build."
 
 [dependencies]

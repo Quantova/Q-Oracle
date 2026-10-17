@@ -10,8 +10,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use q_qbridge::{
-    commit_deposit, handle, handle_read, install_ethereum_rotation, prepare_deposit,
-    rotate_ethereum_store, verify_prepared, ApiError, BridgeState, DepositProof, Request, Response,
+    commit_deposit, handle, handle_read, install_ethereum_rotation, precheck_ethereum_rotation,
+    prepare_deposit, rotate_ethereum_store, verify_prepared, ApiError, BridgeState, DepositProof,
+    Request, Response,
 };
 
 use crate::json::{self, object, Json};
@@ -87,9 +88,19 @@ pub const MAX_PROOFS_PER_WINDOW: usize = 64;
 
 pub const MAX_PROOFS_PER_IP_PER_WINDOW: usize = 2;
 
-#[derive(Default)]
+pub const MAX_PROOFS_PER_PREFIX_PER_WINDOW: usize = 8;
+
+pub const MAX_ROTATION_VERIFICATIONS: usize = 1;
+
+pub const MAX_ROTATIONS_PER_WINDOW: usize = 8;
+
+pub const MAX_ROTATIONS_PER_IP_PER_WINDOW: usize = 1;
+
+pub const MAX_ROTATIONS_PER_PREFIX_PER_WINDOW: usize = 2;
+
 struct ProofSlots {
     busy: AtomicUsize,
+    cap: usize,
 }
 
 struct ProofSlot<'a> {
@@ -97,10 +108,17 @@ struct ProofSlot<'a> {
 }
 
 impl ProofSlots {
+    fn new(cap: usize) -> ProofSlots {
+        ProofSlots {
+            busy: AtomicUsize::new(0),
+            cap,
+        }
+    }
+
     fn try_acquire(&self) -> Option<ProofSlot<'_>> {
         self.busy
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |busy| {
-                (busy < MAX_PROOF_VERIFICATIONS).then_some(busy + 1)
+                (busy < self.cap).then_some(busy + 1)
             })
             .ok()
             .map(|_| ProofSlot { slots: self })
@@ -113,11 +131,94 @@ impl Drop for ProofSlot<'_> {
     }
 }
 
-fn carries_proof(request: &Request) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProofClass {
+    Deposit,
+    Rotation,
+}
+
+fn proof_class(request: &Request) -> Option<ProofClass> {
     match request {
-        Request::SubmitDeposit(deposit) => !matches!(deposit.proof, DepositProof::Federated(_)),
-        Request::RotateEthereumCommittee(_) => true,
-        _ => false,
+        Request::SubmitDeposit(deposit) if !matches!(deposit.proof, DepositProof::Federated(_)) => {
+            Some(ProofClass::Deposit)
+        }
+        Request::RotateEthereumCommittee(_) => Some(ProofClass::Rotation),
+        _ => None,
+    }
+}
+
+fn prefix_key(ip: IpAddr) -> IpAddr {
+    match client_key(ip) {
+        IpAddr::V4(v4) => IpAddr::V4(Ipv4Addr::from(u32::from(v4) & 0xffff_ff00)),
+        IpAddr::V6(v6) => IpAddr::V6(Ipv6Addr::from(
+            u128::from(v6) & 0xffff_ffff_ffff_0000_0000_0000_0000_0000,
+        )),
+    }
+}
+
+struct ProofBudget {
+    total_cap: usize,
+    per_ip_cap: usize,
+    per_prefix_cap: usize,
+    inner: Mutex<ProofBudgetInner>,
+}
+
+#[derive(Default)]
+struct ProofBudgetInner {
+    window_start: Option<Instant>,
+    total: usize,
+    per_ip: HashMap<IpAddr, usize>,
+    per_prefix: HashMap<IpAddr, usize>,
+}
+
+impl ProofBudgetInner {
+    fn roll(&mut self, now: Instant, window: Duration) {
+        let elapsed = self
+            .window_start
+            .map(|start| now.saturating_duration_since(start) >= window)
+            .unwrap_or(true);
+        if elapsed {
+            self.window_start = Some(now);
+            self.total = 0;
+            self.per_ip.clear();
+            self.per_prefix.clear();
+        }
+    }
+}
+
+impl ProofBudget {
+    fn new(total_cap: usize, per_ip_cap: usize, per_prefix_cap: usize) -> ProofBudget {
+        ProofBudget {
+            total_cap,
+            per_ip_cap,
+            per_prefix_cap,
+            inner: Mutex::new(ProofBudgetInner::default()),
+        }
+    }
+
+    fn charge_client(&self, ip: IpAddr, now: Instant, window: Duration) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.roll(now, window);
+        let ip_key = client_key(ip);
+        let prefix = prefix_key(ip);
+        if inner.per_ip.get(&ip_key).copied().unwrap_or(0) >= self.per_ip_cap
+            || inner.per_prefix.get(&prefix).copied().unwrap_or(0) >= self.per_prefix_cap
+        {
+            return false;
+        }
+        *inner.per_ip.entry(ip_key).or_insert(0) += 1;
+        *inner.per_prefix.entry(prefix).or_insert(0) += 1;
+        true
+    }
+
+    fn charge_global(&self, now: Instant, window: Duration) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.roll(now, window);
+        if inner.total >= self.total_cap {
+            return false;
+        }
+        inner.total += 1;
+        true
     }
 }
 
@@ -342,10 +443,39 @@ pub fn serve_with(
     });
 }
 
-#[derive(Default)]
 struct ProofGate {
     slots: ProofSlots,
-    rate: RateLimiter,
+    rotation_slots: ProofSlots,
+    deposits: ProofBudget,
+    rotations: ProofBudget,
+}
+
+impl Default for ProofGate {
+    fn default() -> ProofGate {
+        ProofGate {
+            slots: ProofSlots::new(MAX_PROOF_VERIFICATIONS),
+            rotation_slots: ProofSlots::new(MAX_ROTATION_VERIFICATIONS),
+            deposits: ProofBudget::new(
+                MAX_PROOFS_PER_WINDOW,
+                MAX_PROOFS_PER_IP_PER_WINDOW,
+                MAX_PROOFS_PER_PREFIX_PER_WINDOW,
+            ),
+            rotations: ProofBudget::new(
+                MAX_ROTATIONS_PER_WINDOW,
+                MAX_ROTATIONS_PER_IP_PER_WINDOW,
+                MAX_ROTATIONS_PER_PREFIX_PER_WINDOW,
+            ),
+        }
+    }
+}
+
+impl ProofGate {
+    fn budget(&self, class: ProofClass) -> &ProofBudget {
+        match class {
+            ProofClass::Deposit => &self.deposits,
+            ProofClass::Rotation => &self.rotations,
+        }
+    }
 }
 
 struct SlotGuard {
@@ -626,24 +756,22 @@ fn handle_connection(
         }
     };
 
-    if carries_proof(&request)
-        && !proofs.rate.allow(
+    if let Some(class) = proof_class(&request) {
+        if !proofs.budget(class).charge_client(
             forwarded.unwrap_or(peer),
             Instant::now(),
             RATE_WINDOW,
-            MAX_PROOFS_PER_WINDOW,
-            MAX_PROOFS_PER_IP_PER_WINDOW,
-        )
-    {
-        return write_error(
-            &mut stream,
-            429,
-            "rate_limited",
-            "too many proofs from this address, slow down",
-        );
+        ) {
+            return write_error(
+                &mut stream,
+                429,
+                "rate_limited",
+                "too many proofs from this address, slow down",
+            );
+        }
     }
 
-    let response = match route(&state, store.as_deref(), &proofs.slots, request) {
+    let response = match route(&state, store.as_deref(), &proofs, request) {
         Ok(response) => response,
         Err(RouteFail::Panicked) => {
             return write_error(
@@ -669,6 +797,14 @@ fn handle_connection(
                 "every proof verifier is in use, retry shortly",
             )
         }
+        Err(RouteFail::ProofBudget) => {
+            return write_error(
+                &mut stream,
+                429,
+                "rate_limited",
+                "the proof budget for this second is spent, retry shortly",
+            )
+        }
     };
     write_response(&mut stream, 200, &encode_response(&response).render())
 }
@@ -677,6 +813,7 @@ enum RouteFail {
     Panicked,
     PersistFailed,
     Busy,
+    ProofBudget,
 }
 
 fn persist_if_advanced(
@@ -698,7 +835,7 @@ fn persist_if_advanced(
 fn route(
     state: &SharedState,
     store: Option<&GuardStore>,
-    slots: &ProofSlots,
+    proofs: &ProofGate,
     request: Request,
 ) -> Result<Response, RouteFail> {
     {
@@ -722,7 +859,10 @@ fn route(
                 Err(err) => return Ok(Response::Error(err)),
             };
             let slot = if prepared.needs_proof_verification() {
-                Some(slots.try_acquire().ok_or(RouteFail::Busy)?)
+                if !proofs.deposits.charge_global(Instant::now(), RATE_WINDOW) {
+                    return Err(RouteFail::ProofBudget);
+                }
+                Some(proofs.slots.try_acquire().ok_or(RouteFail::Busy)?)
             } else {
                 None
             };
@@ -767,7 +907,17 @@ fn route(
                     q_assets::Network::Ethereum.id(),
                 )));
             };
-            let slot = slots.try_acquire().ok_or(RouteFail::Busy)?;
+            let prechecked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                precheck_ethereum_rotation(&before, &update)
+            }))
+            .map_err(unwound)?;
+            if let Err(err) = prechecked {
+                return Ok(Response::Error(err));
+            }
+            if !proofs.rotations.charge_global(Instant::now(), RATE_WINDOW) {
+                return Err(RouteFail::ProofBudget);
+            }
+            let slot = proofs.rotation_slots.try_acquire().ok_or(RouteFail::Busy)?;
             let rotated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 rotate_ethereum_store(&before, &update)
             }))

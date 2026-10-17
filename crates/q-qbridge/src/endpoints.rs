@@ -130,6 +130,13 @@ pub struct WatchdogFreezeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetCorridorTierRequest {
+    pub source_chain: u32,
+    pub tier: u8,
+    pub signatures: Vec<SignerSig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
     CreatePool(PoolRequest),
@@ -142,6 +149,7 @@ pub enum Request {
     EmergencyFreeze(EmergencyFreezeRequest),
     WatchdogFreeze(WatchdogFreezeRequest),
     RotateEthereumCommittee(SyncCommitteeUpdate),
+    SetCorridorTier(SetCorridorTierRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,6 +226,7 @@ pub enum Response {
     SourceResumed { source_chain: u32 },
     Frozen { until_height: u64 },
     CommitteeRotated { period: u64, finalized_slot: u64 },
+    CorridorTierSet { source_chain: u32, tier: u8 },
     Error(ApiError),
 }
 
@@ -237,6 +246,11 @@ pub fn precheck(state: &BridgeState, request: &Request) -> Result<(), ApiError> 
         Request::WatchdogFreeze(r) => state
             .gateway
             .precheck_watchdog(r.until_height, &r.signature),
+        Request::SetCorridorTier(r) => {
+            state
+                .gateway
+                .precheck_tier(r.source_chain, r.tier, &r.signatures)
+        }
         _ => Ok(()),
     };
     checked.map_err(ApiError::Gateway)
@@ -375,6 +389,19 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
                 Err(err) => Response::Error(ApiError::Gateway(err)),
             }
         }
+        Request::SetCorridorTier(request) => {
+            match state.gateway.set_corridor_tier(
+                request.source_chain,
+                request.tier,
+                &request.signatures,
+            ) {
+                Ok(()) => Response::CorridorTierSet {
+                    source_chain: request.source_chain,
+                    tier: request.tier,
+                },
+                Err(err) => Response::Error(ApiError::Gateway(err)),
+            }
+        }
         Request::RotateEthereumCommittee(update) => {
             let rotated = state
                 .ethereum_store
@@ -387,6 +414,13 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
             }
         }
     }
+}
+
+pub fn precheck_ethereum_rotation(
+    store: &LightClientStore,
+    update: &SyncCommitteeUpdate,
+) -> Result<(), ApiError> {
+    qlc_ethereum::precheck_sync_committee_update(store, update).map_err(ApiError::EthereumVerify)
 }
 
 pub fn rotate_ethereum_store(

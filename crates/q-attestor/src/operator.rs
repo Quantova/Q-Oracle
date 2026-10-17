@@ -61,7 +61,7 @@ pub struct Operator<S: AttestationSigner> {
     signed_refs: BTreeMap<(u32, [u8; 32]), u64>,
     seen_facts: BTreeMap<(u32, [u8; 32]), ([u8; 32], u64)>,
     state: OperatorState,
-    journal: Option<DivergenceJournal>,
+    journal: DivergenceJournal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,23 +181,29 @@ impl DivergenceJournal {
 }
 
 impl<S: AttestationSigner> Operator<S> {
-    pub fn new(signer: S) -> Operator<S> {
-        Operator {
+    pub fn new(signer: S, journal: DivergenceJournal) -> io::Result<Operator<S>> {
+        if journal.path().as_os_str().is_empty() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "an operator needs a divergence journal path, or a restart would forget what it signed",
+            ));
+        }
+        let records = journal.load()?;
+        let mut operator = Operator {
             signer,
             corridors: BTreeMap::new(),
             signed_refs: BTreeMap::new(),
             seen_facts: BTreeMap::new(),
             state: OperatorState::Running,
-            journal: None,
-        }
+            journal,
+        };
+        operator.restore_divergence(&records);
+        operator.journal.save(&operator.export_divergence())?;
+        Ok(operator)
     }
 
-    pub fn with_journal(signer: S, journal: DivergenceJournal) -> io::Result<Operator<S>> {
-        let records = journal.load()?;
-        let mut operator = Operator::new(signer);
-        operator.restore_divergence(&records);
-        operator.journal = Some(journal);
-        Ok(operator)
+    pub fn journal(&self) -> &DivergenceJournal {
+        &self.journal
     }
 
     pub fn configure_corridor(&mut self, ctx: CorridorContext) {
@@ -300,17 +306,15 @@ impl<S: AttestationSigner> Operator<S> {
             .entry(key)
             .or_insert((digest, fact.expiry_height));
         self.signed_refs.insert(key, fact.expiry_height);
-        if let Some(journal) = &self.journal {
-            if journal.save(&self.export_divergence()).is_err() {
-                if fresh_seen {
-                    self.seen_facts.remove(&key);
-                }
-                match previous_signed {
-                    Some(expiry) => self.signed_refs.insert(key, expiry),
-                    None => self.signed_refs.remove(&key),
-                };
-                return Err(OperatorError::JournalUnavailable);
+        if self.journal.save(&self.export_divergence()).is_err() {
+            if fresh_seen {
+                self.seen_facts.remove(&key);
             }
+            match previous_signed {
+                Some(expiry) => self.signed_refs.insert(key, expiry),
+                None => self.signed_refs.remove(&key),
+            };
+            return Err(OperatorError::JournalUnavailable);
         }
 
         let message = fact.attest_preimage(ctx.dest_chain_id);
@@ -363,9 +367,17 @@ mod tests {
         }
     }
 
+    fn journal(tag: &str) -> DivergenceJournal {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("q-attestor-unit-{tag}-{n}.qdiv"));
+        let _ = std::fs::remove_file(&path);
+        DivergenceJournal::new(path)
+    }
+
     fn op() -> Operator<SoftSigner> {
         let seed = [0x09u8; 32];
-        let mut o = Operator::new(SoftSigner::from_seed(0, &seed));
+        let mut o = Operator::new(SoftSigner::from_seed(0, &seed), journal("op")).expect("journal");
         o.configure_corridor(ctx());
         o
     }
@@ -470,7 +482,8 @@ mod tests {
     #[test]
     fn the_same_source_ref_on_two_corridors_is_signed_not_read_as_divergence() {
         let seed = [0x09u8; 32];
-        let mut operator = Operator::new(SoftSigner::from_seed(0, &seed));
+        let mut operator =
+            Operator::new(SoftSigner::from_seed(0, &seed), journal("cross")).expect("journal");
         operator.configure_corridor(ctx());
         let mut ctx2 = ctx();
         ctx2.source_chain = 2;

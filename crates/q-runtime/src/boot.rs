@@ -43,7 +43,6 @@ fn unix_millis() -> u64 {
 
 pub struct ExitService {
     gateway: Option<SharedState>,
-    reserves: q_watchtower::StaticReserves,
     desk: ExitDesk,
     feed: BurnFeed,
     source: RpcBurnSource,
@@ -144,10 +143,6 @@ impl ExitService {
             desk.register_vault(vault.vault_id, vault.collateral);
         }
         desk.reconstruct()?;
-        let mut reserves = q_watchtower::StaticReserves::new();
-        for (asset, escrowed) in &cfg.reserves {
-            reserves.set(*asset, *escrowed);
-        }
         let settle = cfg.bitcoin.as_ref().map(|checkpoint| {
             let pinned = Checkpoint {
                 height: checkpoint.height,
@@ -177,7 +172,6 @@ impl ExitService {
         });
         Ok(ExitService {
             gateway: None,
-            reserves,
             settle,
             desk,
             feed: BurnFeed::new(cfg.start_height, ExitConfig { enabled: true }),
@@ -321,7 +315,7 @@ impl ExitService {
         let _ = self.sweep_slash(now);
         if let Some(state) = self.gateway.as_ref() {
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
-            let breaches = q_watchtower::Watchtower::enforce(&mut guard.gateway, &self.reserves);
+            let breaches = crate::reserve::enforce_reserves(&mut guard.gateway);
             for breach in &breaches {
                 eprintln!("q-oracle: reserve shortfall, gateway paused: {breach:?}");
             }
@@ -449,6 +443,8 @@ pub const QUORUM_ENV: &str = "Q_ORACLE_QUORUM";
 pub const DEST_CHAIN_ID_ENV: &str = "Q_ORACLE_DEST_CHAIN_ID";
 pub const ERA_ENV: &str = "Q_ORACLE_ERA";
 pub const SOURCES_ENV: &str = "Q_ORACLE_SOURCES";
+pub const GOVERNANCE_ENV: &str = "Q_ORACLE_GOVERNANCE";
+pub const GOVERNANCE_QUORUM_ENV: &str = "Q_ORACLE_GOVERNANCE_QUORUM";
 
 #[derive(Debug)]
 pub enum BootConfigError {
@@ -467,7 +463,28 @@ pub fn boot_from_env() -> Result<BridgeState, BootConfigError> {
         std::env::var(ERA_ENV).ok().as_deref(),
     )?;
     declare_sources_from(&mut state, std::env::var(SOURCES_ENV).ok().as_deref())?;
+    governance_from(
+        &mut state,
+        std::env::var(GOVERNANCE_ENV).ok().as_deref(),
+        std::env::var(GOVERNANCE_QUORUM_ENV).ok().as_deref(),
+    )?;
     Ok(state)
+}
+
+pub fn governance_from(
+    state: &mut BridgeState,
+    members_raw: Option<&str>,
+    quorum_raw: Option<&str>,
+) -> Result<(), BootConfigError> {
+    let Some(raw) = members_raw.filter(|raw| !raw.trim().is_empty()) else {
+        if quorum_raw.is_some() {
+            return Err(BootConfigError::Missing(GOVERNANCE_ENV));
+        }
+        return Ok(());
+    };
+    let set = operator_set_from(raw, quorum_raw, GOVERNANCE_ENV, GOVERNANCE_QUORUM_ENV)?;
+    state.gateway.set_governance(set);
+    Ok(())
 }
 
 pub fn declare_sources_from(
@@ -504,11 +521,32 @@ pub fn boot_from_config(
     era_raw: Option<&str>,
 ) -> Result<BridgeState, BootConfigError> {
     let raw = operators_raw.ok_or(BootConfigError::Missing(OPERATORS_ENV))?;
+    let set = operator_set_from(raw, quorum_raw, OPERATORS_ENV, QUORUM_ENV)?;
+    let dest_chain_id: u64 = dest_raw
+        .ok_or(BootConfigError::Missing(DEST_CHAIN_ID_ENV))?
+        .trim()
+        .parse()
+        .map_err(|_| BootConfigError::Malformed(DEST_CHAIN_ID_ENV))?;
+    let era: [u8; 32] = decode_hex(era_raw.ok_or(BootConfigError::Missing(ERA_ENV))?)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or(BootConfigError::Malformed(ERA_ENV))?;
+    if era == [0u8; 32] {
+        return Err(BootConfigError::Malformed(ERA_ENV));
+    }
+    Ok(boot_with(set, dest_chain_id, era, DEFAULT_EPOCH_CAP))
+}
+
+fn operator_set_from(
+    raw: &str,
+    quorum_raw: Option<&str>,
+    members_env: &'static str,
+    quorum_env: &'static str,
+) -> Result<OperatorSet, BootConfigError> {
     let mut operators: Vec<(u32, Vec<u8>)> = Vec::new();
     for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
         let (id, key) = entry
             .split_once(':')
-            .ok_or(BootConfigError::Malformed(OPERATORS_ENV))?;
+            .ok_or(BootConfigError::Malformed(members_env))?;
         let id: u32 = id
             .parse()
             .map_err(|_| BootConfigError::Malformed("operator id"))?;
@@ -522,10 +560,10 @@ pub fn boot_from_config(
         return Err(BootConfigError::EmptyOperatorSet);
     }
     let quorum: usize = quorum_raw
-        .ok_or(BootConfigError::Missing(QUORUM_ENV))?
+        .ok_or(BootConfigError::Missing(quorum_env))?
         .trim()
         .parse()
-        .map_err(|_| BootConfigError::Malformed(QUORUM_ENV))?;
+        .map_err(|_| BootConfigError::Malformed(quorum_env))?;
     let floor = q_gateway::gateway::supermajority_floor(operators.len());
     if quorum < floor {
         return Err(BootConfigError::QuorumBelowFloor { got: quorum, floor });
@@ -536,18 +574,6 @@ pub fn boot_from_config(
             size: operators.len(),
         });
     }
-    let dest_chain_id: u64 = dest_raw
-        .ok_or(BootConfigError::Missing(DEST_CHAIN_ID_ENV))?
-        .trim()
-        .parse()
-        .map_err(|_| BootConfigError::Malformed(DEST_CHAIN_ID_ENV))?;
-    let era: [u8; 32] = decode_hex(era_raw.ok_or(BootConfigError::Missing(ERA_ENV))?)
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or(BootConfigError::Malformed(ERA_ENV))?;
-    if era == [0u8; 32] {
-        return Err(BootConfigError::Malformed(ERA_ENV));
-    }
-
     let mut set = OperatorSet::new(quorum);
     for (id, key) in operators {
         let pk: qtv_crypto::ml_dsa::PublicKey = key
@@ -557,7 +583,7 @@ pub fn boot_from_config(
             return Err(BootConfigError::Malformed("duplicate operator"));
         }
     }
-    Ok(boot_with(set, dest_chain_id, era, DEFAULT_EPOCH_CAP))
+    Ok(set)
 }
 
 fn decode_hex(input: &str) -> Option<Vec<u8>> {
@@ -828,18 +854,26 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
         .registered_assets();
     reserves_cover(&registered, &reserves)?;
     apply_reserves(&state, &reserves);
+    let store = store.map(Arc::new);
     let mut anchors = crate::anchors::anchors_from_env().map_err(|e| {
         std::io::Error::new(
             ErrorKind::InvalidInput,
             format!("the proof anchor file is unusable, refusing to start: {e:?}"),
         )
     })?;
-    if anchors.is_empty() {
+    let proof_corridors = !anchors.is_empty();
+    if !proof_corridors {
         eprintln!(
             "q-oracle: no proof anchor file is configured, so the bitcoin, ethereum and cosmos \
              proof corridors refuse every deposit"
         );
     }
+    let reserve_watch = reserve_watch_for(
+        crate::reserve::reserve_source_from_env(),
+        proof_corridors,
+        crate::exits::exit_config_from_env().enabled,
+        store.clone(),
+    )?;
     anchors.install(&mut state.write().unwrap_or_else(|e| e.into_inner()));
     let chain_rpc = std::env::var(crate::clock::CHAIN_RPC_ENV).map_err(|_| {
         std::io::Error::new(
@@ -868,8 +902,36 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
             crate::clock::spawn_clock(state.clone(), head_source)
         }
     };
+    let _reserve = reserve_watch.map(|watch| watch.spawn(state.clone()));
     let _exits = start_exits_for(Some(state.clone()))?;
-    run_with(addr, state, store.map(Arc::new))
+    run_with(addr, state, store)
+}
+
+pub(crate) fn reserve_watch_for(
+    source: Result<Option<crate::reserve::ReserveSource>, crate::reserve::ReserveSourceError>,
+    proof_corridors: bool,
+    exits_enabled: bool,
+    store: Option<Arc<GuardStore>>,
+) -> std::io::Result<Option<crate::reserve::ReserveWatch>> {
+    match source {
+        Ok(Some(source)) => Ok(Some(crate::reserve::ReserveWatch::new(source, store))),
+        Ok(None) if proof_corridors || exits_enabled => Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "proof backed corridors or exits are enabled but no signed reserve report source is \
+             configured, so the reserve breaker cannot see the foreign custody; refusing to start",
+        )),
+        Ok(None) => {
+            eprintln!(
+                "q-oracle: no signed reserve report source is configured, so the escrow bound \
+                 holds at the static reserve figures"
+            );
+            Ok(None)
+        }
+        Err(e) => Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("the reserve report source is unusable, refusing to start: {e:?}"),
+        )),
+    }
 }
 
 pub(crate) fn restore(store: &Option<GuardStore>) -> std::io::Result<BridgeState> {

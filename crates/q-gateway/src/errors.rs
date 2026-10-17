@@ -93,6 +93,16 @@ pub enum GatewayError {
         pending: usize,
         cap: usize,
     },
+    ReserveStale([u8; 16]),
+    ReserveReportsNotRequired,
+    ReserveReportOutOfWindow {
+        at: u64,
+        now: u64,
+    },
+    ReserveReportReplayed {
+        at: u64,
+        last: u64,
+    },
 }
 
 impl From<CodecError> for GatewayError {

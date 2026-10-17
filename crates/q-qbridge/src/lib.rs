@@ -6,9 +6,10 @@ pub mod endpoints;
 
 pub use endpoints::{
     commit_deposit, handle, handle_read, install_ethereum_rotation, install_ethereum_store,
-    precheck, prepare_deposit, rotate_ethereum_store, verify_deposit, verify_prepared, ApiError,
-    BitcoinAnchor, BitcoinProofMaterial, BridgeState, CosmosAnchor, DepositOutcome, DepositPlan,
-    DepositProof, DepositRequest, DepositStatusRequest, DepositStatusView, EmergencyFreezeRequest,
-    GetPoolRequest, ListPoolsRequest, PoolView, PreparedDeposit, ReportReorgRequest, Request,
-    Response, ResumeSourceRequest, WatchdogFreezeRequest,
+    precheck, precheck_ethereum_rotation, prepare_deposit, rotate_ethereum_store, verify_deposit,
+    verify_prepared, ApiError, BitcoinAnchor, BitcoinProofMaterial, BridgeState, CosmosAnchor,
+    DepositOutcome, DepositPlan, DepositProof, DepositRequest, DepositStatusRequest,
+    DepositStatusView, EmergencyFreezeRequest, GetPoolRequest, ListPoolsRequest, PoolView,
+    PreparedDeposit, ReportReorgRequest, Request, Response, ResumeSourceRequest,
+    SetCorridorTierRequest, WatchdogFreezeRequest,
 };

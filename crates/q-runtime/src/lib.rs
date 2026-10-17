@@ -11,6 +11,7 @@ pub mod exits;
 pub mod http;
 pub mod json;
 pub mod persist;
+pub mod reserve;
 pub mod watch;
 pub mod wire;
 
@@ -26,6 +27,11 @@ pub use exits::{
 pub use http::{serve, SharedState, MAX_BODY, MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_HEAD};
 pub use json::Json;
 pub use persist::GuardStore;
+pub use reserve::{
+    enforce_reserves, load_reserve_reports, parse_reserve_reports, reserve_source_from,
+    ReserveReport, ReserveSource, ReserveSourceError, ReserveTick, ReserveWatch,
+    RESERVE_MAX_AGE_ENV, RESERVE_REPORTS_ENV,
+};
 pub use watch::{
     bitcoin_proof, cosmos_proof, ethereum_proof, federated_proof, ingest_once, ChainWatcher,
     Ingested, WatchError, WatcherPool,

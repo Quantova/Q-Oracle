@@ -17,6 +17,8 @@ pub const TIER_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/TIER/v1";
 pub const FREEZE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/FREEZE/v1";
 pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
+pub const RESERVE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/RESERVE/v1";
+pub const RESERVE_MAX_AGE: u64 = 18_000;
 
 pub const MAX_PENDING_EXITS: usize = 65_536;
 pub const BASE_TIER: u8 = 1;
@@ -85,6 +87,8 @@ pub struct Gateway {
     next_exit_id: u64,
     pending_exits: BTreeMap<u64, ExitTicket>,
     guard_revision: u64,
+    reserve_max_age: Option<u64>,
+    reserve_reported_at: BTreeMap<[u8; 16], u64>,
 }
 
 impl Gateway {
@@ -124,6 +128,8 @@ impl Gateway {
             next_exit_id: 0,
             pending_exits: BTreeMap::new(),
             guard_revision: 0,
+            reserve_max_age: None,
+            reserve_reported_at: BTreeMap::new(),
         }
     }
 
@@ -252,7 +258,102 @@ impl Gateway {
         self.escrowed.get(asset_id).copied()
     }
 
+    pub fn require_reserve_reports(&mut self, max_age: u64) {
+        self.reserve_max_age = Some(max_age.clamp(1, RESERVE_MAX_AGE));
+    }
+
+    pub fn reserve_reports_required(&self) -> bool {
+        self.reserve_max_age.is_some()
+    }
+
+    pub fn reserve_reported_at(&self, asset_id: &[u8; 16]) -> Option<u64> {
+        self.reserve_reported_at.get(asset_id).copied()
+    }
+
+    pub fn reserve_is_fresh(&self, asset_id: &[u8; 16]) -> bool {
+        let Some(max_age) = self.reserve_max_age else {
+            return true;
+        };
+        self.reserve_reported_at
+            .get(asset_id)
+            .is_some_and(|at| self.current_height <= at.saturating_add(max_age))
+    }
+
+    pub fn stale_reserves(&self) -> Vec<[u8; 16]> {
+        self.per_asset_cap
+            .keys()
+            .filter(|asset_id| !self.reserve_is_fresh(asset_id))
+            .copied()
+            .collect()
+    }
+
+    pub fn precheck_reserve(
+        &self,
+        asset_id: [u8; 16],
+        escrowed: u128,
+        at_height: u64,
+        sigs: &[SignerSig],
+    ) -> Result<(), GatewayError> {
+        let max_age = self
+            .reserve_max_age
+            .ok_or(GatewayError::ReserveReportsNotRequired)?;
+        if !self.per_asset_cap.contains_key(&asset_id) {
+            return Err(GatewayError::AssetNotRegistered);
+        }
+        if self.current_height == 0
+            || at_height > self.current_height.saturating_add(RESUME_SKEW)
+            || self.current_height > at_height.saturating_add(max_age)
+        {
+            return Err(GatewayError::ReserveReportOutOfWindow {
+                at: at_height,
+                now: self.current_height,
+            });
+        }
+        if let Some(&last) = self.reserve_reported_at.get(&asset_id) {
+            if at_height <= last {
+                return Err(GatewayError::ReserveReportReplayed {
+                    at: at_height,
+                    last,
+                });
+            }
+        }
+        let message = reserve_message(
+            &asset_id,
+            escrowed,
+            at_height,
+            self.dest_chain_id,
+            &self.era,
+        );
+        self.quorum_met(&message, RESERVE_DOMAIN, sigs)
+    }
+
+    pub fn attest_reserve(
+        &mut self,
+        asset_id: [u8; 16],
+        escrowed: u128,
+        at_height: u64,
+        sigs: &[SignerSig],
+    ) -> Result<bool, GatewayError> {
+        self.precheck_reserve(asset_id, escrowed, at_height, sigs)?;
+        self.escrowed.insert(asset_id, escrowed);
+        self.reserve_reported_at.insert(asset_id, at_height);
+        let supply = self
+            .per_asset_minted
+            .get(&asset_id)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(self.pending_exit_of(&asset_id));
+        if supply > escrowed {
+            self.pause_all();
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
     fn charge_asset_escrow(&self, asset_id: &[u8; 16], amount: u128) -> Result<(), GatewayError> {
+        if !self.reserve_is_fresh(asset_id) {
+            return Err(GatewayError::ReserveStale(*asset_id));
+        }
         let Some(&escrowed) = self.escrowed.get(asset_id) else {
             return Ok(());
         };
@@ -576,6 +677,20 @@ impl Gateway {
         proposed: u8,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
+        self.precheck_tier(source_chain, proposed, sigs)?;
+        if let Some(corridor) = self.corridors.get_mut(&source_chain) {
+            corridor.tier = proposed;
+            self.touch_guard();
+        }
+        Ok(())
+    }
+
+    pub fn precheck_tier(
+        &self,
+        source_chain: u32,
+        proposed: u8,
+        sigs: &[SignerSig],
+    ) -> Result<(), GatewayError> {
         if self.governance.size() == 0 {
             return Err(GatewayError::NoGovernanceSet);
         }
@@ -593,7 +708,7 @@ impl Gateway {
         }
         let corridor = self
             .corridors
-            .get_mut(&source_chain)
+            .get(&source_chain)
             .ok_or(GatewayError::CorridorNotOpen(source_chain))?;
         if proposed <= corridor.tier {
             return Err(GatewayError::TierDowngrade {
@@ -601,8 +716,6 @@ impl Gateway {
                 to: proposed,
             });
         }
-        corridor.tier = proposed;
-        self.touch_guard();
         Ok(())
     }
 
@@ -1340,6 +1453,22 @@ pub fn tier_message(
     let mut w = Writer::new();
     w.u32(source_chain);
     w.u8(proposed);
+    w.u64(dest_chain_id);
+    w.fixed(era);
+    w.finish()
+}
+
+pub fn reserve_message(
+    asset_id: &[u8; 16],
+    escrowed: u128,
+    at_height: u64,
+    dest_chain_id: u64,
+    era: &[u8; 32],
+) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.fixed(asset_id);
+    w.u128(escrowed);
+    w.u64(at_height);
     w.u64(dest_chain_id);
     w.fixed(era);
     w.finish()

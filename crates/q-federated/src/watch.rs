@@ -143,7 +143,14 @@ mod tests {
         amount: u128,
     ) -> OperatorFeed<SoftSigner> {
         let signer = SoftSigner::from_seed(id, &seed_for(id));
-        let mut operator = Operator::new(signer);
+        let journal = {
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!("q-federated-unit-{id}-{n}.qdiv"));
+            let _ = std::fs::remove_file(&path);
+            q_attestor::DivergenceJournal::new(path)
+        };
+        let mut operator = Operator::new(signer, journal).expect("journal");
         operator.configure_corridor(CorridorContext {
             source_chain: c.chain_id,
             dest_chain: CHAIN_ID,

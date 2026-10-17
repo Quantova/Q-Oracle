@@ -56,6 +56,7 @@ pub enum EthError {
         cap: u128,
     },
     UnconfiguredDepositContract,
+    UpdateChangesNothing,
     Receipt(receipt::ReceiptError),
     Mpt(mpt::MptError),
 }
@@ -607,11 +608,22 @@ pub fn to_verified_event(
     }
 }
 
-pub fn apply_sync_committee_update(
-    store: &mut LightClientStore,
+pub fn precheck_sync_committee_update(
+    store: &LightClientStore,
     update: &SyncCommitteeUpdate,
-    verifier: &dyn BlsAggregateVerifier,
 ) -> Result<(), EthError> {
+    if store.next_sync_committee.is_some()
+        && update.finalized_header.slot <= store.finalized_header.slot
+    {
+        return Err(EthError::UpdateChangesNothing);
+    }
+    structural_sync_committee_update(store, update).map(|_| ())
+}
+
+fn structural_sync_committee_update<'a>(
+    store: &'a LightClientStore,
+    update: &SyncCommitteeUpdate,
+) -> Result<&'a SyncCommittee, EthError> {
     if !store.config.verifies_beacon_sync_committee() {
         return Err(EthError::NotBeaconChain);
     }
@@ -661,6 +673,15 @@ pub fn apply_sync_committee_update(
     ) {
         return Err(EthError::BadSyncCommitteeProof);
     }
+    Ok(committee)
+}
+
+pub fn apply_sync_committee_update(
+    store: &mut LightClientStore,
+    update: &SyncCommitteeUpdate,
+    verifier: &dyn BlsAggregateVerifier,
+) -> Result<(), EthError> {
+    let committee = structural_sync_committee_update(store, update)?;
     verify_sync_aggregate(
         store,
         committee,
@@ -669,6 +690,9 @@ pub fn apply_sync_committee_update(
         update.signature_slot,
         verifier,
     )?;
+    let attested_period = store
+        .config
+        .sync_committee_period(update.attested_header.slot);
     if attested_period == store.period {
         store.next_sync_committee = Some(update.next_sync_committee.clone());
     }

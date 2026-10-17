@@ -27,7 +27,14 @@ fn real_attestation() -> q_airlock::AttestationEnvelope {
         observed_height: 800_001,
         confirmations: 6,
     };
-    let mut op = Operator::new(SoftSigner::from_seed(0, &[0x09u8; 32]));
+    let journal = {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("q-isolation-crossing-{n}.qdiv"));
+        let _ = std::fs::remove_file(&path);
+        q_attestor::DivergenceJournal::new(path)
+    };
+    let mut op = Operator::new(SoftSigner::from_seed(0, &[0x09u8; 32]), journal).expect("journal");
     op.configure_corridor(ctx);
     let observation = op
         .observe_and_sign(&lock, 900_000)
