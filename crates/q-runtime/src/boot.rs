@@ -1367,6 +1367,10 @@ mod tests {
                 events: Vec::new(),
             }))
         }
+
+        fn burn_heights_after(&self, _cursor: u64) -> Result<Vec<u64>, BurnWatchError> {
+            Ok(Vec::new())
+        }
     }
 
     #[test]

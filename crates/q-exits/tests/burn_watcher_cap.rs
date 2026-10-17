@@ -6,7 +6,8 @@ use q_exits::{
 };
 
 use qtv_attest::{Block, Certificate, Envelope, Parent};
-use qtv_codec::Encoder;
+use qtv_block::{event_root, Header};
+use qtv_codec::{to_bytes, Encoder};
 
 const ASSET: [u8; 16] = [0xa1; 16];
 const HOLDER: [u8; 32] = [0x33; 32];
@@ -65,11 +66,21 @@ impl QuantovaBurnSource for Blocks {
             return Ok(None);
         }
         let base = idx * 1_000_000;
-        let events = (0..self.counts[idx - 1])
+        let events: Vec<Vec<u8>> = (0..self.counts[idx - 1])
             .map(|n| burn_leaf(ref_of(base + n)))
             .collect();
+        let header = Header::new(
+            height,
+            [0u8; 32],
+            [0x01; 32],
+            [0u8; 32],
+            event_root(&events),
+            [0u8; 32],
+            "qtv1proposer".to_string(),
+            1,
+        );
         Ok(Some(FinalizedBlock {
-            header_bytes: Vec::new(),
+            header_bytes: to_bytes(&header),
             certificate: certificate(height),
             events,
         }))

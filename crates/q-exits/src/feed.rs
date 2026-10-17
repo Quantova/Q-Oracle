@@ -36,6 +36,8 @@ pub enum FeedError {
 
 const MAX_PENDING_BURNS: usize = 1024;
 
+const MAX_UNFINALIZED_ATTEMPTS: u32 = 64;
+
 fn retryable(error: &ExitError) -> bool {
     matches!(
         error,
@@ -49,7 +51,7 @@ fn retryable(error: &ExitError) -> bool {
 pub struct BurnFeed {
     watcher: BurnWatcher,
     enabled: bool,
-    pending: Vec<ProofOfBurn>,
+    pending: Vec<(ProofOfBurn, u32)>,
 }
 
 impl BurnFeed {
@@ -89,17 +91,27 @@ impl BurnFeed {
         };
         let mut opened = Vec::new();
         let mut still_pending = Vec::new();
-        for proof in std::mem::take(&mut self.pending)
+        for (proof, attempts) in std::mem::take(&mut self.pending)
             .into_iter()
-            .chain(proofs.into_iter())
+            .chain(proofs.into_iter().map(|proof| (proof, 0)))
         {
             match desk.open_exit(&proof, now) {
                 Ok(id) => opened.push(id),
                 Err(ExitError::ReplayedExit) => {}
-                Err(e) if retryable(&e) => still_pending.push(proof),
+                Err(ExitError::NotFinalized)
+                    if attempts.saturating_add(1) >= MAX_UNFINALIZED_ATTEMPTS =>
+                {
+                    if desk
+                        .dead_letter(&proof, &ExitError::NotFinalized, now)
+                        .is_err()
+                    {
+                        still_pending.push((proof, attempts));
+                    }
+                }
+                Err(e) if retryable(&e) => still_pending.push((proof, attempts.saturating_add(1))),
                 Err(e) => {
                     if desk.dead_letter(&proof, &e, now).is_err() {
-                        still_pending.push(proof);
+                        still_pending.push((proof, attempts));
                     }
                 }
             }
@@ -129,7 +141,7 @@ impl BurnFeed {
                 match desk.open_exit(&proof, now) {
                     Ok(id) => opened.push(id),
                     Err(e) if retryable(&e) && self.pending.len() < MAX_PENDING_BURNS => {
-                        self.pending.push(proof)
+                        self.pending.push((proof, 0))
                     }
                     Err(_) => {}
                 }

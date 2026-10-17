@@ -53,17 +53,6 @@ impl RpcBurnSource {
         decode_finalized_head_epoch(&text)
     }
 
-    pub fn burn_heights_after(&self, cursor: u64) -> Result<Vec<u64>, BurnWatchError> {
-        let body = format!("{{\"cursor\":{cursor}}}");
-        let (status, text) = self.request("burn_heights_after", &body)?;
-        if status != 200 {
-            return Err(BurnWatchError::Rpc(format!(
-                "burn_heights_after returned status {status}"
-            )));
-        }
-        decode_heights_after(&text)
-    }
-
     fn request(&self, method: &str, body: &str) -> Result<(u16, String), BurnWatchError> {
         let addr = (self.host.as_str(), self.port)
             .to_socket_addrs()
@@ -127,6 +116,17 @@ impl QuantovaBurnSource for RpcBurnSource {
                 "burn_block returned status {other}"
             ))),
         }
+    }
+
+    fn burn_heights_after(&self, cursor: u64) -> Result<Vec<u64>, BurnWatchError> {
+        let body = format!("{{\"cursor\":{cursor}}}");
+        let (status, text) = self.request("burn_heights_after", &body)?;
+        if status != 200 {
+            return Err(BurnWatchError::Rpc(format!(
+                "burn_heights_after returned status {status}"
+            )));
+        }
+        decode_heights_after(&text)
     }
 }
 
