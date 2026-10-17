@@ -49,7 +49,12 @@ pub fn admit(
         });
     }
 
-    let signers: BTreeSet<u32> = env.signatures.iter().map(|s| s.operator_id).collect();
+    let signers: BTreeSet<u32> = env
+        .signatures
+        .iter()
+        .filter(|s| gateway.attests(&env.fact, s))
+        .map(|s| s.operator_id)
+        .collect();
 
     for id in &signers {
         if sources.endpoint(corridor.chain_id, *id).is_none() {
