@@ -86,11 +86,11 @@ fn read_length(bytes: &[u8], of_len: usize) -> Result<usize, RlpError> {
     if bytes[0] == 0 {
         return Err(RlpError::LeadingZeroLength);
     }
-    let mut value = 0usize;
+    let mut value = 0u64;
     for &b in &bytes[0..of_len] {
-        value = value.checked_shl(8).ok_or(RlpError::OversizeLength)? | b as usize;
+        value = (value << 8) | u64::from(b);
     }
-    Ok(value)
+    usize::try_from(value).map_err(|_| RlpError::OversizeLength)
 }
 
 fn decode_item(bytes: &[u8], depth: usize) -> Result<(Rlp, usize), RlpError> {

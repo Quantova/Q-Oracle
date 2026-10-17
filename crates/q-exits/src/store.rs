@@ -66,6 +66,7 @@ impl ReplayStore {
             opts.mode(0o600);
         }
         let mut file = opts.open(&self.path)?;
+        file.lock()?;
         file.write_all(bytes)?;
         file.sync_all()?;
         Ok(())
@@ -73,6 +74,7 @@ impl ReplayStore {
 
     pub fn append_frame(&self, frame: &[u8], header_len: u64) -> io::Result<()> {
         let mut file = fs::OpenOptions::new().append(true).open(&self.path)?;
+        file.lock()?;
         let len = file.metadata()?.len();
         let step = frame.len() as u64;
         if len < header_len || step == 0 {

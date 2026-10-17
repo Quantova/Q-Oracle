@@ -645,10 +645,15 @@ fn route(
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             let rev_before = guard.gateway.guard_revision();
             let snapshot = guard.gateway.encode_guard();
-            let committed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let committed = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 commit_deposit(&mut guard, plan)
-            }))
-            .map_err(|_| RouteFail::Panicked)?;
+            })) {
+                Ok(committed) => committed,
+                Err(_) => {
+                    let _ = guard.gateway.rehydrate_guard(&snapshot);
+                    return Err(RouteFail::Panicked);
+                }
+            };
             match committed {
                 Ok(outcome) => {
                     match persist_or_rollback(&mut guard, store, rev_before, &snapshot) {

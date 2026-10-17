@@ -145,6 +145,7 @@ impl<S: AttestationSigner> Operator<S> {
         if let OperatorState::Halted(r) = self.state {
             return Err(OperatorError::Halted(r));
         }
+        self.prune_expired(dest_height);
         let ctx = self
             .corridors
             .get(&lock.source_chain)

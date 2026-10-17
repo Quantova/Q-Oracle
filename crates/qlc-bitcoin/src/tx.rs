@@ -103,7 +103,7 @@ impl Transaction {
         if input_count > MAX_COUNT {
             return Err(SpvError::MalformedTransaction);
         }
-        let mut inputs = Vec::with_capacity(input_count as usize);
+        let mut inputs = Vec::with_capacity((input_count as usize).min(bytes.len() / 41));
         for _ in 0..input_count {
             let start = c.pos;
             c.take(36)?;
@@ -119,7 +119,7 @@ impl Transaction {
         if output_count > MAX_COUNT {
             return Err(SpvError::MalformedTransaction);
         }
-        let mut outputs = Vec::with_capacity(output_count as usize);
+        let mut outputs = Vec::with_capacity((output_count as usize).min(bytes.len() / 9));
         for _ in 0..output_count {
             let value = c.u64_le()?;
             if value > MAX_MONEY {
