@@ -5,6 +5,7 @@ domain ATTEST = "QUANTOVA/Q-ORACLE/ATTEST/v1";
 domain REORG = "QUANTOVA/Q-ORACLE/REORG/v1";
 domain TIER = "QUANTOVA/Q-ORACLE/TIER/v1";
 domain FREEZE = "QUANTOVA/Q-ORACLE/FREEZE/v1";
+domain UNPAUSE = "QUANTOVA/Q-ORACLE/UNPAUSE/v1";
 domain WATCHDOG = "QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 domain BATCH = "QUANTOVA/Q-ORACLE/BATCH/v1";
 domain EPOCH = "QUANTOVA/Q-ORACLE/EPOCH/v1";
@@ -14,7 +15,7 @@ const BASE_TIER: u8 = 1;
 const WATCHDOG_WINDOW: Q_Height = 7200;
 const WATCHDOG_COOLDOWN: Q_Height = 57600;
 const RESUME_SKEW: Q_Height = 16;
-const RESUME_WINDOW: Q_Height = 600;
+const RESUME_WINDOW: Q_Height = 1728600;
 
 record DepositFact {
   version: u8;
@@ -47,6 +48,7 @@ contract QGateway {
   asset Bridged<Q_Origin>;
   state {
     network: Q_Net;
+    chain_id: u64;
     era: u64;
     operators: GuardianSet<9>;
     governance: GuardianSet<7>;
@@ -72,6 +74,7 @@ contract QGateway {
   }
   genesis {
     network = deploy_params.network;
+    chain_id = deploy_params.chain_id;
     era = deploy_params.era;
     operators = deploy_params.operators;
     governance = deploy_params.governance;
@@ -93,7 +96,7 @@ contract QGateway {
   entry mint_deposit(deposit: DepositFact, attestation: Attestation<operators, ATTEST>)
     mints Bridged
     writes(used_refs, minted, epoch_minted)
-    reads(network, operators, corridor_depth, corridor_quorum, corridor_active, caps, epoch_cap, source_paused, global_pause, frozen_until)
+    reads(network, chain_id, era, operators, corridor_depth, corridor_quorum, corridor_active, caps, epoch_cap, source_paused, global_pause, frozen_until)
     denies global_pause
     denies now < frozen_until
     denies now > deposit.expiry_height
@@ -109,7 +112,7 @@ contract QGateway {
     guard deposit.amount > 0;
     guard corridor_active[deposit.source];
     guard deposit.finality_depth >= corridor_depth[deposit.source];
-    guard attestation.over(deposit);
+    guard attestation.over(deposit, chain_id, era);
     guard attestation.distinct >= corridor_quorum[deposit.source];
     guard attestation.distinct >= 6;
     used_refs.insert((deposit.source, deposit.reference));
@@ -246,7 +249,7 @@ contract QGateway {
     emit GatewayPaused(approvals.digest);
   }
 
-  entry unpause(order: PauseOrder, approvals: Quorum<6 of 9, operators, FREEZE>)
+  entry unpause(order: PauseOrder, approvals: Quorum<6 of 9, operators, UNPAUSE>)
     writes(global_pause, gov_nonce)
     reads(network, era, gov_nonce)
     after 24 hours from approvals.first
