@@ -447,7 +447,11 @@ pub fn verify_deposit(
                     .bitcoin_anchor
                     .as_ref()
                     .ok_or(ApiError::NoAnchor(Network::Bitcoin.id()))?;
-                if anchor.checkpoint.min_work.is_zero() || anchor.bridge_script.is_empty() {
+                if anchor.checkpoint.min_work.is_zero()
+                    || anchor.bridge_script.is_empty()
+                    || !(cfg!(any(test, feature = "test-util"))
+                        || anchor.params == qlc_bitcoin::network_params(anchor.params.network))
+                {
                     return Err(ApiError::NoAnchor(Network::Bitcoin.id()));
                 }
                 (

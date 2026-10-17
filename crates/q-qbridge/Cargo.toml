@@ -9,6 +9,9 @@ license.workspace = true
 rust-version.workspace = true
 description = "The qbridge runtime endpoint layer. A pure dispatcher over the pool registry and the gateway that lists a foreign token as a bridge pool, reads pools back, and routes a deposit to the federated or trustless admission path it belongs to. The dispatcher is transport free so a thin server attaches at one documented seam, and the authoritative on-chain mint for a proof-backed corridor stays at the trustless deposit seam it already lives behind."
 
+[features]
+test-util = []
+
 [dependencies]
 q-assets = { workspace = true }
 q-codec = { workspace = true }
