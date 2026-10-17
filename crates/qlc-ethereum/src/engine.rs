@@ -587,11 +587,15 @@ pub fn apply_sync_committee_update(
         update.attested_header.slot,
         update.finalized_header.slot,
     )?;
-    if store
+    let reach = if store.next_sync_committee.is_some() {
+        store.period.saturating_add(1)
+    } else {
+        store.period
+    };
+    let attested_period = store
         .config
-        .sync_committee_period(update.attested_header.slot)
-        != store.period
-    {
+        .sync_committee_period(update.attested_header.slot);
+    if attested_period < store.period || attested_period > reach {
         return Err(EthError::WrongPeriod);
     }
     verify_sync_aggregate(
@@ -612,11 +616,10 @@ pub fn apply_sync_committee_update(
     ) {
         return Err(EthError::BadFinalityProof);
     }
-    if store
+    let finalized_period = store
         .config
-        .sync_committee_period(update.finalized_header.slot)
-        != store.period
-    {
+        .sync_committee_period(update.finalized_header.slot);
+    if finalized_period < store.period || finalized_period > attested_period {
         return Err(EthError::WrongPeriod);
     }
     let (index, depth) = next_sync_committee_layout(electra);
@@ -630,11 +633,23 @@ pub fn apply_sync_committee_update(
     ) {
         return Err(EthError::BadSyncCommitteeProof);
     }
-    store.next_sync_committee = Some(update.next_sync_committee.clone());
+    if attested_period == store.period {
+        store.next_sync_committee = Some(update.next_sync_committee.clone());
+    }
+    if update.finalized_header.slot > store.finalized_header.slot {
+        store.finalized_header = update.finalized_header;
+    }
     Ok(())
 }
 
 pub fn advance_period(store: &mut LightClientStore) -> Result<(), EthError> {
+    if store
+        .config
+        .sync_committee_period(store.finalized_header.slot)
+        <= store.period
+    {
+        return Err(EthError::WrongPeriod);
+    }
     match store.next_sync_committee.take() {
         Some(next) => {
             store.current_sync_committee = next;
@@ -1226,6 +1241,15 @@ mod tests {
         next: &SyncCommittee,
         finalized_slot: u64,
     ) -> SyncCommitteeUpdate {
+        committee_update_in(signers, next, finalized_slot, PERIOD)
+    }
+
+    fn committee_update_in(
+        signers: &SyncCommittee,
+        next: &SyncCommittee,
+        finalized_slot: u64,
+        period: u64,
+    ) -> SyncCommitteeUpdate {
         let cfg = config::ethereum();
         let finalized_header = BeaconBlockHeader {
             slot: finalized_slot,
@@ -1247,7 +1271,7 @@ mod tests {
             ),
         );
         let attested_header = BeaconBlockHeader {
-            slot: PERIOD * PERIOD_SLOTS + 60,
+            slot: period * PERIOD_SLOTS + 60,
             proposer_index: 100,
             parent_root: [0x03; 32],
             state_root: attested_state_root,
@@ -1265,7 +1289,7 @@ mod tests {
                 participation,
                 signature,
             },
-            signature_slot: SIG_SLOT,
+            signature_slot: period * PERIOD_SLOTS + 100,
         }
     }
 
@@ -1337,6 +1361,12 @@ mod tests {
         let mut store = committee_store(current.clone());
         let update = committee_update(&current, &next, PERIOD * PERIOD_SLOTS + 40);
         assert!(apply_sync_committee_update(&mut store, &update, &HashCommitmentBls).is_ok());
+        assert_eq!(store.next_sync_committee, Some(next.clone()));
+        assert_eq!(advance_period(&mut store), Err(EthError::WrongPeriod));
+        let (after, _) = committee(0xcc);
+        let crossing =
+            committee_update_in(&next, &after, (PERIOD + 1) * PERIOD_SLOTS + 40, PERIOD + 1);
+        assert!(apply_sync_committee_update(&mut store, &crossing, &HashCommitmentBls).is_ok());
         assert_eq!(store.next_sync_committee, Some(next.clone()));
         assert!(advance_period(&mut store).is_ok());
         assert_eq!(store.period, PERIOD + 1);

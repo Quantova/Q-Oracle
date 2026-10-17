@@ -139,7 +139,7 @@ fn build_rotation() -> Rotation {
 }
 
 #[test]
-fn a_real_sync_committee_aggregate_over_a_finalized_header_drives_a_rotation() {
+fn a_real_sync_committee_aggregate_over_a_finalized_header_learns_the_next_committee() {
     let mut rotation = build_rotation();
     let result = apply_sync_committee_update(
         &mut rotation.store,
@@ -148,9 +148,11 @@ fn a_real_sync_committee_aggregate_over_a_finalized_header_drives_a_rotation() {
     );
     assert!(result.is_ok());
     assert_eq!(rotation.store.next_sync_committee(), Some(&rotation.next));
-    assert!(advance_period(&mut rotation.store).is_ok());
-    assert_eq!(rotation.store.period(), PERIOD + 1);
-    assert_eq!(rotation.store.current_sync_committee(), &rotation.next);
+    assert_eq!(
+        advance_period(&mut rotation.store),
+        Err(EthError::WrongPeriod)
+    );
+    assert_eq!(rotation.store.period(), PERIOD);
 }
 
 #[test]
