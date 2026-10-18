@@ -42,8 +42,8 @@ impl ProofOfBurn {
             return Err(ExitError::HeightMismatch);
         }
 
-        let verdict = self.certificate.verify(
-            anchor.chain_id(),
+        let verdict = self.certificate.verify_with_trusted_commitment(
+            anchor.binding(),
             anchor.commitment(),
             anchor.beacon(),
             anchor.tau(),

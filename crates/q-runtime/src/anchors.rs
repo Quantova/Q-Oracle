@@ -241,6 +241,12 @@ fn cosmos_anchor(j: &Json) -> Result<CosmosAnchor, AnchorFileError> {
 }
 
 fn quantova_anchor(j: &Json) -> Result<QuantovaAnchor, AnchorFileError> {
+    let genesis = hex_array::<32>(field(j, "genesis_hash")?, "genesis_hash")?;
+    if genesis == [0u8; 32] {
+        return Err(AnchorFileError::Quantova(
+            "the genesis hash is zero".to_string(),
+        ));
+    }
     let items = field(j, "members")?
         .as_array()
         .ok_or_else(|| AnchorFileError::Malformed("members is not a list".to_string()))?;
@@ -278,6 +284,7 @@ fn quantova_anchor(j: &Json) -> Result<QuantovaAnchor, AnchorFileError> {
         hex_array::<BEACON_SEED_BYTES>(field(j, "beacon_seed")?, "beacon_seed")?,
         members,
     )
+    .map(|anchor| anchor.with_genesis(genesis))
     .map_err(|e| AnchorFileError::Quantova(format!("{e:?}")))
 }
 

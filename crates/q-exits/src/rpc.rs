@@ -186,8 +186,8 @@ pub fn decode_certified_head(
         ));
     }
     if !certificate
-        .verify(
-            anchor.chain_id(),
+        .verify_with_trusted_commitment(
+            anchor.binding(),
             anchor.commitment(),
             anchor.beacon(),
             anchor.tau(),

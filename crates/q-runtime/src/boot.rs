@@ -895,6 +895,21 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
             crate::clock::CertifiedHead::new(head_source, committee),
         ),
         None => {
+            if crate::exits::mainnet_configured() {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "no quantova committee is pinned in the anchor file and the chain is mainnet, \
+                     so an unsigned chain head is refused",
+                ));
+            }
+            if std::env::var(UNSIGNED_HEAD_ENV).ok().as_deref() != Some("1") {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "no quantova committee is pinned in the anchor file, so the chain head could \
+                     only be taken unsigned; pin the committee, or set Q_ORACLE_UNSIGNED_HEAD=1 \
+                     on a private test deployment",
+                ));
+            }
             eprintln!(
                 "q-oracle: no quantova committee is pinned in the anchor file, so the chain head \
                  is taken unsigned and only bounded by the block rate"
@@ -906,6 +921,8 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
     let _exits = start_exits_for(Some(state.clone()))?;
     run_with(addr, state, store)
 }
+
+pub const UNSIGNED_HEAD_ENV: &str = "Q_ORACLE_UNSIGNED_HEAD";
 
 pub(crate) fn reserve_watch_for(
     source: Result<Option<crate::reserve::ReserveSource>, crate::reserve::ReserveSourceError>,
@@ -1408,6 +1425,7 @@ mod tests {
             slot: 0,
             budget: 100,
             beacon_seed: [0x5a; BEACON_SEED_BYTES],
+            genesis_hash: [0u8; 32],
             members: vec![MemberConfig {
                 id: 1,
                 weight: 100,

@@ -43,6 +43,7 @@ fn attesters() -> [Attester; 3] {
 fn committee(members: &[Attester]) -> qtv_attest::CommitteeCommitment {
     let refs: Vec<&Attester> = members.iter().collect();
     qtv_attest::CommitteeCommitment::from_attesters_with_budget(SLOT, &refs, BUDGET)
+        .with_mode(qtv_sampler::sortition::DrawMode::Full)
 }
 
 fn member_configs(members: &[Attester]) -> Vec<MemberConfig> {

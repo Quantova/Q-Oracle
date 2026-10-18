@@ -13,6 +13,8 @@ use crate::http::SharedState;
 pub const CHAIN_RPC_ENV: &str = "Q_ORACLE_CHAIN_RPC";
 pub const EXPECTED_HEAD_ENV: &str = "Q_ORACLE_EXPECTED_HEAD";
 pub const EXPECTED_EPOCH_ENV: &str = "Q_ORACLE_EXPECTED_EPOCH";
+pub const MAX_BLOCKS_PER_SEC_ENV: &str = "Q_ORACLE_MAX_BLOCKS_PER_SEC";
+pub const MIN_EPOCH_SECS_ENV: &str = "Q_ORACLE_MIN_EPOCH_SECS";
 
 const CLOCK_POLL: Duration = Duration::from_secs(5);
 const CLOCK_SLICE: Duration = Duration::from_millis(100);
@@ -21,6 +23,29 @@ const CLOCK_SLACK_BLOCKS: u64 = 240;
 const MIN_EPOCH_GAP: Duration = Duration::from_secs(6 * 60 * 60);
 const GENESIS_UNIX_SECS: u64 = 1_735_689_600;
 
+fn max_blocks_per_sec() -> u64 {
+    static RATE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *RATE.get_or_init(|| {
+        std::env::var(MAX_BLOCKS_PER_SEC_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map_or(MAX_BLOCKS_PER_SEC, |rate| rate.clamp(1, MAX_BLOCKS_PER_SEC))
+    })
+}
+
+fn min_epoch_gap() -> Duration {
+    static GAP: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *GAP.get_or_init(|| {
+        if crate::exits::mainnet_configured() {
+            return MIN_EPOCH_GAP;
+        }
+        std::env::var(MIN_EPOCH_SECS_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map_or(MIN_EPOCH_GAP, |secs| Duration::from_secs(secs.max(60)))
+    })
+}
+
 fn wall_clock_head_cap() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
@@ -28,7 +53,7 @@ fn wall_clock_head_cap() -> u64 {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     now.saturating_sub(GENESIS_UNIX_SECS)
-        .saturating_mul(MAX_BLOCKS_PER_SEC)
+        .saturating_mul(max_blocks_per_sec())
         .saturating_add(CLOCK_SLACK_BLOCKS)
 }
 
@@ -80,7 +105,7 @@ pub fn bounded_head(last: Option<(u64, Duration)>, reported: u64) -> u64 {
         Some((height, elapsed)) => {
             let allowed = elapsed
                 .as_secs()
-                .saturating_mul(MAX_BLOCKS_PER_SEC)
+                .saturating_mul(max_blocks_per_sec())
                 .saturating_add(CLOCK_SLACK_BLOCKS);
             reported.min(height.saturating_add(allowed))
         }
@@ -148,7 +173,7 @@ impl<H: ChainHead> ChainClock<H> {
             let current = guard.gateway.current_epoch();
             let spaced = self
                 .epoch_moved
-                .is_none_or(|at| now.duration_since(at) >= MIN_EPOCH_GAP);
+                .is_none_or(|at| now.duration_since(at) >= min_epoch_gap());
             let first_epoch = self.first_boot.map_or(0, |(_, e)| e);
             if (self.fresh && self.epoch_moved.is_none() && epoch > current && epoch <= first_epoch)
                 || (epoch == current.saturating_add(1) && spaced)

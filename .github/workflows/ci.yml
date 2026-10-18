@@ -19,37 +19,37 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/q-prover
-          ref: 4161468fef63589e59bf751ab37aac85dcb48d6f
+          ref: ef1747f8d3188049ffd4728c8a62721fa0882193
           path: q-prover
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/Q-Lightclient
-          ref: 0bc9fe6d45eaea6d88a7fb9570f08d0ffdf77427
+          ref: 7f2259a2e03594689a4132c7ecc07a85b347312d
           path: Q-Lightclient
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/QRC-CONSENSUS
-          ref: c3e731c8e7b371cddd9795b8a8f5261f4a46762b
+          ref: fe6d36c335f985358df3eba0774f4094ec2d9c31
           path: QRC-CONSENSUS
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/Quantova-Chain
-          ref: 6f8ffb8c6eb52fbba6e0787c4807ecea02e7c74e
+          ref: fca2d70dcd5c20a44bd1261dfb02faacba3bfcdd
           path: Quantova-Chain
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/QCore.rs
-          ref: 00b231b86b1dba298404c1b7698050355fe82464
+          ref: 79b616a2e43c3d82b16d44d6b359dc495d1c8416
           path: QCore.rs
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: Quantova/QVM
-          ref: 8c6eb5c003f1753bc23129ca02bb3610faf1cc9f
+          ref: bf2071260666bbf6779edb7f150d1e7cb2c2491b
           path: QVM
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c

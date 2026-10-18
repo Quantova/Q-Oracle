@@ -25,6 +25,16 @@ pub const MIN_PINNED_CHECKPOINT_HEIGHT: u32 = 800_000;
 pub const MIN_PAYOUT_WORK_BITS: usize = 80;
 pub const START_HEIGHT_ENV: &str = "Q_ORACLE_EXITS_START_HEIGHT";
 pub const BEACON_SEED_ENV: &str = "Q_ORACLE_EXITS_BEACON_SEED";
+pub const GENESIS_HASH_ENV: &str = "Q_ORACLE_EXITS_GENESIS_HASH";
+
+pub const MAINNET_CHAIN_ID: u64 = 5_296_651_311_193_914_109;
+
+pub fn mainnet_configured() -> bool {
+    std::env::var(CHAIN_ID_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        == Some(MAINNET_CHAIN_ID)
+}
 pub const COMMITTEE_ENV: &str = "Q_ORACLE_EXITS_COMMITTEE";
 pub const VAULTS_ENV: &str = "Q_ORACLE_EXITS_VAULTS";
 pub const LEDGER_ENV: &str = "Q_ORACLE_EXITS_LEDGER";
@@ -82,6 +92,7 @@ pub struct ExitTrustConfig {
     pub slot: u64,
     pub budget: u64,
     pub beacon_seed: [u8; BEACON_SEED_BYTES],
+    pub genesis_hash: [u8; 32],
     pub members: Vec<MemberConfig>,
     pub bridge_dest_chain: u32,
     pub corridor: u32,
@@ -106,6 +117,7 @@ impl ExitTrustConfig {
             self.beacon_seed,
             self.members.clone(),
         )
+        .map(|anchor| anchor.with_genesis(self.genesis_hash))
     }
 
     pub fn desk_config(&self) -> DeskConfig {
@@ -397,6 +409,14 @@ pub fn parse_exit_config<E: EnvSource>(
         .as_slice()
         .try_into()
         .map_err(|_| ExitConfigError::Malformed("beacon seed length"))?;
+    let genesis_hash: [u8; 32] = decode_hex(&req(env, GENESIS_HASH_ENV, "chain genesis hash")?)
+        .ok_or(ExitConfigError::Malformed("chain genesis hash"))?
+        .as_slice()
+        .try_into()
+        .map_err(|_| ExitConfigError::Malformed("chain genesis hash length"))?;
+    if genesis_hash == [0u8; 32] {
+        return Err(ExitConfigError::Malformed("chain genesis hash is zero"));
+    }
     let members = parse_committee(env)?;
     let vaults = parse_vaults(env)?;
     let rpc_host = req(env, CHAIN_RPC_HOST_ENV, "chain rpc host")?;
@@ -418,6 +438,7 @@ pub fn parse_exit_config<E: EnvSource>(
         slot,
         budget,
         beacon_seed,
+        genesis_hash,
         members,
         bridge_dest_chain,
         corridor,
@@ -491,6 +512,7 @@ mod tests {
         map.insert(START_HEIGHT_ENV.into(), "4199999".into());
         map.insert(MAX_AMOUNT_ENV.into(), "1000000".into());
         map.insert(BEACON_SEED_ENV.into(), "5a".repeat(BEACON_SEED_BYTES));
+        map.insert(GENESIS_HASH_ENV.into(), "6e".repeat(32));
         map.insert(
             COMMITTEE_ENV.into(),
             format!(

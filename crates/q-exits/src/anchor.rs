@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use qtv_attest::committee::MemberKey;
-use qtv_attest::{Beacon, CommitteeCommitment};
+use qtv_attest::{Beacon, ChainBinding, CommitteeCommitment};
 use qtv_sampler::onetime::Root;
+use qtv_sampler::sortition::DrawMode;
 
 use crate::errors::ExitError;
 
@@ -22,6 +23,7 @@ pub struct MemberConfig {
 
 pub struct QuantovaAnchor {
     chain_id: u64,
+    genesis: [u8; 32],
     tau: u64,
     commitment: CommitteeCommitment,
     beacon: Beacon,
@@ -73,17 +75,27 @@ impl QuantovaAnchor {
         if tau < need {
             return Err(ExitError::TauBelowQuorum { tau, need });
         }
-        let commitment = CommitteeCommitment::from_member_keys(slot, keys, budget);
+        let commitment = CommitteeCommitment::from_member_keys(slot, keys, budget, DrawMode::Full);
         Ok(QuantovaAnchor {
             chain_id,
+            genesis: [0u8; 32],
             tau,
             commitment,
             beacon: Beacon::from_seed(beacon_seed),
         })
     }
 
+    pub fn with_genesis(mut self, genesis: [u8; 32]) -> Self {
+        self.genesis = genesis;
+        self
+    }
+
     pub fn chain_id(&self) -> u64 {
         self.chain_id
+    }
+
+    pub fn binding(&self) -> ChainBinding {
+        ChainBinding::new(self.chain_id, self.genesis)
     }
 
     pub fn tau(&self) -> u64 {
