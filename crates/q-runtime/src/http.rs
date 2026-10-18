@@ -588,9 +588,6 @@ fn handle_connection(
         }
     }
 
-    if verb.eq_ignore_ascii_case("OPTIONS") {
-        return write_response(&mut stream, 204, "");
-    }
     if !verb.eq_ignore_ascii_case("POST") {
         return write_error(
             &mut stream,
@@ -1042,9 +1039,8 @@ fn write_response(stream: &mut TcpStream, code: u16, body: &str) -> IoResult<()>
         "HTTP/1.1 {code} {reason}\r\n\
          Content-Type: application/json\r\n\
          Content-Length: {len}\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Access-Control-Allow-Methods: POST, OPTIONS\r\n\
-         Access-Control-Allow-Headers: Content-Type\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         Cache-Control: no-store\r\n\
          Connection: close\r\n\
          \r\n\
          {body}",
