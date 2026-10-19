@@ -241,28 +241,29 @@ mod tests {
             });
         }
         let new = ValidatorSet::new(new_vals);
-        fn timed(extra: u32) -> (std::time::Duration, u128) {
-            let old = ValidatorSet::new((0..128).map(|i| validator(i as u8, 10)).collect());
-            let mut vals: Vec<ValidatorInfo> = (0..40).map(|i| validator(i as u8, 10)).collect();
-            for i in 0..extra {
-                vals.push(ValidatorInfo {
-                    pubkey: distinct_key(i),
-                    voting_power: 1,
-                });
-            }
-            let new = ValidatorSet::new(vals);
-            let start = std::time::Instant::now();
-            let power = overlap_power(&old, &new);
-            (start.elapsed(), power)
-        }
-        let (small, _) = timed(20_000);
-        let (large, _) = timed(40_000);
-        let small = small.max(std::time::Duration::from_micros(1));
-        let ratio = large.as_secs_f64() / small.as_secs_f64();
+        let best = |f: &dyn Fn()| {
+            (0..5)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    f();
+                    start.elapsed()
+                })
+                .min()
+                .unwrap_or_default()
+                .max(std::time::Duration::from_micros(1))
+        };
+        let hash_once = best(&|| {
+            let addresses: Vec<[u8; 20]> = new.validators.iter().map(|v| v.address()).collect();
+            std::hint::black_box(addresses);
+        });
+        let overlap_cost = best(&|| {
+            std::hint::black_box(overlap_power(&old, &new));
+        });
+        let ratio = overlap_cost.as_secs_f64() / hash_once.as_secs_f64();
         assert!(
-            ratio < 3.0,
-            "overlap over a large untrusted set must not be quadratic, \
-             doubling the set multiplied the time by {ratio:.2}"
+            ratio < 16.0,
+            "overlap over a large untrusted set must cost about one pass over it, \
+             it cost {ratio:.2} passes"
         );
         let overlap = overlap_power(&old, &new);
         assert_eq!(
