@@ -103,6 +103,8 @@ pub enum GatewayError {
         at: u64,
         last: u64,
     },
+    NotGloballyPaused,
+    ReserveShortfall([u8; 16]),
 }
 
 impl From<CodecError> for GatewayError {

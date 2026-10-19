@@ -10,8 +10,8 @@ pub mod watcher;
 
 pub use aggregator::{Aggregator, AggregatorError};
 pub use operator::{
-    DivergenceJournal, DivergenceRecord, HaltReason, Operator, OperatorError, OperatorState,
-    SignedObservation,
+    DivergenceJournal, DivergenceRecord, HaltReason, JournalImage, Operator, OperatorError,
+    OperatorState, SignedObservation,
 };
 pub use signer::{
     AttestationSigner, EnclaveSigner, ObjectHandle, Pkcs11Backend, Pkcs11Error, Pkcs11Module,

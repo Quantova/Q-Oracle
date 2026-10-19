@@ -7,7 +7,7 @@ use q_airlock::{AttestationEnvelope, SignerSig};
 use q_codec::{attest_context, BridgeFact, CodecError, Direction, Reader, Writer};
 
 use crate::errors::GatewayError;
-use crate::operators::{verify_quorum, OperatorSet};
+use crate::operators::{verified_quorum, verify_quorum, OperatorSet};
 
 pub const REORG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/REORG/v1";
 pub const RESUME_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/RESUME/v1";
@@ -18,13 +18,14 @@ pub const FREEZE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/FREEZE/v1";
 pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const RESERVE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/RESERVE/v1";
+pub const UNPAUSE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/UNPAUSE/v1";
 pub const RESERVE_MAX_AGE: u64 = 18_000;
 
 pub const MAX_PENDING_EXITS: usize = 65_536;
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
 pub const WATCHDOG_COOLDOWN: u64 = 8 * WATCHDOG_MAX_WINDOW;
-const GUARD_SNAPSHOT_VERSION: u8 = 7;
+const GUARD_SNAPSHOT_VERSION: u8 = 8;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let two_thirds = (size.saturating_mul(2) + 2) / 3;
@@ -57,6 +58,22 @@ pub struct MintReceipt {
     pub source_chain: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminRecord {
+    pub domain: Vec<u8>,
+    pub message: Vec<u8>,
+    pub signatures: Vec<SignerSig>,
+}
+
+impl AdminRecord {
+    pub fn action(&self) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.bytes_u16(&self.domain);
+        w.bytes_u32(&self.message);
+        w.finish()
+    }
+}
+
 pub struct Gateway {
     chain_id: u32,
     dest_chain_id: u64,
@@ -80,6 +97,8 @@ pub struct Gateway {
     resumed_at: BTreeMap<u32, u64>,
     watchdog_last: BTreeMap<u32, u64>,
     global_pause: bool,
+    global_paused_at: u64,
+    global_resumed_at: u64,
     current_height: u64,
     frozen_until: u64,
     deposit_frozen_until: u64,
@@ -89,6 +108,9 @@ pub struct Gateway {
     guard_revision: u64,
     reserve_max_age: Option<u64>,
     reserve_reported_at: BTreeMap<[u8; 16], u64>,
+    audit_seq: u64,
+    audit_head: [u8; 32],
+    admin_records: Vec<AdminRecord>,
 }
 
 impl Gateway {
@@ -121,6 +143,8 @@ impl Gateway {
             resumed_at: BTreeMap::new(),
             watchdog_last: BTreeMap::new(),
             global_pause: false,
+            global_paused_at: 0,
+            global_resumed_at: 0,
             current_height: 0,
             frozen_until: 0,
             deposit_frozen_until: 0,
@@ -130,7 +154,37 @@ impl Gateway {
             guard_revision: 0,
             reserve_max_age: None,
             reserve_reported_at: BTreeMap::new(),
+            audit_seq: 0,
+            audit_head: [0u8; 32],
+            admin_records: Vec::new(),
         }
+    }
+
+    fn log_admin(&mut self, domain: &[u8], message: Vec<u8>, signatures: Vec<SignerSig>) {
+        self.admin_records.push(AdminRecord {
+            domain: domain.to_vec(),
+            message,
+            signatures,
+        });
+    }
+
+    pub fn pending_admin_records(&self) -> &[AdminRecord] {
+        &self.admin_records
+    }
+
+    pub fn settle_admin_records(&mut self, seq: u64, head: [u8; 32]) {
+        self.admin_records.clear();
+        self.audit_seq = seq;
+        self.audit_head = head;
+        self.touch_guard();
+    }
+
+    pub fn audit_anchor(&self) -> (u64, [u8; 32]) {
+        (self.audit_seq, self.audit_head)
+    }
+
+    pub fn is_globally_paused(&self) -> bool {
+        self.global_pause
     }
 
     pub fn set_governance(&mut self, governance: OperatorSet) {
@@ -294,6 +348,17 @@ impl Gateway {
         at_height: u64,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
+        self.check_reserve(asset_id, escrowed, at_height, sigs)
+            .map(|_| ())
+    }
+
+    fn check_reserve(
+        &self,
+        asset_id: [u8; 16],
+        escrowed: u128,
+        at_height: u64,
+        sigs: &[SignerSig],
+    ) -> Result<(Vec<u8>, Vec<SignerSig>), GatewayError> {
         let max_age = self
             .reserve_max_age
             .ok_or(GatewayError::ReserveReportsNotRequired)?;
@@ -324,7 +389,8 @@ impl Gateway {
             self.dest_chain_id,
             &self.era,
         );
-        self.quorum_met(&message, RESERVE_DOMAIN, sigs)
+        let accepted = self.quorum_met(&message, RESERVE_DOMAIN, sigs)?;
+        Ok((message, accepted))
     }
 
     pub fn attest_reserve(
@@ -334,9 +400,10 @@ impl Gateway {
         at_height: u64,
         sigs: &[SignerSig],
     ) -> Result<bool, GatewayError> {
-        self.precheck_reserve(asset_id, escrowed, at_height, sigs)?;
+        let (message, accepted) = self.check_reserve(asset_id, escrowed, at_height, sigs)?;
         self.escrowed.insert(asset_id, escrowed);
         self.reserve_reported_at.insert(asset_id, at_height);
+        self.log_admin(RESERVE_DOMAIN, message, accepted);
         let supply = self
             .per_asset_minted
             .get(&asset_id)
@@ -415,8 +482,58 @@ impl Gateway {
     }
 
     pub fn pause_all(&mut self) {
+        if !self.global_pause {
+            self.global_paused_at = self.current_height;
+        }
         self.global_pause = true;
         self.touch_guard();
+    }
+
+    pub fn precheck_unpause(&self, at_height: u64, sigs: &[SignerSig]) -> Result<(), GatewayError> {
+        self.check_unpause(at_height, sigs).map(|_| ())
+    }
+
+    fn check_unpause(
+        &self,
+        at_height: u64,
+        sigs: &[SignerSig],
+    ) -> Result<(Vec<u8>, Vec<SignerSig>), GatewayError> {
+        if !self.global_pause {
+            return Err(GatewayError::NotGloballyPaused);
+        }
+        if at_height < self.global_paused_at
+            || at_height <= self.global_resumed_at
+            || at_height > self.current_height.saturating_add(RESUME_SKEW)
+            || self.current_height > at_height.saturating_add(RESUME_WINDOW)
+        {
+            return Err(GatewayError::ResumeOutOfWindow {
+                at: at_height,
+                now: self.current_height,
+            });
+        }
+        if let Some(asset_id) = self.short_reserve() {
+            return Err(GatewayError::ReserveShortfall(asset_id));
+        }
+        let message = unpause_message(at_height, self.dest_chain_id, &self.era);
+        let accepted = self.quorum_met(&message, UNPAUSE_DOMAIN, sigs)?;
+        Ok((message, accepted))
+    }
+
+    fn short_reserve(&self) -> Option<[u8; 16]> {
+        self.per_asset_minted.iter().find_map(|(asset_id, minted)| {
+            let supply = minted.saturating_add(self.pending_exit_of(asset_id));
+            let escrowed = self.escrowed.get(asset_id).copied().unwrap_or(0);
+            (supply > escrowed).then_some(*asset_id)
+        })
+    }
+
+    pub fn resume_all(&mut self, at_height: u64, sigs: &[SignerSig]) -> Result<(), GatewayError> {
+        let (message, accepted) = self.check_unpause(at_height, sigs)?;
+        self.global_pause = false;
+        self.global_resumed_at = at_height;
+        self.log_admin(UNPAUSE_DOMAIN, message, accepted);
+        self.touch_guard();
+        Ok(())
     }
 
     pub fn unpause_all(&mut self) {
@@ -526,18 +643,10 @@ impl Gateway {
             self.dest_chain_id,
             &self.era,
         );
-        let distinct = verify_quorum(&message, REORG_DOMAIN, sigs, &self.operators);
-        let need = self
-            .operators
-            .threshold()
-            .max(supermajority_floor(self.operators.size()));
-        if distinct.len() < need {
-            return Err(GatewayError::BelowThreshold {
-                got: distinct.len(),
-                need,
-            });
+        let accepted = self.quorum_met(&message, REORG_DOMAIN, sigs)?;
+        if self.paused_sources.insert(source_chain) {
+            self.log_admin(REORG_DOMAIN, message, accepted);
         }
-        self.paused_sources.insert(source_chain);
         self.paused_since
             .entry(source_chain)
             .or_insert(self.current_height);
@@ -550,19 +659,19 @@ impl Gateway {
         message: &[u8],
         domain: &[u8],
         sigs: &[SignerSig],
-    ) -> Result<(), GatewayError> {
-        let distinct = verify_quorum(message, domain, sigs, &self.operators);
+    ) -> Result<Vec<SignerSig>, GatewayError> {
+        let accepted = verified_quorum(message, domain, sigs, &self.operators);
         let need = self
             .operators
             .threshold()
             .max(supermajority_floor(self.operators.size()));
-        if distinct.len() < need {
+        if accepted.len() < need {
             return Err(GatewayError::BelowThreshold {
-                got: distinct.len(),
+                got: accepted.len(),
                 need,
             });
         }
-        Ok(())
+        Ok(accepted)
     }
 
     pub fn precheck_reorg(
@@ -580,7 +689,7 @@ impl Gateway {
             self.dest_chain_id,
             &self.era,
         );
-        self.quorum_met(&message, REORG_DOMAIN, sigs)
+        self.quorum_met(&message, REORG_DOMAIN, sigs).map(|_| ())
     }
 
     pub fn precheck_resume(
@@ -590,7 +699,7 @@ impl Gateway {
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
         let message = resume_message(source_chain, at_height, self.dest_chain_id, &self.era);
-        self.quorum_met(&message, RESUME_DOMAIN, sigs)
+        self.quorum_met(&message, RESUME_DOMAIN, sigs).map(|_| ())
     }
 
     pub fn precheck_freeze(
@@ -599,7 +708,7 @@ impl Gateway {
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
         let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
-        self.quorum_met(&message, FREEZE_DOMAIN, sigs)
+        self.quorum_met(&message, FREEZE_DOMAIN, sigs).map(|_| ())
     }
 
     pub fn precheck_watchdog(
@@ -653,20 +762,11 @@ impl Gateway {
             });
         }
         let message = resume_message(source_chain, at_height, self.dest_chain_id, &self.era);
-        let distinct = verify_quorum(&message, RESUME_DOMAIN, sigs, &self.operators);
-        let need = self
-            .operators
-            .threshold()
-            .max(supermajority_floor(self.operators.size()));
-        if distinct.len() < need {
-            return Err(GatewayError::BelowThreshold {
-                got: distinct.len(),
-                need,
-            });
-        }
+        let accepted = self.quorum_met(&message, RESUME_DOMAIN, sigs)?;
         self.paused_sources.remove(&source_chain);
         self.paused_since.remove(&source_chain);
         self.resumed_at.insert(source_chain, at_height);
+        self.log_admin(RESUME_DOMAIN, message, accepted);
         self.touch_guard();
         Ok(())
     }
@@ -677,9 +777,10 @@ impl Gateway {
         proposed: u8,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
-        self.precheck_tier(source_chain, proposed, sigs)?;
+        let (message, accepted) = self.check_tier(source_chain, proposed, sigs)?;
         if let Some(corridor) = self.corridors.get_mut(&source_chain) {
             corridor.tier = proposed;
+            self.log_admin(TIER_DOMAIN, message, accepted);
             self.touch_guard();
         }
         Ok(())
@@ -691,18 +792,27 @@ impl Gateway {
         proposed: u8,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
+        self.check_tier(source_chain, proposed, sigs).map(|_| ())
+    }
+
+    fn check_tier(
+        &self,
+        source_chain: u32,
+        proposed: u8,
+        sigs: &[SignerSig],
+    ) -> Result<(Vec<u8>, Vec<SignerSig>), GatewayError> {
         if self.governance.size() == 0 {
             return Err(GatewayError::NoGovernanceSet);
         }
         let message = tier_message(source_chain, proposed, self.dest_chain_id, &self.era);
-        let distinct = verify_quorum(&message, TIER_DOMAIN, sigs, &self.governance);
+        let accepted = verified_quorum(&message, TIER_DOMAIN, sigs, &self.governance);
         let need = self
             .governance
             .threshold()
             .max(supermajority_floor(self.governance.size()));
-        if distinct.len() < need {
+        if accepted.len() < need {
             return Err(GatewayError::BelowThreshold {
-                got: distinct.len(),
+                got: accepted.len(),
                 need,
             });
         }
@@ -716,7 +826,7 @@ impl Gateway {
                 to: proposed,
             });
         }
-        Ok(())
+        Ok((message, accepted))
     }
 
     pub fn emergency_freeze(
@@ -725,19 +835,10 @@ impl Gateway {
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
         let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
-        let distinct = verify_quorum(&message, FREEZE_DOMAIN, sigs, &self.operators);
-        let need = self
-            .operators
-            .threshold()
-            .max(supermajority_floor(self.operators.size()));
-        if distinct.len() < need {
-            return Err(GatewayError::BelowThreshold {
-                got: distinct.len(),
-                need,
-            });
-        }
+        let accepted = self.quorum_met(&message, FREEZE_DOMAIN, sigs)?;
         if until_height > self.frozen_until {
             self.frozen_until = until_height;
+            self.log_admin(FREEZE_DOMAIN, message, accepted);
             self.touch_guard();
         }
         Ok(())
@@ -765,13 +866,13 @@ impl Gateway {
             });
         }
         let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
-        let distinct = verify_quorum(
+        let accepted = verified_quorum(
             &message,
             WATCHDOG_DOMAIN,
             std::slice::from_ref(sig),
             &self.operators,
         );
-        let Some(&operator) = distinct.iter().next() else {
+        let Some(operator) = accepted.first().map(|s| s.operator_id) else {
             return Err(GatewayError::BelowThreshold { got: 0, need: 1 });
         };
         let cooling = self
@@ -782,6 +883,7 @@ impl Gateway {
             return Err(GatewayError::WatchdogCooldown);
         }
         self.watchdog_last.insert(operator, self.current_height);
+        self.log_admin(WATCHDOG_DOMAIN, message, accepted);
         if until_height > self.deposit_frozen_until {
             self.deposit_frozen_until = until_height;
             self.touch_guard();
@@ -1206,6 +1308,10 @@ impl Gateway {
             w.u32(*operator);
             w.u64(*height);
         }
+        w.u64(self.global_paused_at);
+        w.u64(self.global_resumed_at);
+        w.u64(self.audit_seq);
+        w.fixed(&self.audit_head);
         w.finish()
     }
 
@@ -1232,6 +1338,11 @@ impl Gateway {
         self.pending_exits = state.pending_exits;
         self.resumed_at = state.resumed_at;
         self.watchdog_last = state.watchdog_last;
+        self.global_paused_at = state.global_paused_at;
+        self.global_resumed_at = state.global_resumed_at;
+        self.audit_seq = state.audit_seq;
+        self.audit_head = state.audit_head;
+        self.admin_records.clear();
         for (source_chain, saved) in state.corridors {
             if let Some(current) = self.corridors.get_mut(&source_chain) {
                 current.confirmation_depth =
@@ -1262,6 +1373,10 @@ struct GuardState {
     corridors: BTreeMap<u32, CorridorConfig>,
     resumed_at: BTreeMap<u32, u64>,
     watchdog_last: BTreeMap<u32, u64>,
+    global_paused_at: u64,
+    global_resumed_at: u64,
+    audit_seq: u64,
+    audit_head: [u8; 32],
 }
 
 fn bounded_count(r: &mut Reader, item_size: usize) -> Result<usize, CodecError> {
@@ -1389,6 +1504,11 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         watchdog_last.insert(operator, height);
     }
 
+    let global_paused_at = r.u64()?;
+    let global_resumed_at = r.u64()?;
+    let audit_seq = r.u64()?;
+    let audit_head = r.array32()?;
+
     r.finish()?;
     Ok(GuardState {
         current_height,
@@ -1407,6 +1527,10 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         corridors,
         resumed_at,
         watchdog_last,
+        global_paused_at,
+        global_resumed_at,
+        audit_seq,
+        audit_head,
     })
 }
 
@@ -1468,6 +1592,14 @@ pub fn reserve_message(
     let mut w = Writer::new();
     w.fixed(asset_id);
     w.u128(escrowed);
+    w.u64(at_height);
+    w.u64(dest_chain_id);
+    w.fixed(era);
+    w.finish()
+}
+
+pub fn unpause_message(at_height: u64, dest_chain_id: u64, era: &[u8; 32]) -> Vec<u8> {
+    let mut w = Writer::new();
     w.u64(at_height);
     w.u64(dest_chain_id);
     w.fixed(era);

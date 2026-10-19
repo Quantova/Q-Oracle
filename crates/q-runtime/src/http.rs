@@ -814,10 +814,15 @@ enum RouteFail {
 }
 
 fn persist_if_advanced(
-    guard: &BridgeState,
+    guard: &mut BridgeState,
     store: Option<&GuardStore>,
     rev_before: u64,
 ) -> Result<(), RouteFail> {
+    if let Some(store) = store {
+        if store.record_admin(&mut guard.gateway).is_err() {
+            return Err(RouteFail::PersistFailed);
+        }
+    }
     if guard.gateway.guard_revision() != rev_before {
         if let Some(store) = store {
             let encoded = guard.gateway.encode_guard();
@@ -947,7 +952,7 @@ fn route(
                     return Err(RouteFail::Panicked);
                 }
             };
-            if persist_if_advanced(&guard, store, rev_before).is_err() {
+            if persist_if_advanced(&mut guard, store, rev_before).is_err() {
                 let _ = guard.gateway.rehydrate_guard(&snapshot);
                 return Err(RouteFail::PersistFailed);
             }

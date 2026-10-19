@@ -129,10 +129,23 @@ pub fn verify_quorum(
     sigs: &[SignerSig],
     set: &OperatorSet,
 ) -> BTreeSet<u32> {
+    verified_quorum(message, context, sigs, set)
+        .iter()
+        .map(|s| s.operator_id)
+        .collect()
+}
+
+pub fn verified_quorum(
+    message: &[u8],
+    context: &[u8],
+    sigs: &[SignerSig],
+    set: &OperatorSet,
+) -> Vec<SignerSig> {
     if sigs.len() > set.size() {
-        return BTreeSet::new();
+        return Vec::new();
     }
     let mut distinct: BTreeSet<u32> = BTreeSet::new();
+    let mut accepted = Vec::new();
     for s in sigs {
         if distinct.contains(&s.operator_id) {
             continue;
@@ -150,6 +163,7 @@ pub fn verify_quorum(
             continue;
         }
         distinct.insert(s.operator_id);
+        accepted.push(s.clone());
     }
-    distinct
+    accepted
 }

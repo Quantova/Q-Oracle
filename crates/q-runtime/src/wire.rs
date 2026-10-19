@@ -12,8 +12,8 @@ use q_gateway::{GatewayError, MintReceipt};
 use q_qbridge::{
     ApiError, BitcoinProofMaterial, DepositOutcome, DepositProof, DepositRequest,
     DepositStatusRequest, DepositStatusView, EmergencyFreezeRequest, GetPoolRequest,
-    ListPoolsRequest, PoolView, ReportReorgRequest, Request, Response, ResumeSourceRequest,
-    SetCorridorTierRequest, WatchdogFreezeRequest,
+    ListPoolsRequest, PoolView, ReportReorgRequest, Request, Response, ResumeAllRequest,
+    ResumeSourceRequest, SetCorridorTierRequest, WatchdogFreezeRequest,
 };
 use qlc_bitcoin::{BlockHeader, MerkleStep, SpvError};
 use qlc_cosmos::commit::{BlockIdFlag, Commit, CommitError, CommitSig, Header};
@@ -196,6 +196,7 @@ pub fn method_of(req: &Request) -> &'static str {
         Request::DepositStatus(_) => "deposit_status",
         Request::ReportReorg(_) => "report_reorg",
         Request::ResumeSource(_) => "resume_source",
+        Request::ResumeAll(_) => "resume_all",
         Request::EmergencyFreeze(_) => "emergency_freeze",
         Request::WatchdogFreeze(_) => "watchdog_freeze",
         Request::RotateEthereumCommittee(_) => "rotate_ethereum_committee",
@@ -233,6 +234,10 @@ pub fn encode_request(req: &Request) -> Json {
         ]),
         Request::ResumeSource(r) => object(vec![
             ("source_chain", u32j(r.source_chain)),
+            ("at_height", Json::Int(r.at_height)),
+            ("signatures", signer_sigs_json(&r.signatures)),
+        ]),
+        Request::ResumeAll(r) => object(vec![
             ("at_height", Json::Int(r.at_height)),
             ("signatures", signer_sigs_json(&r.signatures)),
         ]),
@@ -443,6 +448,10 @@ pub fn decode_request(method: &str, body: &Json) -> Result<Request, WireError> {
         })),
         "resume_source" => Ok(Request::ResumeSource(ResumeSourceRequest {
             source_chain: as_u32(field(body, "source_chain")?, "source_chain")?,
+            at_height: as_u64(field(body, "at_height")?, "at_height")?,
+            signatures: signer_sigs_from(field(body, "signatures")?)?,
+        })),
+        "resume_all" => Ok(Request::ResumeAll(ResumeAllRequest {
             at_height: as_u64(field(body, "at_height")?, "at_height")?,
             signatures: signer_sigs_from(field(body, "signatures")?)?,
         })),
@@ -1151,6 +1160,10 @@ pub fn encode_response(resp: &Response) -> Json {
             ("result", Json::str("source_resumed")),
             ("source_chain", u32j(*source_chain)),
         ]),
+        Response::GatewayResumed { at_height } => object(vec![
+            ("result", Json::str("gateway_resumed")),
+            ("at_height", Json::Int(*at_height)),
+        ]),
         Response::CorridorTierSet { source_chain, tier } => object(vec![
             ("result", Json::str("corridor_tier_set")),
             ("source_chain", u32j(*source_chain)),
@@ -1211,6 +1224,9 @@ pub fn decode_response(j: &Json) -> Result<Response, WireError> {
         }),
         "source_resumed" => Ok(Response::SourceResumed {
             source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
+        }),
+        "gateway_resumed" => Ok(Response::GatewayResumed {
+            at_height: as_u64(field(j, "at_height")?, "at_height")?,
         }),
         "corridor_tier_set" => Ok(Response::CorridorTierSet {
             source_chain: as_u32(field(j, "source_chain")?, "source_chain")?,
@@ -2143,6 +2159,12 @@ fn gateway_err_json(e: &GatewayError) -> Json {
             "reserve_report_replayed",
             vec![("at", Json::Int(*at)), ("last", Json::Int(*last))],
         ),
+        GatewayError::NotGloballyPaused => tagged("gateway", "not_globally_paused", vec![]),
+        GatewayError::ReserveShortfall(asset_id) => tagged(
+            "gateway",
+            "reserve_shortfall",
+            vec![("asset_id", hexs(asset_id))],
+        ),
     }
 }
 
@@ -2272,6 +2294,11 @@ fn gateway_err_from(j: &Json) -> Result<GatewayError, WireError> {
             at: as_u64(field(j, "at")?, "at")?,
             last: as_u64(field(j, "last")?, "last")?,
         }),
+        "not_globally_paused" => Ok(GatewayError::NotGloballyPaused),
+        "reserve_shortfall" => Ok(GatewayError::ReserveShortfall(hex_array::<16>(
+            field(j, "asset_id")?,
+            "asset_id",
+        )?)),
         other => Err(WireError::UnknownErrorCode(other.to_string())),
     }
 }

@@ -47,7 +47,9 @@ fn make_operator(id: u32) -> Operator<SoftSigner> {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("q-attestor-e2e-{id}-{n}.qdiv"));
         let _ = std::fs::remove_file(&path);
-        q_attestor::DivergenceJournal::new(path)
+        let journal = q_attestor::DivergenceJournal::new(path);
+        let _ = std::fs::remove_file(journal.anchor_path());
+        journal
     };
     let mut op = Operator::new(signer, journal).expect("journal");
     op.configure_corridor(context());

@@ -982,6 +982,7 @@ pub(crate) fn restore_into(
                 );
             }
         }
+        store.open_audit(state.gateway.audit_anchor())?;
     }
     Ok(state)
 }

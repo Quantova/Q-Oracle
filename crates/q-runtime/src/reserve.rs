@@ -189,6 +189,13 @@ impl ReserveWatch {
         }
         let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
         let rev_before = guard.gateway.guard_revision();
+        if let Some(store) = self.store.as_deref() {
+            if let Err(e) = store.record_admin(&mut guard.gateway) {
+                eprintln!(
+                    "q-oracle: an accepted reserve report could not be written to the admin audit log: {e}"
+                );
+            }
+        }
         tick.breaches = enforce_reserves(&mut guard.gateway);
         tick.stale = guard.gateway.stale_reserves();
         if guard.gateway.guard_revision() != rev_before {

@@ -10,6 +10,6 @@ pub use endpoints::{
     verify_prepared, ApiError, BitcoinAnchor, BitcoinProofMaterial, BridgeState, CosmosAnchor,
     DepositOutcome, DepositPlan, DepositProof, DepositRequest, DepositStatusRequest,
     DepositStatusView, EmergencyFreezeRequest, GetPoolRequest, ListPoolsRequest, PoolView,
-    PreparedDeposit, ReportReorgRequest, Request, Response, ResumeSourceRequest,
+    PreparedDeposit, ReportReorgRequest, Request, Response, ResumeAllRequest, ResumeSourceRequest,
     SetCorridorTierRequest, WatchdogFreezeRequest,
 };

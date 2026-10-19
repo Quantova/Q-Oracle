@@ -118,6 +118,12 @@ pub struct ResumeSourceRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResumeAllRequest {
+    pub at_height: u64,
+    pub signatures: Vec<SignerSig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmergencyFreezeRequest {
     pub until_height: u64,
     pub signatures: Vec<SignerSig>,
@@ -146,6 +152,7 @@ pub enum Request {
     DepositStatus(DepositStatusRequest),
     ReportReorg(ReportReorgRequest),
     ResumeSource(ResumeSourceRequest),
+    ResumeAll(ResumeAllRequest),
     EmergencyFreeze(EmergencyFreezeRequest),
     WatchdogFreeze(WatchdogFreezeRequest),
     RotateEthereumCommittee(SyncCommitteeUpdate),
@@ -224,6 +231,7 @@ pub enum Response {
     Status(DepositStatusView),
     SourcePaused { source_chain: u32, fork_depth: u32 },
     SourceResumed { source_chain: u32 },
+    GatewayResumed { at_height: u64 },
     Frozen { until_height: u64 },
     CommitteeRotated { period: u64, finalized_slot: u64 },
     CorridorTierSet { source_chain: u32, tier: u8 },
@@ -242,6 +250,7 @@ pub fn precheck(state: &BridgeState, request: &Request) -> Result<(), ApiError> 
                 .gateway
                 .precheck_resume(r.source_chain, r.at_height, &r.signatures)
         }
+        Request::ResumeAll(r) => state.gateway.precheck_unpause(r.at_height, &r.signatures),
         Request::EmergencyFreeze(r) => state.gateway.precheck_freeze(r.until_height, &r.signatures),
         Request::WatchdogFreeze(r) => state
             .gateway
@@ -363,6 +372,17 @@ pub fn handle(state: &mut BridgeState, request: Request) -> Response {
             ) {
                 Ok(()) => Response::SourceResumed {
                     source_chain: request.source_chain,
+                },
+                Err(err) => Response::Error(ApiError::Gateway(err)),
+            }
+        }
+        Request::ResumeAll(request) => {
+            match state
+                .gateway
+                .resume_all(request.at_height, &request.signatures)
+            {
+                Ok(()) => Response::GatewayResumed {
+                    at_height: request.at_height,
                 },
                 Err(err) => Response::Error(ApiError::Gateway(err)),
             }

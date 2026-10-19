@@ -4,11 +4,26 @@
 use std::fs::{self, File, TryLockError};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
+
+use q_codec::{Reader, Writer};
+use q_gateway::{AdminRecord, Gateway};
+use qtv_crypto::sha3::sha3_256;
+
+const AUDIT_MAGIC: &[u8; 4] = b"QADM";
+const AUDIT_VERSION: u8 = 1;
+const AUDIT_HEADER_LEN: usize = 5;
+
+struct AuditLog {
+    seq: u64,
+    head: [u8; 32],
+    len: u64,
+}
 
 pub struct GuardStore {
     path: PathBuf,
     lock: OnceLock<File>,
+    audit: Mutex<Option<AuditLog>>,
 }
 
 fn lock_path(path: &Path) -> PathBuf {
@@ -17,12 +32,188 @@ fn lock_path(path: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
+fn audit_path(path: &Path) -> PathBuf {
+    let mut p = path.to_path_buf().into_os_string();
+    p.push(".audit");
+    PathBuf::from(p)
+}
+
+fn audit_entry(seq: u64, prev: &[u8; 32], record: &AdminRecord) -> (Vec<u8>, [u8; 32]) {
+    let mut w = Writer::new();
+    w.u64(seq);
+    w.fixed(prev);
+    w.bytes_u32(&record.action());
+    w.u32(record.signatures.len() as u32);
+    for sig in &record.signatures {
+        w.u32(sig.operator_id);
+        w.bytes_u32(&sig.signature);
+    }
+    let body = w.finish();
+    let hash = sha3_256(&body);
+    let mut frame = Writer::new();
+    frame.bytes_u32(&body);
+    frame.fixed(&hash);
+    (frame.finish(), hash)
+}
+
+fn verify_audit(bytes: &[u8], anchor: (u64, [u8; 32])) -> Result<(u64, [u8; 32]), String> {
+    let (anchor_seq, anchor_head) = anchor;
+    if bytes.is_empty() {
+        if anchor_seq != 0 {
+            return Err(format!(
+                "is missing or empty but the guard snapshot anchors {anchor_seq} entries"
+            ));
+        }
+        return Ok((0, [0u8; 32]));
+    }
+    if bytes.len() < AUDIT_HEADER_LEN || &bytes[..4] != AUDIT_MAGIC || bytes[4] != AUDIT_VERSION {
+        return Err("has an unknown header".to_string());
+    }
+    let mut r = Reader::new(&bytes[AUDIT_HEADER_LEN..]);
+    let mut seq = 0u64;
+    let mut head = [0u8; 32];
+    let mut anchored = anchor_seq == 0;
+    while r.remaining() > 0 {
+        let next = seq + 1;
+        let torn = |_| format!("is torn inside entry {next}");
+        let body = r.bytes_u32().map_err(torn)?;
+        let hash = r.array32().map_err(torn)?;
+        if sha3_256(body) != hash {
+            return Err(format!("entry {next} does not match its hash"));
+        }
+        let mut b = Reader::new(body);
+        let malformed = |_| format!("entry {next} is malformed");
+        let entry_seq = b.u64().map_err(malformed)?;
+        let prev = b.array32().map_err(malformed)?;
+        if entry_seq != next || prev != head {
+            return Err(format!("entry {next} breaks the hash chain"));
+        }
+        b.bytes_u32().map_err(malformed)?;
+        for _ in 0..b.u32().map_err(malformed)? {
+            b.u32().map_err(malformed)?;
+            b.bytes_u32().map_err(malformed)?;
+        }
+        b.finish().map_err(malformed)?;
+        seq = next;
+        head = hash;
+        if seq == anchor_seq {
+            if head != anchor_head {
+                return Err(format!(
+                    "entry {seq} differs from the one the guard snapshot anchors"
+                ));
+            }
+            anchored = true;
+        }
+    }
+    if !anchored {
+        return Err(format!(
+            "ends at entry {seq} but the guard snapshot anchors {anchor_seq} entries, so it was truncated"
+        ));
+    }
+    Ok((seq, head))
+}
+
 impl GuardStore {
     pub fn new<P: Into<PathBuf>>(path: P) -> GuardStore {
         GuardStore {
             path: path.into(),
             lock: OnceLock::new(),
+            audit: Mutex::new(None),
         }
+    }
+
+    pub fn audit_path(&self) -> PathBuf {
+        audit_path(&self.path)
+    }
+
+    fn load_audit(&self, anchor: (u64, [u8; 32])) -> io::Result<AuditLog> {
+        let path = self.audit_path();
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e),
+        };
+        let (seq, head) = verify_audit(&bytes, anchor).map_err(|why| {
+            io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "the admin audit log at {} {why}; refusing to start on an altered audit trail",
+                    path.display()
+                ),
+            )
+        })?;
+        Ok(AuditLog {
+            seq,
+            head,
+            len: bytes.len() as u64,
+        })
+    }
+
+    pub fn open_audit(&self, anchor: (u64, [u8; 32])) -> io::Result<(u64, [u8; 32])> {
+        let log = self.load_audit(anchor)?;
+        let head = (log.seq, log.head);
+        *self.audit.lock().unwrap_or_else(|e| e.into_inner()) = Some(log);
+        Ok(head)
+    }
+
+    pub fn record_admin(&self, gateway: &mut Gateway) -> io::Result<()> {
+        if gateway.pending_admin_records().is_empty() {
+            return Ok(());
+        }
+        let mut audit = self.audit.lock().unwrap_or_else(|e| e.into_inner());
+        if audit.is_none() {
+            *audit = Some(self.load_audit(gateway.audit_anchor())?);
+        }
+        let Some(log) = audit.as_mut() else {
+            return Err(io::Error::other("the admin audit log is not open"));
+        };
+        let mut out = Vec::new();
+        if log.len == 0 {
+            out.extend_from_slice(AUDIT_MAGIC);
+            out.push(AUDIT_VERSION);
+        }
+        let (mut seq, mut head) = (log.seq, log.head);
+        for record in gateway.pending_admin_records() {
+            seq += 1;
+            let (frame, hash) = audit_entry(seq, &head, record);
+            out.extend_from_slice(&frame);
+            head = hash;
+        }
+        let path = self.audit_path();
+        let mut opts = fs::OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(&path)?;
+        if file.metadata()?.len() != log.len {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "the admin audit log at {} changed under the running oracle",
+                    path.display()
+                ),
+            ));
+        }
+        if let Err(e) = file.write_all(&out).and_then(|()| file.sync_all()) {
+            let _ = file.set_len(log.len);
+            return Err(e);
+        }
+        let created = log.len == 0;
+        log.len += out.len() as u64;
+        log.seq = seq;
+        log.head = head;
+        if created {
+            if let Some(parent) = path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    File::open(parent)?.sync_all()?;
+                }
+            }
+        }
+        gateway.settle_admin_records(seq, head);
+        Ok(())
     }
 
     pub fn claim(&self) -> io::Result<()> {

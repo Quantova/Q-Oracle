@@ -74,27 +74,103 @@ pub struct DivergenceRecord {
 }
 
 const JOURNAL_MAGIC: &[u8; 4] = b"QDIV";
-const JOURNAL_VERSION: u8 = 1;
+const JOURNAL_VERSION: u8 = 2;
+const JOURNAL_HEADER_LEN: usize = 4 + 1 + 8 + 32 + 4;
 const JOURNAL_RECORD_LEN: usize = 4 + 32 + 32 + 8 + 8;
 const JOURNAL_MAX_RECORDS: usize = 1 << 20;
+const ANCHOR_MAGIC: &[u8; 4] = b"QDVH";
+const ANCHOR_LEN: usize = 4 + 8 + 32 + 32;
 
 pub struct DivergenceJournal {
     path: PathBuf,
+    anchor: PathBuf,
+    seq: u64,
+    head: [u8; 32],
+}
+
+pub struct JournalImage {
+    pub seq: u64,
+    pub prev: [u8; 32],
+    pub head: [u8; 32],
+    pub records: Vec<DivergenceRecord>,
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let mut temp = path.to_path_buf().into_os_string();
+    temp.push(format!(".tmp.{}.{nonce}", std::process::id()));
+    let temp = PathBuf::from(temp);
+    {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&temp, path)?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    Ok(())
+}
+
+fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 impl DivergenceJournal {
     pub fn new<P: Into<PathBuf>>(path: P) -> DivergenceJournal {
-        DivergenceJournal { path: path.into() }
+        let path = path.into();
+        let mut anchor = path.clone().into_os_string();
+        anchor.push(".head");
+        DivergenceJournal::with_anchor(path, anchor)
+    }
+
+    pub fn with_anchor<P: Into<PathBuf>, A: Into<PathBuf>>(
+        path: P,
+        anchor: A,
+    ) -> DivergenceJournal {
+        DivergenceJournal {
+            path: path.into(),
+            anchor: anchor.into(),
+            seq: 0,
+            head: [0u8; 32],
+        }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    pub fn encode(records: &[DivergenceRecord]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(9 + records.len() * JOURNAL_RECORD_LEN + 32);
+    pub fn anchor_path(&self) -> &Path {
+        &self.anchor
+    }
+
+    pub fn head(&self) -> (u64, [u8; 32]) {
+        (self.seq, self.head)
+    }
+
+    pub fn encode(seq: u64, prev: &[u8; 32], records: &[DivergenceRecord]) -> Vec<u8> {
+        let mut out =
+            Vec::with_capacity(JOURNAL_HEADER_LEN + records.len() * JOURNAL_RECORD_LEN + 32);
         out.extend_from_slice(JOURNAL_MAGIC);
         out.push(JOURNAL_VERSION);
+        out.extend_from_slice(&seq.to_le_bytes());
+        out.extend_from_slice(prev);
         out.extend_from_slice(&(records.len() as u32).to_le_bytes());
         for r in records {
             out.extend_from_slice(&r.source_chain.to_le_bytes());
@@ -108,16 +184,19 @@ impl DivergenceJournal {
         out
     }
 
-    pub fn decode(bytes: &[u8]) -> Option<Vec<DivergenceRecord>> {
+    pub fn decode(bytes: &[u8]) -> Option<JournalImage> {
         let (body, check) = bytes.split_at_checked(bytes.len().checked_sub(32)?)?;
-        if sha3_256(body) != check || body.len() < 9 || &body[..4] != JOURNAL_MAGIC {
+        if sha3_256(body) != check || body.len() < JOURNAL_HEADER_LEN || &body[..4] != JOURNAL_MAGIC
+        {
             return None;
         }
         if body[4] != JOURNAL_VERSION {
             return None;
         }
-        let count = u32::from_le_bytes(body[5..9].try_into().ok()?) as usize;
-        let rest = &body[9..];
+        let seq = u64::from_le_bytes(body[5..13].try_into().ok()?);
+        let prev: [u8; 32] = body[13..45].try_into().ok()?;
+        let count = u32::from_le_bytes(body[45..49].try_into().ok()?) as usize;
+        let rest = &body[JOURNAL_HEADER_LEN..];
         if count > JOURNAL_MAX_RECORDS || rest.len() != count.checked_mul(JOURNAL_RECORD_LEN)? {
             return None;
         }
@@ -131,57 +210,110 @@ impl DivergenceJournal {
                 signed_expiry: u64::from_le_bytes(chunk[76..84].try_into().ok()?),
             });
         }
-        Some(records)
+        Some(JournalImage {
+            seq,
+            prev,
+            head: check.try_into().ok()?,
+            records,
+        })
     }
 
-    pub fn load(&self) -> io::Result<Vec<DivergenceRecord>> {
-        match std::fs::read(&self.path) {
-            Ok(bytes) => DivergenceJournal::decode(&bytes).ok_or_else(|| {
-                io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "the divergence journal at {} is corrupt",
-                        self.path.display()
-                    ),
+    fn encode_anchor(seq: u64, head: &[u8; 32]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(ANCHOR_LEN);
+        out.extend_from_slice(ANCHOR_MAGIC);
+        out.extend_from_slice(&seq.to_le_bytes());
+        out.extend_from_slice(head);
+        let check = sha3_256(&out);
+        out.extend_from_slice(&check);
+        out
+    }
+
+    fn decode_anchor(bytes: &[u8]) -> Option<(u64, [u8; 32])> {
+        if bytes.len() != ANCHOR_LEN || &bytes[..4] != ANCHOR_MAGIC {
+            return None;
+        }
+        if sha3_256(&bytes[..44]) != bytes[44..] {
+            return None;
+        }
+        let seq = u64::from_le_bytes(bytes[4..12].try_into().ok()?);
+        let head: [u8; 32] = bytes[12..44].try_into().ok()?;
+        Some((seq, head))
+    }
+
+    fn refuse(&self, why: String) -> io::Error {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "the divergence journal at {} {why}; refusing to sign from a journal that may have \
+                 forgotten what this operator signed",
+                self.path.display()
+            ),
+        )
+    }
+
+    pub fn load(&mut self) -> io::Result<Vec<DivergenceRecord>> {
+        let anchor = match read_optional(&self.anchor)? {
+            Some(bytes) => Some(DivergenceJournal::decode_anchor(&bytes).ok_or_else(|| {
+                self.refuse(format!(
+                    "has a corrupt head anchor at {}",
+                    self.anchor.display()
+                ))
+            })?),
+            None => None,
+        };
+        let Some(bytes) = read_optional(&self.path)? else {
+            if let Some((seq, _)) = anchor {
+                return Err(self.refuse(format!(
+                    "is missing while its head anchor at {} records sequence {seq}, so it was deleted",
+                    self.anchor.display()
+                )));
+            }
+            self.seq = 0;
+            self.head = [0u8; 32];
+            return Ok(Vec::new());
+        };
+        let image = DivergenceJournal::decode(&bytes)
+            .ok_or_else(|| self.refuse("is corrupt".to_string()))?;
+        let (anchor_seq, anchor_head) = anchor.unwrap_or((0, [0u8; 32]));
+        let current = image.seq == anchor_seq && image.head == anchor_head;
+        let one_ahead = image.seq == anchor_seq.saturating_add(1) && image.prev == anchor_head;
+        if !current && !one_ahead {
+            let why = if image.seq < anchor_seq {
+                format!(
+                    "holds sequence {} but its head anchor records sequence {anchor_seq}, so it was rolled back",
+                    image.seq
                 )
-            }),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(e),
+            } else {
+                format!(
+                    "at sequence {} does not continue the head anchor at sequence {anchor_seq}",
+                    image.seq
+                )
+            };
+            return Err(self.refuse(why));
         }
+        self.seq = image.seq;
+        self.head = image.head;
+        Ok(image.records)
     }
 
-    pub fn save(&self, records: &[DivergenceRecord]) -> io::Result<()> {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let mut temp = self.path.clone().into_os_string();
-        temp.push(format!(".tmp.{}.{nonce}", std::process::id()));
-        let temp = PathBuf::from(temp);
-        {
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut file = opts.open(&temp)?;
-            file.write_all(&DivergenceJournal::encode(records))?;
-            file.sync_all()?;
-        }
-        std::fs::rename(&temp, &self.path)?;
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::File::open(parent)?.sync_all()?;
-            }
-        }
+    pub fn save(&mut self, records: &[DivergenceRecord]) -> io::Result<()> {
+        let seq = self
+            .seq
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("the journal sequence is exhausted"))?;
+        let bytes = DivergenceJournal::encode(seq, &self.head, records);
+        let mut head = [0u8; 32];
+        head.copy_from_slice(&bytes[bytes.len() - 32..]);
+        write_atomic(&self.path, &bytes)?;
+        write_atomic(&self.anchor, &DivergenceJournal::encode_anchor(seq, &head))?;
+        self.seq = seq;
+        self.head = head;
         Ok(())
     }
 }
 
 impl<S: AttestationSigner> Operator<S> {
-    pub fn new(signer: S, journal: DivergenceJournal) -> io::Result<Operator<S>> {
+    pub fn new(signer: S, mut journal: DivergenceJournal) -> io::Result<Operator<S>> {
         if journal.path().as_os_str().is_empty() {
             return Err(io::Error::new(
                 ErrorKind::InvalidInput,
@@ -198,7 +330,8 @@ impl<S: AttestationSigner> Operator<S> {
             journal,
         };
         operator.restore_divergence(&records);
-        operator.journal.save(&operator.export_divergence())?;
+        let records = operator.export_divergence();
+        operator.journal.save(&records)?;
         Ok(operator)
     }
 
@@ -306,7 +439,8 @@ impl<S: AttestationSigner> Operator<S> {
             .entry(key)
             .or_insert((digest, fact.expiry_height));
         self.signed_refs.insert(key, fact.expiry_height);
-        if self.journal.save(&self.export_divergence()).is_err() {
+        let records = self.export_divergence();
+        if self.journal.save(&records).is_err() {
             if fresh_seen {
                 self.seen_facts.remove(&key);
             }
@@ -372,7 +506,9 @@ mod tests {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!("q-attestor-unit-{tag}-{n}.qdiv"));
         let _ = std::fs::remove_file(&path);
-        DivergenceJournal::new(path)
+        let journal = DivergenceJournal::new(path);
+        let _ = std::fs::remove_file(journal.anchor_path());
+        journal
     }
 
     fn op() -> Operator<SoftSigner> {
