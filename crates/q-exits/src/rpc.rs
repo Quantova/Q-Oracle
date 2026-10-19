@@ -286,6 +286,14 @@ fn decode_certificate(bytes: &[u8]) -> Result<Certificate, BurnWatchError> {
             for _ in 0..count {
                 attestations.push(decode_attestation(&mut decoder)?);
             }
+            if attestations
+                .windows(2)
+                .any(|pair| pair[0].from > pair[1].from)
+            {
+                return Err(BurnWatchError::Rpc(
+                    "the certificate attestations are not in order".to_string(),
+                ));
+            }
             let reveal_count = decoder.get_u64().map_err(codec_err)?;
             if reveal_count > MAX_COMMITTEE_REVEALS {
                 return Err(BurnWatchError::Rpc(
@@ -296,6 +304,11 @@ fn decode_certificate(bytes: &[u8]) -> Result<Certificate, BurnWatchError> {
             for _ in 0..reveal_count {
                 let id = decoder.get_u64().map_err(codec_err)?;
                 reveals.push(PublishedReveal::new(id, decode_credential(&mut decoder)?));
+            }
+            if reveals.windows(2).any(|pair| pair[0].id > pair[1].id) {
+                return Err(BurnWatchError::Rpc(
+                    "the certificate committee reveals are not in order".to_string(),
+                ));
             }
             Certificate::new(envelope, attestations).with_committee_reveals(reveals)
         }
@@ -328,7 +341,12 @@ fn decode_block(decoder: &mut Decoder<'_>) -> Result<Block, BurnWatchError> {
     let parent_tag = decoder.get_u8().map_err(codec_err)?;
     let parent_value = read_value(decoder)?;
     let parent = match parent_tag {
-        PARENT_GENESIS => Parent::Genesis,
+        PARENT_GENESIS if parent_value == [0u8; 32] => Parent::Genesis,
+        PARENT_GENESIS => {
+            return Err(BurnWatchError::Rpc(
+                "a genesis parent carries a value".to_string(),
+            ))
+        }
         PARENT_VALUE => Parent::Value(parent_value),
         other => return Err(BurnWatchError::Rpc(format!("unknown parent tag {other}"))),
     };
@@ -572,6 +590,7 @@ impl JsonParser {
     fn object(&mut self) -> Result<Json, BurnWatchError> {
         self.next();
         let mut fields = Vec::new();
+        let mut keys = std::collections::BTreeSet::new();
         self.skip_ws();
         if self.peek() == Some('}') {
             self.next();
@@ -583,6 +602,9 @@ impl JsonParser {
                 return Err(BurnWatchError::Rpc("expected a string key".to_string()));
             }
             let key = self.string()?;
+            if !keys.insert(key.clone()) {
+                return Err(BurnWatchError::Rpc("a json key repeats".to_string()));
+            }
             self.skip_ws();
             if self.next() != Some(':') {
                 return Err(BurnWatchError::Rpc(
@@ -648,6 +670,11 @@ impl JsonParser {
                     Some('u') => s.push(self.unicode_escape()?),
                     _ => return Err(BurnWatchError::Rpc("bad escape in a string".to_string())),
                 },
+                Some(c) if (c as u32) < 0x20 => {
+                    return Err(BurnWatchError::Rpc(
+                        "a string carries a raw control character".to_string(),
+                    ))
+                }
                 Some(c) => s.push(c),
                 None => return Err(BurnWatchError::Rpc("a string was not closed".to_string())),
             }
@@ -675,6 +702,11 @@ impl JsonParser {
             self.next();
         }
         let text: String = self.chars[start..self.pos].iter().collect();
+        if text.len() > 1 && text.starts_with('0') {
+            return Err(BurnWatchError::Rpc(
+                "a number has a leading zero".to_string(),
+            ));
+        }
         text.parse::<u64>().map(Json::Int).map_err(|_| {
             BurnWatchError::Rpc("a number is not a whole number the wire accepts".to_string())
         })
