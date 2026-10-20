@@ -6,6 +6,9 @@
 // Copyright 2026 Quantova Inc
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+#[cfg(all(feature = "test-util", not(any(test, debug_assertions))))]
+compile_error!("the test-util feature trusts unpinned chain roots and parameters and must never be enabled in a release build");
+
 pub mod beacon;
 pub mod bls;
 pub mod config;
