@@ -78,6 +78,7 @@ const JOURNAL_VERSION: u8 = 2;
 const JOURNAL_HEADER_LEN: usize = 4 + 1 + 8 + 32 + 4;
 const JOURNAL_RECORD_LEN: usize = 4 + 32 + 32 + 8 + 8;
 const JOURNAL_MAX_RECORDS: usize = 1 << 20;
+const MAX_REMEMBERED_EXPIRED: usize = 16_384;
 const ANCHOR_MAGIC: &[u8; 4] = b"QDVH";
 const ANCHOR_LEN: usize = 4 + 8 + 32 + 32;
 
@@ -362,9 +363,20 @@ impl<S: AttestationSigner> Operator<S> {
     }
 
     pub fn prune_expired(&mut self, dest_height: u64) {
-        self.seen_facts
-            .retain(|_, (_, expiry)| *expiry >= dest_height);
         self.signed_refs.retain(|_, expiry| *expiry >= dest_height);
+        let mut expired: Vec<(u64, (u32, [u8; 32]))> = self
+            .seen_facts
+            .iter()
+            .filter(|(_, (_, expiry))| *expiry < dest_height)
+            .map(|(key, (_, expiry))| (*expiry, *key))
+            .collect();
+        if expired.len() <= MAX_REMEMBERED_EXPIRED {
+            return;
+        }
+        expired.sort_unstable();
+        for (_, key) in &expired[..expired.len() - MAX_REMEMBERED_EXPIRED] {
+            self.seen_facts.remove(key);
+        }
     }
 
     pub fn export_divergence(&self) -> Vec<DivergenceRecord> {
