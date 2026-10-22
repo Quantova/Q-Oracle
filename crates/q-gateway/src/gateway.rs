@@ -25,7 +25,7 @@ pub const MAX_PENDING_EXITS: usize = 65_536;
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
 pub const WATCHDOG_COOLDOWN: u64 = 8 * WATCHDOG_MAX_WINDOW;
-const GUARD_SNAPSHOT_VERSION: u8 = 8;
+const GUARD_SNAPSHOT_VERSION: u8 = 9;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let above_two_thirds = size.saturating_mul(2) / 3 + 1;
@@ -1312,6 +1312,16 @@ impl Gateway {
         w.u64(self.global_resumed_at);
         w.u64(self.audit_seq);
         w.fixed(&self.audit_head);
+        w.u32(self.escrowed.len() as u32);
+        for (asset_id, escrowed) in &self.escrowed {
+            w.fixed(asset_id);
+            w.u128(*escrowed);
+        }
+        w.u32(self.reserve_reported_at.len() as u32);
+        for (asset_id, at_height) in &self.reserve_reported_at {
+            w.fixed(asset_id);
+            w.u64(*at_height);
+        }
         w.finish()
     }
 
@@ -1342,6 +1352,16 @@ impl Gateway {
         self.global_resumed_at = state.global_resumed_at;
         self.audit_seq = state.audit_seq;
         self.audit_head = state.audit_head;
+        for (asset_id, escrowed) in state.escrowed {
+            self.escrowed.entry(asset_id).or_insert(escrowed);
+        }
+        for (asset_id, at_height) in state.reserve_reported_at {
+            let last = self
+                .reserve_reported_at
+                .entry(asset_id)
+                .or_insert(at_height);
+            *last = (*last).max(at_height);
+        }
         self.admin_records.clear();
         for (source_chain, saved) in state.corridors {
             if let Some(current) = self.corridors.get_mut(&source_chain) {
@@ -1377,6 +1397,8 @@ struct GuardState {
     global_resumed_at: u64,
     audit_seq: u64,
     audit_head: [u8; 32],
+    escrowed: BTreeMap<[u8; 16], u128>,
+    reserve_reported_at: BTreeMap<[u8; 16], u64>,
 }
 
 fn bounded_count(r: &mut Reader, item_size: usize) -> Result<usize, CodecError> {
@@ -1509,6 +1531,20 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
     let audit_seq = r.u64()?;
     let audit_head = r.array32()?;
 
+    let count = bounded_count(&mut r, 32)?;
+    let mut escrowed = BTreeMap::new();
+    for _ in 0..count {
+        let asset_id = r.array16()?;
+        escrowed.insert(asset_id, r.u128()?);
+    }
+
+    let count = bounded_count(&mut r, 24)?;
+    let mut reserve_reported_at = BTreeMap::new();
+    for _ in 0..count {
+        let asset_id = r.array16()?;
+        reserve_reported_at.insert(asset_id, r.u64()?);
+    }
+
     r.finish()?;
     Ok(GuardState {
         current_height,
@@ -1531,6 +1567,8 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         global_resumed_at,
         audit_seq,
         audit_head,
+        escrowed,
+        reserve_reported_at,
     })
 }
 
