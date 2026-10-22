@@ -888,7 +888,12 @@ impl Gateway {
             .watchdog_last
             .get(&operator)
             .is_some_and(|&last| self.current_height < last.saturating_add(WATCHDOG_COOLDOWN));
-        if cooling || self.current_height < self.deposit_frozen_until {
+        let chained = self.deposit_frozen_until > 0
+            && self.current_height
+                < self
+                    .deposit_frozen_until
+                    .saturating_add(WATCHDOG_MAX_WINDOW);
+        if cooling || chained {
             return Err(GatewayError::WatchdogCooldown);
         }
         self.watchdog_last.insert(operator, self.current_height);
