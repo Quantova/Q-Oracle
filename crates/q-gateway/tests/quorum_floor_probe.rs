@@ -3,7 +3,7 @@
 
 use q_airlock::SignerSig;
 use q_codec::Writer;
-use q_gateway::gateway::{FREEZE_DOMAIN, REORG_DOMAIN};
+use q_gateway::gateway::{EMERGENCY_FREEZE_MAX_WINDOW, FREEZE_DOMAIN, REORG_DOMAIN};
 use q_gateway::{Gateway, GatewayError, OperatorSet};
 use qtv_crypto::ml_dsa::{self, PublicKey, SecretKey, SIGNATURE_BYTES};
 
@@ -135,11 +135,11 @@ fn a_single_operator_cannot_freeze_when_the_threshold_is_left_below_a_supermajor
     let mut gw = gateway(0, &ops);
     let one = vec![sign_ctx(
         &ops[0],
-        &freeze_msg(u64::MAX, DEST_ID),
+        &freeze_msg(EMERGENCY_FREEZE_MAX_WINDOW, DEST_ID),
         FREEZE_DOMAIN,
     )];
     assert_eq!(
-        gw.emergency_freeze(u64::MAX, &one),
+        gw.emergency_freeze(EMERGENCY_FREEZE_MAX_WINDOW, &one),
         Err(GatewayError::BelowThreshold { got: 1, need: 7 })
     );
     assert!(
@@ -149,18 +149,33 @@ fn a_single_operator_cannot_freeze_when_the_threshold_is_left_below_a_supermajor
 
     let six: Vec<SignerSig> = ops[0..6]
         .iter()
-        .map(|op| sign_ctx(op, &freeze_msg(u64::MAX, DEST_ID), FREEZE_DOMAIN))
+        .map(|op| {
+            sign_ctx(
+                op,
+                &freeze_msg(EMERGENCY_FREEZE_MAX_WINDOW, DEST_ID),
+                FREEZE_DOMAIN,
+            )
+        })
         .collect();
     assert_eq!(
-        gw.emergency_freeze(u64::MAX, &six),
+        gw.emergency_freeze(EMERGENCY_FREEZE_MAX_WINDOW, &six),
         Err(GatewayError::BelowThreshold { got: 6, need: 7 }),
         "exactly two thirds of nine is not a supermajority"
     );
     let seven: Vec<SignerSig> = ops[0..7]
         .iter()
-        .map(|op| sign_ctx(op, &freeze_msg(u64::MAX, DEST_ID), FREEZE_DOMAIN))
+        .map(|op| {
+            sign_ctx(
+                op,
+                &freeze_msg(EMERGENCY_FREEZE_MAX_WINDOW, DEST_ID),
+                FREEZE_DOMAIN,
+            )
+        })
         .collect();
-    assert_eq!(gw.emergency_freeze(u64::MAX, &seven), Ok(()));
+    assert_eq!(
+        gw.emergency_freeze(EMERGENCY_FREEZE_MAX_WINDOW, &seven),
+        Ok(())
+    );
     assert!(
         gw.is_frozen(),
         "more than two thirds of nine freezes the gateway"

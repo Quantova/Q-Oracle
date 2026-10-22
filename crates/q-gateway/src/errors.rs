@@ -52,6 +52,11 @@ pub enum GatewayError {
         until: u64,
         max: u64,
     },
+    FreezeWindowTooWide {
+        until: u64,
+        max: u64,
+    },
+    NotFrozen,
     WatchdogWithoutClock,
     WatchdogExpired {
         until: u64,

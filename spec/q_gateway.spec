@@ -6,6 +6,9 @@ domain REORG = "QUANTOVA/Q-ORACLE/REORG/v1";
 domain TIER = "QUANTOVA/Q-ORACLE/TIER/v1";
 domain FREEZE = "QUANTOVA/Q-ORACLE/FREEZE/v1";
 domain UNPAUSE = "QUANTOVA/Q-ORACLE/UNPAUSE/v1";
+domain RESUME = "QUANTOVA/Q-ORACLE/RESUME/v1";
+domain PAUSE = "QUANTOVA/Q-ORACLE/PAUSE/v1";
+domain LIFT = "QUANTOVA/Q-ORACLE/LIFT/v1";
 domain WATCHDOG = "QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 domain BATCH = "QUANTOVA/Q-ORACLE/BATCH/v1";
 domain EPOCH = "QUANTOVA/Q-ORACLE/EPOCH/v1";
@@ -15,6 +18,7 @@ const DEPOSIT: u8 = 0;
 const BASE_TIER: u8 = 1;
 const WATCHDOG_WINDOW: Q_Height = 7200;
 const WATCHDOG_COOLDOWN: Q_Height = 57600;
+const FREEZE_MAX_WINDOW: Q_Height = 3024000;
 const RESUME_SKEW: Q_Height = 16;
 const RESUME_WINDOW: Q_Height = 1728600;
 const EPOCH_MIN_BLOCKS: Q_Height = 432000;
@@ -78,6 +82,7 @@ contract QGateway {
     exits: Map<u64, ExitTicket>;
     next_exit_id: u64;
     frozen_until: Q_Height;
+    freeze_floor: Q_Height;
     source_paused: Map<Q_Net, bool>;
     global_pause: bool;
   }
@@ -99,6 +104,7 @@ contract QGateway {
     epoch_cap = deploy_params.epoch_cap;
     exit_delay = deploy_params.exit_delay;
     frozen_until = 0;
+    freeze_floor = 0;
     next_exit_id = 0;
     global_pause = false;
     gov_nonce = 0;
@@ -203,14 +209,30 @@ contract QGateway {
   }
 
   entry emergency_freeze(order: FreezeOrder, approvals: Quorum<6 of 9, operators, FREEZE>)
-    writes(frozen_until)
-    reads(operators)
+    writes(frozen_until, freeze_floor)
+    reads(operators, freeze_floor)
   {
     guard order.dest == network;
     guard order.era == era;
     guard order.until > frozen_until;
+    guard order.until > freeze_floor;
+    guard order.until <= now + FREEZE_MAX_WINDOW;
     frozen_until = order.until;
+    freeze_floor = order.until;
     emit Frozen(order.until, approvals.digest);
+  }
+
+  entry lift_freeze(order: FreezeOrder, approvals: Quorum<6 of 9, operators, LIFT>)
+    writes(frozen_until)
+    reads(operators, freeze_floor)
+  {
+    guard order.dest == network;
+    guard order.era == era;
+    guard order.until == freeze_floor;
+    guard order.until == frozen_until;
+    guard now < frozen_until;
+    frozen_until = now;
+    emit FreezeLifted(order.until, approvals.digest);
   }
 
   entry watchdog_freeze(alarm: WatchAlarm, watch: Watch<1 of operators, WATCHDOG>)
@@ -242,7 +264,7 @@ contract QGateway {
     emit ReorgPaused(report.net, report.fork_depth, approvals.digest);
   }
 
-  entry clear_reorg(order: ResumeOrder, approvals: Quorum<6 of 9, operators, REORG>)
+  entry clear_reorg(order: ResumeOrder, approvals: Quorum<6 of 9, operators, RESUME>)
     writes(source_paused)
     reads(network, era, source_paused)
     denies order.at_height > now + RESUME_SKEW
@@ -256,7 +278,7 @@ contract QGateway {
     emit ReorgCleared(order.net, approvals.digest);
   }
 
-  entry pause(order: PauseOrder, approvals: Quorum<6 of 9, operators, FREEZE>)
+  entry pause(order: PauseOrder, approvals: Quorum<6 of 9, operators, PAUSE>)
     writes(global_pause, gov_nonce)
     reads(network, era, gov_nonce)
   {
@@ -315,6 +337,7 @@ contract QGateway {
   event ExitFinalized(id: u64, origin: Q_Origin, amount: u128, destination: Q_Hash);
   event TierRaised(net: Q_Net, tier: u8, digest: Q_Hash);
   event Frozen(until: Q_Height, digest: Q_Hash);
+  event FreezeLifted(until: Q_Height, digest: Q_Hash);
   event WatchdogFroze(signer: Q_Address, until: Q_Height);
   event ReorgPaused(net: Q_Net, fork_depth: u32, digest: Q_Hash);
   event ReorgCleared(net: Q_Net, digest: Q_Hash);

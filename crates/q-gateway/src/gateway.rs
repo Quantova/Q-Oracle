@@ -19,13 +19,15 @@ pub const WATCHDOG_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/WATCHDOG/v1";
 pub const BATCH_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/BATCH/v1";
 pub const RESERVE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/RESERVE/v1";
 pub const UNPAUSE_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/UNPAUSE/v1";
+pub const LIFT_DOMAIN: &[u8] = b"QUANTOVA/Q-ORACLE/LIFT/v1";
 pub const RESERVE_MAX_AGE: u64 = 18_000;
 
 pub const MAX_PENDING_EXITS: usize = 65_536;
 pub const BASE_TIER: u8 = 1;
 pub const WATCHDOG_MAX_WINDOW: u64 = 7_200;
 pub const WATCHDOG_COOLDOWN: u64 = 8 * WATCHDOG_MAX_WINDOW;
-const GUARD_SNAPSHOT_VERSION: u8 = 9;
+pub const EMERGENCY_FREEZE_MAX_WINDOW: u64 = 3_024_000;
+const GUARD_SNAPSHOT_VERSION: u8 = 10;
 
 pub fn supermajority_floor(size: usize) -> usize {
     let above_two_thirds = size.saturating_mul(2) / 3 + 1;
@@ -101,6 +103,7 @@ pub struct Gateway {
     global_resumed_at: u64,
     current_height: u64,
     frozen_until: u64,
+    lifted_freeze: u64,
     deposit_frozen_until: u64,
     exit_delay: u64,
     next_exit_id: u64,
@@ -147,6 +150,7 @@ impl Gateway {
             global_resumed_at: 0,
             current_height: 0,
             frozen_until: 0,
+            lifted_freeze: 0,
             deposit_frozen_until: 0,
             exit_delay: 0,
             next_exit_id: 0,
@@ -234,11 +238,19 @@ impl Gateway {
     }
 
     pub fn is_frozen(&self) -> bool {
-        self.current_height < self.frozen_until
+        self.current_height < self.freeze_horizon()
+    }
+
+    fn freeze_horizon(&self) -> u64 {
+        if self.lifted_freeze == self.frozen_until {
+            0
+        } else {
+            self.frozen_until
+        }
     }
 
     fn mint_freeze_horizon(&self) -> u64 {
-        self.frozen_until.max(self.deposit_frozen_until)
+        self.freeze_horizon().max(self.deposit_frozen_until)
     }
 
     pub fn corridor_tier(&self, source_chain: u32) -> Option<u8> {
@@ -843,6 +855,15 @@ impl Gateway {
         until_height: u64,
         sigs: &[SignerSig],
     ) -> Result<(), GatewayError> {
+        let ceiling = self
+            .current_height
+            .saturating_add(EMERGENCY_FREEZE_MAX_WINDOW);
+        if until_height > ceiling {
+            return Err(GatewayError::FreezeWindowTooWide {
+                until: until_height,
+                max: ceiling,
+            });
+        }
         let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
         let accepted = self.quorum_met(&message, FREEZE_DOMAIN, sigs)?;
         if until_height > self.frozen_until {
@@ -850,6 +871,18 @@ impl Gateway {
             self.log_admin(FREEZE_DOMAIN, message, accepted);
             self.touch_guard();
         }
+        Ok(())
+    }
+
+    pub fn lift_freeze(&mut self, sigs: &[SignerSig]) -> Result<(), GatewayError> {
+        if !self.is_frozen() {
+            return Err(GatewayError::NotFrozen);
+        }
+        let message = lift_message(self.frozen_until, self.dest_chain_id, &self.era);
+        let accepted = self.quorum_met(&message, LIFT_DOMAIN, sigs)?;
+        self.lifted_freeze = self.frozen_until;
+        self.log_admin(LIFT_DOMAIN, message, accepted);
+        self.touch_guard();
         Ok(())
     }
 
@@ -987,7 +1020,7 @@ impl Gateway {
         if self.global_pause {
             return Err(GatewayError::GlobalPause);
         }
-        if self.current_height < self.frozen_until {
+        if self.is_frozen() {
             return Err(GatewayError::Frozen {
                 until: self.frozen_until,
             });
@@ -1268,6 +1301,7 @@ impl Gateway {
         w.u8(self.global_pause as u8);
         w.u64(self.current_height);
         w.u64(self.frozen_until);
+        w.u64(self.lifted_freeze);
         w.u64(self.deposit_frozen_until);
         w.u128(self.epoch_minted);
         w.u32(self.used_refs.len() as u32);
@@ -1344,6 +1378,7 @@ impl Gateway {
         self.global_pause = state.global_pause;
         self.advance_to(state.current_height);
         self.frozen_until = state.frozen_until;
+        self.lifted_freeze = state.lifted_freeze;
         self.deposit_frozen_until = state.deposit_frozen_until;
         self.epoch_minted = state.epoch_minted;
         self.used_refs = state.used_refs;
@@ -1394,6 +1429,7 @@ struct GuardState {
     global_pause: bool,
     current_height: u64,
     frozen_until: u64,
+    lifted_freeze: u64,
     deposit_frozen_until: u64,
     epoch_minted: u128,
     used_refs: BTreeSet<(u32, [u8; 32])>,
@@ -1436,6 +1472,7 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
     };
     let current_height = r.u64()?;
     let frozen_until = r.u64()?;
+    let lifted_freeze = r.u64()?;
     let deposit_frozen_until = r.u64()?;
     let epoch_minted = r.u128()?;
 
@@ -1564,6 +1601,7 @@ fn decode_guard(bytes: &[u8]) -> Result<GuardState, CodecError> {
         current_height,
         global_pause,
         frozen_until,
+        lifted_freeze,
         deposit_frozen_until,
         epoch_minted,
         used_refs,
@@ -1665,6 +1703,14 @@ pub fn freeze_message(until_height: u64, dest_chain_id: u64) -> Vec<u8> {
 pub fn freeze_message_for_era(until_height: u64, dest_chain_id: u64, era: &[u8; 32]) -> Vec<u8> {
     let mut w = Writer::new();
     w.u64(until_height);
+    w.u64(dest_chain_id);
+    w.fixed(era);
+    w.finish()
+}
+
+pub fn lift_message(frozen_until: u64, dest_chain_id: u64, era: &[u8; 32]) -> Vec<u8> {
+    let mut w = Writer::new();
+    w.u64(frozen_until);
     w.u64(dest_chain_id);
     w.fixed(era);
     w.finish()
