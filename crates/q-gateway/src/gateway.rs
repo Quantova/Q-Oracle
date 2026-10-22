@@ -28,8 +28,8 @@ pub const WATCHDOG_COOLDOWN: u64 = 8 * WATCHDOG_MAX_WINDOW;
 const GUARD_SNAPSHOT_VERSION: u8 = 8;
 
 pub fn supermajority_floor(size: usize) -> usize {
-    let two_thirds = (size.saturating_mul(2) + 2) / 3;
-    two_thirds.max(2)
+    let above_two_thirds = size.saturating_mul(2) / 3 + 1;
+    above_two_thirds.max(2)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,7 +273,7 @@ impl Gateway {
         quorum: usize,
     ) -> Result<(), GatewayError> {
         let size = self.operators.size();
-        if quorum < 2 || quorum > size || quorum.saturating_mul(3) < size.saturating_mul(2) {
+        if quorum < 2 || quorum > size || quorum.saturating_mul(3) <= size.saturating_mul(2) {
             return Err(GatewayError::ThinQuorum { quorum, size });
         }
         let corridor = self
@@ -1802,17 +1802,21 @@ mod tests {
     #[test]
     fn corridor_quorum_overrides_the_global_threshold() {
         let (s, mut gw) = nine_op_gateway(3);
-        gw.set_corridor_quorum(1, 6)
-            .expect("two thirds is a wide margin");
-        assert_eq!(gw.corridor_quorum(1), Some(6));
+        assert!(
+            gw.set_corridor_quorum(1, 6).is_err(),
+            "exactly two thirds is not a supermajority"
+        );
+        gw.set_corridor_quorum(1, 7)
+            .expect("more than two thirds is a wide margin");
+        assert_eq!(gw.corridor_quorum(1), Some(7));
 
         let f = fact();
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..5], &f)),
-            Err(GatewayError::BelowThreshold { got: 5, need: 6 })
+            gw.process_deposit(&envelope(&s[0..6], &f)),
+            Err(GatewayError::BelowThreshold { got: 6, need: 7 })
         );
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &f))
+            gw.process_deposit(&envelope(&s[0..7], &f))
                 .expect("wide margin mints")
                 .amount,
             500
@@ -1833,17 +1837,17 @@ mod tests {
         let (s, mut gw) = nine_op_gateway(3);
         assert_eq!(
             gw.corridor_quorum(1),
-            Some(6),
-            "the fallback is raised to two thirds of nine"
+            Some(7),
+            "the fallback is raised above two thirds of nine"
         );
         let f = fact();
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..5], &f)),
-            Err(GatewayError::BelowThreshold { got: 5, need: 6 }),
-            "five of nine is not a supermajority on the fallback path"
+            gw.process_deposit(&envelope(&s[0..6], &f)),
+            Err(GatewayError::BelowThreshold { got: 6, need: 7 }),
+            "six of nine is not a supermajority on the fallback path"
         );
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &f))
+            gw.process_deposit(&envelope(&s[0..7], &f))
                 .expect("a real supermajority admits")
                 .amount,
             500
@@ -1884,7 +1888,7 @@ mod tests {
         high.nonce = 9_000;
         high.source_ref = SourceRef([0x21; 32]);
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &high))
+            gw.process_deposit(&envelope(&s[0..7], &high))
                 .expect("the high-nonce deposit mints")
                 .amount,
             500
@@ -1895,7 +1899,7 @@ mod tests {
         low.nonce = 1;
         low.source_ref = SourceRef([0x22; 32]);
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &low))
+            gw.process_deposit(&envelope(&s[0..7], &low))
                 .expect("a later lower-nonce deposit with a fresh reference is not wedged")
                 .amount,
             500
@@ -2377,7 +2381,7 @@ mod tests {
         gw.unpause_all();
 
         let f = fact();
-        gw.process_deposit(&envelope(&s[0..6], &f))
+        gw.process_deposit(&envelope(&s[0..7], &f))
             .expect("a supermajority admits");
         assert!(
             gw.guard_revision() > after_pause,
@@ -2398,7 +2402,7 @@ mod tests {
         let (s, mut gw) = nine_op_gateway(3);
         let f = fact();
         let receipt = gw
-            .process_deposit(&envelope(&s[0..6], &f))
+            .process_deposit(&envelope(&s[0..7], &f))
             .expect("a supermajority admits");
         assert_eq!(receipt.amount, 500);
 
@@ -2416,7 +2420,7 @@ mod tests {
         assert_eq!(restored.minted_of_asset(&f.asset_id.0), 500);
         assert_eq!(restored.epoch_minted(), 500);
         assert_eq!(
-            restored.process_deposit(&envelope(&s[0..6], &f)),
+            restored.process_deposit(&envelope(&s[0..7], &f)),
             Err(GatewayError::ReplayedReference),
             "the same deposit is a replay once the guard is rehydrated"
         );
@@ -2557,7 +2561,7 @@ mod tests {
 
         let first = fact();
         let r1 = gw
-            .process_deposit(&envelope(&s[0..6], &first))
+            .process_deposit(&envelope(&s[0..7], &first))
             .expect("the first corridor mints");
         assert_eq!(r1.source_chain, 1);
         assert_eq!(r1.source_ref, first.source_ref.0);
@@ -2565,7 +2569,7 @@ mod tests {
         let mut second = fact();
         second.source_chain = 2;
         let r2 = gw
-            .process_deposit(&envelope(&s[0..6], &second))
+            .process_deposit(&envelope(&s[0..7], &second))
             .expect("the same reference on another corridor still mints");
         assert_eq!(r2.source_chain, 2);
         assert_eq!(r2.source_ref, first.source_ref.0);
@@ -2575,7 +2579,7 @@ mod tests {
         assert!(gw.is_reference_used_on(2, &first.source_ref.0));
         assert!(!gw.is_reference_used_on(3, &first.source_ref.0));
         assert_eq!(
-            gw.process_deposit(&envelope(&s[0..6], &first)),
+            gw.process_deposit(&envelope(&s[0..7], &first)),
             Err(GatewayError::ReplayedReference)
         );
     }
@@ -2591,13 +2595,13 @@ mod tests {
         gw.register_corridor(1, 6);
         assert_eq!(
             gw.emergency_freeze(5_000, &[]),
-            Err(GatewayError::BelowThreshold { got: 0, need: 2 }),
+            Err(GatewayError::BelowThreshold { got: 0, need: 3 }),
             "a zero threshold must not fail open into a no-signature freeze"
         );
         assert_eq!(gw.frozen_until(), 0, "the freeze did not take effect");
         assert_eq!(
             gw.report_reorg(1, 3, 0, &[]),
-            Err(GatewayError::BelowThreshold { got: 0, need: 2 }),
+            Err(GatewayError::BelowThreshold { got: 0, need: 3 }),
             "a zero threshold must not fail open into a no-signature pause"
         );
         assert!(!gw.is_source_paused(1), "the source was not paused");
@@ -2616,7 +2620,7 @@ mod tests {
     fn a_corrupt_guard_snapshot_is_refused_rather_than_rehydrating_an_empty_guard() {
         let (s, mut gw) = nine_op_gateway(3);
         let f = fact();
-        gw.process_deposit(&envelope(&s[0..6], &f))
+        gw.process_deposit(&envelope(&s[0..7], &f))
             .expect("seed a reserved reference");
         let mut snapshot = gw.encode_guard();
         snapshot.truncate(snapshot.len() - 1);

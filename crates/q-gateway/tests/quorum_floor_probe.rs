@@ -140,7 +140,7 @@ fn a_single_operator_cannot_freeze_when_the_threshold_is_left_below_a_supermajor
     )];
     assert_eq!(
         gw.emergency_freeze(u64::MAX, &one),
-        Err(GatewayError::BelowThreshold { got: 1, need: 6 })
+        Err(GatewayError::BelowThreshold { got: 1, need: 7 })
     );
     assert!(
         !gw.is_frozen(),
@@ -151,34 +151,43 @@ fn a_single_operator_cannot_freeze_when_the_threshold_is_left_below_a_supermajor
         .iter()
         .map(|op| sign_ctx(op, &freeze_msg(u64::MAX, DEST_ID), FREEZE_DOMAIN))
         .collect();
-    assert_eq!(gw.emergency_freeze(u64::MAX, &six), Ok(()));
+    assert_eq!(
+        gw.emergency_freeze(u64::MAX, &six),
+        Err(GatewayError::BelowThreshold { got: 6, need: 7 }),
+        "exactly two thirds of nine is not a supermajority"
+    );
+    let seven: Vec<SignerSig> = ops[0..7]
+        .iter()
+        .map(|op| sign_ctx(op, &freeze_msg(u64::MAX, DEST_ID), FREEZE_DOMAIN))
+        .collect();
+    assert_eq!(gw.emergency_freeze(u64::MAX, &seven), Ok(()));
     assert!(
         gw.is_frozen(),
-        "a two-thirds supermajority of nine freezes the gateway"
+        "more than two thirds of nine freezes the gateway"
     );
 }
 
 #[test]
-fn the_supermajority_floor_is_two_thirds_and_never_below_two() {
+fn the_supermajority_floor_is_above_two_thirds_and_never_below_two() {
     use q_gateway::gateway::supermajority_floor;
 
     for (size, want) in [
         (0usize, 2usize),
         (1, 2),
         (2, 2),
-        (3, 2),
+        (3, 3),
         (4, 3),
         (5, 4),
-        (6, 4),
+        (6, 5),
         (7, 5),
-        (9, 6),
+        (9, 7),
         (10, 7),
         (100, 67),
     ] {
         assert_eq!(
             supermajority_floor(size),
             want,
-            "the floor for a set of {size} is not the two thirds supermajority"
+            "the floor for a set of {size} is not above two thirds"
         );
     }
 
@@ -189,8 +198,8 @@ fn the_supermajority_floor_is_two_thirds_and_never_below_two() {
             "a set of {size} must never admit a one signature quorum"
         );
         assert!(
-            floor * 3 >= size * 2,
-            "the floor for {size} is below two thirds, so two disjoint quorums could both pass"
+            floor * 3 > size * 2,
+            "the floor for {size} is not above two thirds, so two quorums could overlap in only a third"
         );
     }
 }
@@ -200,14 +209,14 @@ fn a_threshold_left_below_the_floor_cannot_admit_a_short_quorum() {
     let ops: Vec<Op> = (1..=9).map(mk).collect();
     let floor = q_gateway::gateway::supermajority_floor(9);
     assert_eq!(
-        floor, 6,
-        "nine operators need six, or the case below is not short"
+        floor, 7,
+        "nine operators need seven, or the case below is not short"
     );
 
     let mut gw = gateway(1, &ops);
     let until = 10_000u64;
     let msg = freeze_msg(until, DEST_ID);
-    let sigs: Vec<SignerSig> = ops[..5]
+    let sigs: Vec<SignerSig> = ops[..6]
         .iter()
         .map(|op| sign_ctx(op, &msg, FREEZE_DOMAIN))
         .collect();
@@ -217,7 +226,7 @@ fn a_threshold_left_below_the_floor_cannot_admit_a_short_quorum() {
             gw.emergency_freeze(until, &sigs),
             Err(GatewayError::BelowThreshold { .. })
         ),
-        "five of nine is under the two thirds floor and must be refused however low the \
+        "six of nine is not above the two thirds floor and must be refused however low the \
          configured threshold was left"
     );
 }

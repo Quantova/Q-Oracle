@@ -112,27 +112,31 @@ fn a_distinct_signer_quorum_over_the_canonical_fact_mints() {
 }
 
 #[test]
-fn a_wide_two_thirds_corridor_quorum_holds() {
+fn a_wide_corridor_quorum_needs_more_than_two_thirds() {
     let ops: Vec<Op> = (0..9).map(mk).collect();
     let mut gw = gateway(&ops, 3);
-    gw.set_corridor_quorum(SOLANA, 6)
-        .expect("two thirds is a wide margin");
+    assert!(
+        gw.set_corridor_quorum(SOLANA, 6).is_err(),
+        "exactly two thirds is not a supermajority"
+    );
+    gw.set_corridor_quorum(SOLANA, 7)
+        .expect("more than two thirds is a wide margin");
     let sources = independent_sources(SOLANA, &ops);
     let c = find(SOLANA).unwrap();
     let f = deposit(&c, [0x12; 32], 500);
 
-    let five: Vec<&Op> = ops[0..5].iter().collect();
+    let six: Vec<&Op> = ops[0..6].iter().collect();
     assert_eq!(
-        admit(&mut gw, &c, &sources, &envelope(&five, &f)),
+        admit(&mut gw, &c, &sources, &envelope(&six, &f)),
         Err(FederatedError::Gateway(GatewayError::BelowThreshold {
-            got: 5,
-            need: 6
+            got: 6,
+            need: 7
         }))
     );
 
-    let six: Vec<&Op> = ops[0..6].iter().collect();
+    let seven: Vec<&Op> = ops[0..7].iter().collect();
     assert_eq!(
-        admit(&mut gw, &c, &sources, &envelope(&six, &f))
+        admit(&mut gw, &c, &sources, &envelope(&seven, &f))
             .expect("wide margin mints")
             .amount,
         500

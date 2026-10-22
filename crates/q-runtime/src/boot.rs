@@ -665,7 +665,7 @@ mod boot_config_tests {
         let operators = three();
         let Err(err) = boot_from_config(
             Some(&operators),
-            Some("2"),
+            Some("3"),
             Some("9000"),
             Some(&"00".repeat(32)),
         ) else {
@@ -677,7 +677,7 @@ mod boot_config_tests {
     #[test]
     fn a_missing_era_is_refused() {
         let operators = three();
-        let Err(err) = boot_from_config(Some(&operators), Some("2"), Some("9000"), None) else {
+        let Err(err) = boot_from_config(Some(&operators), Some("3"), Some("9000"), None) else {
             panic!("a missing era must refuse");
         };
         assert!(matches!(err, BootConfigError::Missing(_)), "{err:?}");
@@ -688,7 +688,7 @@ mod boot_config_tests {
         let operators = three();
         assert!(boot_from_config(
             Some(&operators),
-            Some("2"),
+            Some("3"),
             Some("9000"),
             Some(&"ab".repeat(32))
         )
