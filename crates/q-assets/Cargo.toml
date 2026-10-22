@@ -13,4 +13,4 @@ description = "The origin tagged asset registry and the per asset mint and unloc
 [dependencies]
 
 [dev-dependencies]
-qlc-registry = { path = "../../../Q-Lightclient/crates/qlc-registry" }
+qlc-registry = { workspace = true }

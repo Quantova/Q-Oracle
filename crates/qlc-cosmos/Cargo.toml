@@ -14,5 +14,5 @@ description = "Off-chain Tendermint light client for the Cosmos family corridor.
 test-util = []
 
 [dependencies]
-qlc-core = { path = "../../../Q-Lightclient/crates/qlc-core" }
-qlc-stark = { path = "../../../Q-Lightclient/crates/qlc-stark" }
+qlc-core = { workspace = true }
+qlc-stark = { workspace = true }

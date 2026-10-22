@@ -15,15 +15,15 @@ q-codec = { workspace = true }
 qtv-crypto = { workspace = true }
 qlc-bitcoin = { workspace = true }
 qlc-ethereum = { workspace = true }
-qtv-block = { path = "../../../Quantova-Chain/crates/qtv-block" }
-qtv-codec = { path = "../../../Quantova-Chain/crates/qtv-codec" }
-qtv-state = { path = "../../../Quantova-Chain/crates/qtv-state" }
-qtv-attest = { path = "../../../QRC-CONSENSUS/crates/qtv-attest" }
-qtv-sampler = { path = "../../../QRC-CONSENSUS/crates/qtv-sampler" }
+qtv-block = { workspace = true }
+qtv-codec = { workspace = true }
+qtv-state = { workspace = true }
+qtv-attest = { workspace = true }
+qtv-sampler = { workspace = true }
 zeroize = "1.9"
 
 [dev-dependencies]
 q-codec = { workspace = true }
 qtv-crypto = { workspace = true }
-qtv-attest = { path = "../../../QRC-CONSENSUS/crates/qtv-attest", features = ["test-fixtures"] }
-qtv-sampler = { path = "../../../QRC-CONSENSUS/crates/qtv-sampler", features = ["test-fixtures"] }
+qtv-attest = { workspace = true, features = ["test-fixtures"] }
+qtv-sampler = { workspace = true, features = ["test-fixtures"] }

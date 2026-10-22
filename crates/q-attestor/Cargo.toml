@@ -23,5 +23,5 @@ q-gateway = { workspace = true }
 q-airlock = { workspace = true }
 q-bls = { path = "../q-bls" }
 qlc-ethereum = { workspace = true }
-qlc-stark = { path = "../../../Q-Lightclient/crates/qlc-stark" }
+qlc-stark = { workspace = true }
 qtv-stark = { workspace = true }
