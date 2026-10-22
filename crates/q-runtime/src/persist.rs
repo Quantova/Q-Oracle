@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use q_codec::{Reader, Writer};
+use q_exits::state_mac::state_tag;
 use q_gateway::{AdminRecord, Gateway};
-use qtv_crypto::sha3::sha3_256;
 
 const AUDIT_MAGIC: &[u8; 4] = b"QADM";
 const AUDIT_VERSION: u8 = 1;
@@ -49,7 +49,7 @@ fn audit_entry(seq: u64, prev: &[u8; 32], record: &AdminRecord) -> (Vec<u8>, [u8
         w.bytes_u32(&sig.signature);
     }
     let body = w.finish();
-    let hash = sha3_256(&body);
+    let hash = state_tag(b"admin-audit", &body);
     let mut frame = Writer::new();
     frame.bytes_u32(&body);
     frame.fixed(&hash);
@@ -78,7 +78,7 @@ fn verify_audit(bytes: &[u8], anchor: (u64, [u8; 32])) -> Result<(u64, [u8; 32])
         let torn = |_| format!("is torn inside entry {next}");
         let body = r.bytes_u32().map_err(torn)?;
         let hash = r.array32().map_err(torn)?;
-        if sha3_256(body) != hash {
+        if state_tag(b"admin-audit", body) != hash {
             return Err(format!("entry {next} does not match its hash"));
         }
         let mut b = Reader::new(body);
@@ -248,11 +248,25 @@ impl GuardStore {
     }
 
     pub fn load(&self) -> io::Result<Option<Vec<u8>>> {
-        match fs::read(&self.path) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
+        let mut bytes = match fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        if bytes.len() < 32 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "the guard snapshot carries no state tag",
+            ));
         }
+        let tag = bytes.split_off(bytes.len() - 32);
+        if state_tag(b"guard-snapshot", &bytes)[..] != tag[..] {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "the guard snapshot does not match its state tag",
+            ));
+        }
+        Ok(Some(bytes))
     }
 
     pub fn save(&self, encoded: &[u8]) -> io::Result<()> {
@@ -273,6 +287,7 @@ impl GuardStore {
             }
             let mut file = opts.open(&temp)?;
             file.write_all(encoded)?;
+            file.write_all(&state_tag(b"guard-snapshot", encoded))?;
             file.sync_all()?;
         }
         fs::rename(&temp, &self.path)?;

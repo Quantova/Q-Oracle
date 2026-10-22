@@ -16,6 +16,7 @@ pub mod ledger;
 pub mod outbound;
 pub mod payout;
 pub mod rpc;
+pub mod state_mac;
 pub mod store;
 pub mod vault;
 pub mod watch;

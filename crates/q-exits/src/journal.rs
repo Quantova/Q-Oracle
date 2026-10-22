@@ -120,7 +120,7 @@ fn header() -> [u8; HEADER_LEN] {
 }
 
 fn tag_of(preimage: &[u8]) -> [u8; 4] {
-    let digest = qtv_crypto::sha3::sha3_256(preimage);
+    let digest = crate::state_mac::state_tag(b"exit-journal", preimage);
     [digest[0], digest[1], digest[2], digest[3]]
 }
 

@@ -21,7 +21,7 @@ fn header() -> [u8; HEADER_LEN] {
 }
 
 fn tag_of(burn_ref: &[u8; 32]) -> [u8; 4] {
-    let digest = qtv_crypto::sha3::sha3_256(burn_ref);
+    let digest = crate::state_mac::state_tag(b"replay-ledger", burn_ref);
     [digest[0], digest[1], digest[2], digest[3]]
 }
 
