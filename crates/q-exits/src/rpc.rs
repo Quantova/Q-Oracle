@@ -159,11 +159,23 @@ pub fn decode_finalized_head_epoch(body: &str) -> Result<(u64, Option<u64>), Bur
     Ok((head, epoch))
 }
 
+fn proven_bridge_epoch(value: &Json, state_root: &[u8; 32]) -> Option<u64> {
+    let proof_hex = value.get("bridge_epoch_proof").and_then(Json::as_str)?;
+    let proof: qtv_state::Proof = qtv_codec::from_bytes(&decode_hex(proof_hex).ok()?).ok()?;
+    if !qtv_state::verify(&qtv_block::light::bridge_epoch_key(), &proof, state_root) {
+        return None;
+    }
+    match proof.value() {
+        Some(leaf) => qtv_codec::from_bytes::<u64>(leaf).ok(),
+        None => Some(0),
+    }
+}
+
 pub fn decode_certified_head(
     body: &str,
     anchor: &QuantovaAnchor,
 ) -> Result<(u64, Option<u64>), BurnWatchError> {
-    let (head, epoch) = decode_finalized_head_epoch(body)?;
+    let (head, _) = decode_finalized_head_epoch(body)?;
     let value = parse_json(body)?;
     let header_hex = value
         .get("header_bytes")
@@ -198,7 +210,7 @@ pub fn decode_certified_head(
             "the head certificate does not verify against the pinned committee".to_string(),
         ));
     }
-    Ok((head, epoch))
+    Ok((head, proven_bridge_epoch(&value, header.q_root())))
 }
 
 pub fn decode_finalized_head(body: &str) -> Result<u64, BurnWatchError> {

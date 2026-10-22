@@ -122,6 +122,7 @@ dependencies = [
  "qtv-codec",
  "qtv-crypto",
  "qtv-sampler",
+ "qtv-state",
  "zeroize",
 ]
 
@@ -330,6 +331,14 @@ dependencies = [
 name = "qtv-stark"
 version = "0.1.0"
 dependencies = [
+ "qtv-crypto",
+]
+
+[[package]]
+name = "qtv-state"
+version = "0.1.0"
+dependencies = [
+ "qtv-codec",
  "qtv-crypto",
 ]
 

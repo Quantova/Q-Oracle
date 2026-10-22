@@ -17,6 +17,7 @@ qlc-bitcoin = { workspace = true }
 qlc-ethereum = { workspace = true }
 qtv-block = { path = "../../../Quantova-Chain/crates/qtv-block" }
 qtv-codec = { path = "../../../Quantova-Chain/crates/qtv-codec" }
+qtv-state = { path = "../../../Quantova-Chain/crates/qtv-state" }
 qtv-attest = { path = "../../../QRC-CONSENSUS/crates/qtv-attest" }
 qtv-sampler = { path = "../../../QRC-CONSENSUS/crates/qtv-sampler" }
 zeroize = "1.9"
