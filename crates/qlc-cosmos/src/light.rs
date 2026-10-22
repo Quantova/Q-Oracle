@@ -15,18 +15,34 @@ pub struct TrustedState {
     pub next_validators_hash: Vec<u8>,
 }
 
-pub const PINNED_TRUSTED_STATES: &[(&str, i64, [u8; 32], [u8; 32])] = &[];
+pub struct PinnedTrustedState {
+    pub chain_id: &'static str,
+    pub height: i64,
+    pub header_hash: [u8; 32],
+    pub validators_hash: [u8; 32],
+    pub time_seconds: i64,
+    pub time_nanos: i32,
+    pub next_validators_hash: [u8; 32],
+}
+
+pub const PINNED_TRUSTED_STATES: &[PinnedTrustedState] = &[];
+
+impl PinnedTrustedState {
+    pub fn matches(&self, chain_id: &str, trusted: &TrustedState) -> bool {
+        self.chain_id == chain_id
+            && self.height == trusted.height
+            && self.header_hash == trusted.header_hash
+            && self.validators_hash == trusted.validators.hash()
+            && self.time_seconds == trusted.time.seconds
+            && self.time_nanos == trusted.time.nanos
+            && self.next_validators_hash.as_slice() == trusted.next_validators_hash.as_slice()
+    }
+}
 
 pub fn trusted_state_is_pinned(chain_id: &str, trusted: &TrustedState) -> bool {
-    let validators_hash = trusted.validators.hash();
     PINNED_TRUSTED_STATES
         .iter()
-        .any(|(chain, height, header_hash, pinned_validators)| {
-            *chain == chain_id
-                && *height == trusted.height
-                && *header_hash == trusted.header_hash
-                && *pinned_validators == validators_hash
-        })
+        .any(|pin| pin.matches(chain_id, trusted))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
