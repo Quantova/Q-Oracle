@@ -4,15 +4,12 @@
 use std::path::PathBuf;
 
 use q_exits::{
-    DeskConfig, ExitConfig, MemberConfig, QuantovaAnchor, RpcBurnSource, ATTEST_PK_BYTES,
-    BEACON_SEED_BYTES,
+    DeskConfig, ExitConfig, MemberConfig, QuantovaAnchor, ATTEST_PK_BYTES, BEACON_SEED_BYTES,
 };
 
 pub const EXITS_ENABLED_ENV: &str = "Q_ORACLE_EXITS_ENABLED";
 pub const CHAIN_RPC_HOST_ENV: &str = "Q_ORACLE_CHAIN_RPC_HOST";
 pub const CHAIN_RPC_PORT_ENV: &str = "Q_ORACLE_CHAIN_RPC_PORT";
-pub const DEFAULT_CHAIN_RPC_HOST: &str = "127.0.0.1";
-pub const DEFAULT_CHAIN_RPC_PORT: u16 = 8080;
 
 pub const CHAIN_ID_ENV: &str = "Q_ORACLE_EXITS_CHAIN_ID";
 pub const TAU_ENV: &str = "Q_ORACLE_EXITS_TAU";
@@ -56,19 +53,6 @@ pub fn exit_config_from_env() -> ExitConfig {
 
 pub fn exits_started(config: &ExitConfig) -> bool {
     config.enabled
-}
-
-pub fn burn_source_from_env(config: &ExitConfig) -> Option<RpcBurnSource> {
-    if !config.enabled {
-        return None;
-    }
-    let host =
-        std::env::var(CHAIN_RPC_HOST_ENV).unwrap_or_else(|_| DEFAULT_CHAIN_RPC_HOST.to_string());
-    let port = std::env::var(CHAIN_RPC_PORT_ENV)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_CHAIN_RPC_PORT);
-    Some(RpcBurnSource::new(host, port))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -482,12 +466,6 @@ mod tests {
     #[test]
     fn the_default_config_does_not_start_exits() {
         assert!(!exits_started(&ExitConfig::default()));
-    }
-
-    #[test]
-    fn the_burn_source_is_absent_unless_exits_are_enabled() {
-        assert!(burn_source_from_env(&ExitConfig::default()).is_none());
-        assert!(burn_source_from_env(&ExitConfig { enabled: true }).is_some());
     }
 
     struct MapEnv(BTreeMap<String, String>);

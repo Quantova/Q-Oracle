@@ -30,6 +30,7 @@ pub struct RpcBurnSource {
     host: String,
     port: u16,
     timeout: Duration,
+    certify: Option<QuantovaAnchor>,
 }
 
 impl RpcBurnSource {
@@ -38,6 +39,16 @@ impl RpcBurnSource {
             host: host.into(),
             port,
             timeout: DEFAULT_TIMEOUT,
+            certify: None,
+        }
+    }
+
+    pub fn certified(host: impl Into<String>, port: u16, anchor: QuantovaAnchor) -> RpcBurnSource {
+        RpcBurnSource {
+            host: host.into(),
+            port,
+            timeout: DEFAULT_TIMEOUT,
+            certify: Some(anchor),
         }
     }
 
@@ -46,6 +57,7 @@ impl RpcBurnSource {
             host: host.into(),
             port,
             timeout,
+            certify: None,
         }
     }
 
@@ -122,7 +134,10 @@ impl QuantovaBurnSource for RpcBurnSource {
                 "finalized_head returned status {status}"
             )));
         }
-        decode_finalized_head(&text)
+        match &self.certify {
+            Some(anchor) => decode_certified_head(&text, anchor).map(|(head, _)| head),
+            None => decode_finalized_head(&text),
+        }
     }
 
     fn finalized_block(&self, height: u64) -> Result<Option<FinalizedBlock>, BurnWatchError> {

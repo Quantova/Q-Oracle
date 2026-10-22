@@ -175,7 +175,11 @@ impl ExitService {
             settle,
             desk,
             feed: BurnFeed::new(cfg.start_height, ExitConfig { enabled: true }),
-            source: RpcBurnSource::new(cfg.rpc_host.clone(), cfg.rpc_port),
+            source: RpcBurnSource::certified(
+                cfg.rpc_host.clone(),
+                cfg.rpc_port,
+                cfg.build_anchor()?,
+            ),
             vault_id: cfg.active_vault(),
         })
     }
