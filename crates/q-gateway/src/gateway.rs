@@ -588,6 +588,15 @@ impl Gateway {
         &self.per_asset_minted
     }
 
+    pub fn outstanding_by_asset(&self) -> BTreeMap<[u8; 16], u128> {
+        let mut outstanding = self.per_asset_minted.clone();
+        for ticket in self.pending_exits.values() {
+            let entry = outstanding.entry(ticket.asset_id).or_insert(0);
+            *entry = entry.saturating_add(ticket.amount);
+        }
+        outstanding
+    }
+
     pub fn registered_assets(&self) -> Vec<[u8; 16]> {
         self.per_asset_cap.keys().copied().collect()
     }

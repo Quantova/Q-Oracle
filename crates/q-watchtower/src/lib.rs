@@ -75,7 +75,7 @@ impl Watchtower {
     }
 
     pub fn enforce<R: ReserveView>(gateway: &mut Gateway, reserves: &R) -> Vec<Breach> {
-        let breaches = Watchtower::audit(gateway.minted_by_asset(), reserves);
+        let breaches = Watchtower::audit(&gateway.outstanding_by_asset(), reserves);
         if !breaches.is_empty() {
             gateway.pause_all();
         }

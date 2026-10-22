@@ -107,7 +107,7 @@ pub fn load_reserve_reports(path: &Path) -> Result<Vec<ReserveReport>, ReserveSo
 
 pub fn enforce_reserves(gateway: &mut Gateway) -> Vec<Breach> {
     let mut reserves = StaticReserves::new();
-    let minted: Vec<[u8; 16]> = gateway.minted_by_asset().keys().copied().collect();
+    let minted: Vec<[u8; 16]> = gateway.outstanding_by_asset().into_keys().collect();
     for asset_id in minted {
         if let Some(escrowed) = gateway.escrow_of(&asset_id) {
             reserves.set(asset_id, escrowed);
