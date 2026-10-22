@@ -26,6 +26,8 @@ pub struct QuantovaAnchor {
     genesis: [u8; 32],
     tau: u64,
     commitment: CommitteeCommitment,
+    keys: Vec<MemberKey>,
+    budget: u64,
     beacon: Beacon,
 }
 
@@ -75,12 +77,15 @@ impl QuantovaAnchor {
         if tau < need {
             return Err(ExitError::TauBelowQuorum { tau, need });
         }
-        let commitment = CommitteeCommitment::from_member_keys(slot, keys, budget, DrawMode::Full);
+        let commitment =
+            CommitteeCommitment::from_member_keys(slot, keys.clone(), budget, DrawMode::Full);
         Ok(QuantovaAnchor {
             chain_id,
             genesis: [0u8; 32],
             tau,
             commitment,
+            keys,
+            budget,
             beacon: Beacon::from_seed(beacon_seed),
         })
     }
@@ -104,6 +109,13 @@ impl QuantovaAnchor {
 
     pub fn commitment(&self) -> &CommitteeCommitment {
         &self.commitment
+    }
+
+    pub fn commitment_at(&self, slot: u64) -> CommitteeCommitment {
+        if slot == self.commitment.slot {
+            return self.commitment.clone();
+        }
+        CommitteeCommitment::from_member_keys(slot, self.keys.clone(), self.budget, DrawMode::Full)
     }
 
     pub fn beacon(&self) -> &Beacon {

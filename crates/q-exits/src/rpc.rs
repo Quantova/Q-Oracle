@@ -188,7 +188,7 @@ pub fn decode_certified_head(
     if !certificate
         .verify_with_trusted_commitment(
             anchor.binding(),
-            anchor.commitment(),
+            &anchor.commitment_at(certificate.envelope.slot),
             anchor.beacon(),
             anchor.tau(),
         )

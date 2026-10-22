@@ -44,7 +44,7 @@ impl ProofOfBurn {
 
         let verdict = self.certificate.verify_with_trusted_commitment(
             anchor.binding(),
-            anchor.commitment(),
+            &anchor.commitment_at(self.certificate.envelope.slot),
             anchor.beacon(),
             anchor.tau(),
         );
