@@ -9,7 +9,7 @@ use qtv_stark::stark::{prove_with_domain, verify_with_domain, StarkParams};
 use crate::statement::{CorridorStatement, STATEMENT_DIGEST_LEN};
 
 pub const BRIDGE_BLOWUP: usize = 128;
-pub const BRIDGE_QUERIES: usize = 155;
+pub const BRIDGE_QUERIES: usize = 157;
 
 fn params() -> StarkParams {
     StarkParams {

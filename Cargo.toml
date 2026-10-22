@@ -33,7 +33,7 @@ qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "4e37c529
 qlc-bitcoin = { path = "crates/qlc-bitcoin" }
 qlc-ethereum = { path = "crates/qlc-ethereum" }
 qlc-cosmos = { path = "crates/qlc-cosmos" }
-qtv-stark = { git = "https://github.com/Quantova/q-prover.git", rev = "c56ce780ce3e20889fb3fab94c7dadc998809de3" }
+qtv-stark = { git = "https://github.com/Quantova/q-prover.git", rev = "f04574b5c200d93fdad8d0de2e53d96375581261" }
 qlc-core = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
 qlc-stark = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
 qlc-registry = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }

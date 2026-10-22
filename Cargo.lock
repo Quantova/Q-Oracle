@@ -342,7 +342,7 @@ dependencies = [
 [[package]]
 name = "qtv-stark"
 version = "0.1.0"
-source = "git+https://github.com/Quantova/q-prover.git?rev=c56ce780ce3e20889fb3fab94c7dadc998809de3#c56ce780ce3e20889fb3fab94c7dadc998809de3"
+source = "git+https://github.com/Quantova/q-prover.git?rev=f04574b5c200d93fdad8d0de2e53d96375581261#f04574b5c200d93fdad8d0de2e53d96375581261"
 dependencies = [
  "qtv-crypto",
 ]
