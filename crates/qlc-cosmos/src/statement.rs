@@ -56,7 +56,7 @@ pub fn public_input_digest(statement: &ProofStatement) -> [u8; 32] {
 }
 
 pub fn lower(statement: &ProofStatement) -> StarkStatement {
-    statement.to_stark_statement(public_input_digest(statement))
+    statement.to_stark_statement()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

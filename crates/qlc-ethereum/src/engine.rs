@@ -588,7 +588,7 @@ pub fn public_input_digest(statement: &ProofStatement) -> [u8; 32] {
 }
 
 pub fn lower_to_stark(statement: &ProofStatement) -> StarkStatement {
-    statement.to_stark_statement(public_input_digest(statement))
+    statement.to_stark_statement()
 }
 
 pub fn to_verified_event(
@@ -1626,16 +1626,19 @@ mod tests {
         assert_eq!(statement.encode().len(), ProofStatement::ENCODED_LEN);
 
         let lowered = lower_to_stark(&statement);
+        assert_eq!(lowered.public_input_digest, public_input_digest(&statement));
         let attestation = vec![0x01u8; qlc_airlock::ML_DSA_65_SIG_LEN];
         let stark_proof = vec![0x02u8; 128];
-        let crossing = qlc_airlock::encode_ingress(&attestation, &lowered, &stark_proof);
-        let ingress = qlc_airlock::parse_ingress(&crossing).unwrap();
+        let crossing = qlc_airlock::encode_ingress(&attestation, &statement, &stark_proof).unwrap();
+        let ingress =
+            qlc_airlock::parse_ingress(&crossing, qlc_stark::QUANTOVA_DEST_CHAIN_ID).unwrap();
         assert_eq!(
-            ingress.proof.statement.kind,
+            ingress.statement().kind,
             qlc_stark::StatementKind::EvmLightClient
         );
+        assert_eq!(ingress.claim(), &statement);
         assert_eq!(
-            ingress.attestation.signature.len(),
+            ingress.attestation().signature().len(),
             qlc_airlock::ML_DSA_65_SIG_LEN
         );
     }
