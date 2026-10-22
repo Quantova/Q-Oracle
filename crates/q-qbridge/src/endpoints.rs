@@ -549,6 +549,7 @@ impl PreparedDeposit {
 fn bitcoin_anchor_armed(anchor: &BitcoinAnchor) -> bool {
     !anchor.checkpoint.min_work.is_zero()
         && !anchor.bridge_script.is_empty()
+        && anchor.params.network == qlc_bitcoin::Network::Bitcoin
         && (cfg!(any(test, feature = "test-util"))
             || anchor.params == qlc_bitcoin::network_params(anchor.params.network))
 }
