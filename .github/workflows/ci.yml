@@ -29,6 +29,11 @@ jobs:
       - name: test
         working-directory: Q-Oracle
         run: cargo test --all-features --locked
+      - name: msrv
+        working-directory: Q-Oracle
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          cargo +1.89.0 check --workspace --all-targets --all-features --locked
       - name: deny
         working-directory: Q-Oracle
         run: |
