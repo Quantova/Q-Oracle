@@ -54,7 +54,10 @@ impl QuantovaAnchor {
             if member.attest_pk.iter().all(|&b| b == 0) {
                 return Err(ExitError::DegenerateKey(member.id));
             }
-            if keys.iter().any(|k| k.id == member.id) {
+            if keys
+                .iter()
+                .any(|k| k.id == member.id || k.attest_pk[..] == member.attest_pk[..])
+            {
                 return Err(ExitError::DuplicateMember(member.id));
             }
             let mut attest_pk = [0u8; ATTEST_PK_BYTES];
@@ -182,8 +185,13 @@ mod tests {
 
     #[test]
     fn a_tau_below_the_committee_supermajority_is_refused() {
-        let committee: Vec<MemberConfig> =
-            (1..=4).map(|id| MemberConfig { id, ..member() }).collect();
+        let committee: Vec<MemberConfig> = (1..=4)
+            .map(|id| MemberConfig {
+                id,
+                attest_pk: vec![id as u8 + 1; ATTEST_PK_BYTES],
+                ..member()
+            })
+            .collect();
         assert_eq!(
             QuantovaAnchor::from_config(1, 2, 0, 100, [0u8; 32], committee).err(),
             Some(ExitError::TauBelowQuorum { tau: 2, need: 3 })
