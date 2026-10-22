@@ -146,6 +146,7 @@ pub struct ExitDesk {
     dead: Vec<DeadLetter>,
     consumed: Box<dyn ReplayLedger + Send>,
     journal: Box<dyn ExitJournal + Send>,
+    seized_reserve: u128,
 }
 
 impl ExitDesk {
@@ -196,6 +197,7 @@ impl ExitDesk {
             dead: Vec::new(),
             consumed,
             journal,
+            seized_reserve: 0,
         })
     }
 
@@ -253,9 +255,8 @@ impl ExitDesk {
                     if exit.state != ExitState::Pending {
                         return Err(ExitError::PersistFailed);
                     }
-                    let (vault_id, locked) = (exit.vault_id, exit.locked);
                     exit.state = ExitState::Slashed;
-                    self.vaults.seize(vault_id, locked)?;
+                    self.apply_slash(index as usize)?;
                 }
                 ExitEvent::DeadLetter { index, letter } => {
                     if index as usize != self.dead.len() {
@@ -537,23 +538,35 @@ impl ExitDesk {
                 deadline: opens_at,
             });
         }
-        let vault_id = exit.vault_id;
-        let holder = exit.statement.holder;
-        let locked = exit.locked;
-        let amount = exit.statement.amount;
-        let _ = self.user_premium(amount)?;
-        let user_payout = 0u128;
-        let remainder = locked;
+        self.user_premium(exit.statement.amount)?;
         self.journal
             .append(&ExitEvent::Slash { index: id.0 as u32 })?;
         self.exits[id.0].state = ExitState::Slashed;
+        self.apply_slash(id.0)
+    }
+
+    fn apply_slash(&mut self, index: usize) -> Result<SlashOutcome, ExitError> {
+        let exit = self.exits.get(index).ok_or(ExitError::UnknownExit)?;
+        let (vault_id, holder, locked) = (exit.vault_id, exit.statement.holder, exit.locked);
         self.vaults.seize(vault_id, locked)?;
+        self.seized_reserve = self
+            .seized_reserve
+            .checked_add(locked)
+            .ok_or(ExitError::Overflow)?;
         Ok(SlashOutcome {
             vault_id,
             holder,
-            user_payout,
-            remainder,
+            user_payout: 0,
+            remainder: locked,
         })
+    }
+
+    pub fn take_seized_reserve(&mut self) -> u128 {
+        std::mem::take(&mut self.seized_reserve)
+    }
+
+    pub fn seized_reserve(&self) -> u128 {
+        self.seized_reserve
     }
 }
 
