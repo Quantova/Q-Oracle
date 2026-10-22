@@ -60,6 +60,33 @@ fn member_configs(members: &[Attester]) -> Vec<MemberConfig> {
         .collect()
 }
 
+fn nonce_of(tag: &[u8; 32]) -> u64 {
+    u64::from_le_bytes(tag[..8].try_into().unwrap())
+}
+
+fn bound(
+    chain_id: u64,
+    amount: u128,
+    asset: [u8; 16],
+    destination: [u8; 32],
+    tag: [u8; 32],
+) -> [u8; 32] {
+    let mut e = Encoder::new();
+    e.put_bytes(b"qtv/bridge/burn-ref/v1");
+    e.put_u64(chain_id);
+    e.put_bytes(&asset);
+    e.put_bytes(&HOLDER);
+    e.put_u128(amount);
+    e.put_bytes(&destination);
+    e.put_u64(nonce_of(&tag));
+    e.put_u64(1);
+    qtv_crypto::sha3::sha3_256(&e.into_bytes())
+}
+
+fn bref(tag: [u8; 32]) -> [u8; 32] {
+    bound(CHAIN_ID, AMOUNT, ASSET, BENEFICIARY, tag)
+}
+
 fn burn_leaf() -> Vec<u8> {
     let mut data = Encoder::new();
     data.put_bytes(&ASSET);
@@ -67,9 +94,9 @@ fn burn_leaf() -> Vec<u8> {
     data.put_u128(AMOUNT);
     data.put_bytes(&BENEFICIARY);
     data.put_u64(CHAIN_ID);
-    data.put_u64(0);
+    data.put_u64(nonce_of(&BURN_REF));
     data.put_u64(1);
-    data.put_bytes(&BURN_REF);
+    data.put_bytes(&bref(BURN_REF));
 
     let mut leaf = Encoder::new();
     leaf.put_bytes(b"qtv/native");
@@ -301,7 +328,7 @@ fn a_decoded_burn_block_reproduces_the_event_root_and_verifies() {
     let burn = proofs[0]
         .verify(&anchor)
         .expect("the decoded proof verifies");
-    assert_eq!(burn.burn_ref, BURN_REF);
+    assert_eq!(burn.burn_ref, bref(BURN_REF));
     assert_eq!(burn.amount, AMOUNT);
     assert_eq!(burn.holder, HOLDER);
     assert_eq!(burn.destination, BENEFICIARY);
@@ -427,7 +454,7 @@ fn the_rpc_source_polls_the_gateway_and_verifies_end_to_end() {
     let burn = proofs[0]
         .verify(&anchor)
         .expect("the served proof verifies");
-    assert_eq!(burn.burn_ref, BURN_REF);
+    assert_eq!(burn.burn_ref, bref(BURN_REF));
     assert_eq!(burn.amount, AMOUNT);
     assert_eq!(burn.finalized_height, HEIGHT);
 }

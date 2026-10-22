@@ -15,6 +15,29 @@ const BENEFICIARY: [u8; 32] = [0x55; 32];
 const AMOUNT: u128 = 500;
 const CHAIN_ID: u64 = 9000;
 
+fn nonce_of(tag: &[u8; 32]) -> u64 {
+    u64::from_le_bytes(tag[..8].try_into().unwrap())
+}
+
+fn bound(
+    chain_id: u64,
+    amount: u128,
+    asset: [u8; 16],
+    destination: [u8; 32],
+    tag: [u8; 32],
+) -> [u8; 32] {
+    let mut e = Encoder::new();
+    e.put_bytes(b"qtv/bridge/burn-ref/v1");
+    e.put_u64(chain_id);
+    e.put_bytes(&asset);
+    e.put_bytes(&HOLDER);
+    e.put_u128(amount);
+    e.put_bytes(&destination);
+    e.put_u64(nonce_of(&tag));
+    e.put_u64(1);
+    qtv_crypto::sha3::sha3_256(&e.into_bytes())
+}
+
 fn burn_leaf(burn_ref: [u8; 32]) -> Vec<u8> {
     let mut data = Encoder::new();
     data.put_bytes(&ASSET);
@@ -22,9 +45,9 @@ fn burn_leaf(burn_ref: [u8; 32]) -> Vec<u8> {
     data.put_u128(AMOUNT);
     data.put_bytes(&BENEFICIARY);
     data.put_u64(CHAIN_ID);
-    data.put_u64(0);
+    data.put_u64(nonce_of(&burn_ref));
     data.put_u64(1);
-    data.put_bytes(&burn_ref);
+    data.put_bytes(&bound(CHAIN_ID, AMOUNT, ASSET, BENEFICIARY, burn_ref));
 
     let mut leaf = Encoder::new();
     leaf.put_bytes(b"qtv/native");

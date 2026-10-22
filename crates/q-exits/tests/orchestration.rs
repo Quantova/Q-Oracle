@@ -59,6 +59,33 @@ fn member_configs(members: &[Attester]) -> Vec<MemberConfig> {
         .collect()
 }
 
+fn nonce_of(tag: &[u8; 32]) -> u64 {
+    u64::from_le_bytes(tag[..8].try_into().unwrap())
+}
+
+fn bound(
+    chain_id: u64,
+    amount: u128,
+    asset: [u8; 16],
+    destination: [u8; 32],
+    tag: [u8; 32],
+) -> [u8; 32] {
+    let mut e = Encoder::new();
+    e.put_bytes(b"qtv/bridge/burn-ref/v1");
+    e.put_u64(chain_id);
+    e.put_bytes(&asset);
+    e.put_bytes(&HOLDER);
+    e.put_u128(amount);
+    e.put_bytes(&destination);
+    e.put_u64(nonce_of(&tag));
+    e.put_u64(1);
+    qtv_crypto::sha3::sha3_256(&e.into_bytes())
+}
+
+fn bref(tag: [u8; 32]) -> [u8; 32] {
+    bound(CHAIN_ID, AMOUNT, ASSET, BENEFICIARY, tag)
+}
+
 fn burn_leaf(amount: u128, asset: [u8; 16], destination: [u8; 32], burn_ref: [u8; 32]) -> Vec<u8> {
     burn_leaf_on(CHAIN_ID, amount, asset, destination, burn_ref)
 }
@@ -76,9 +103,9 @@ fn burn_leaf_on(
     data.put_u128(amount);
     data.put_bytes(&destination);
     data.put_u64(chain_id);
-    data.put_u64(0);
+    data.put_u64(nonce_of(&burn_ref));
     data.put_u64(1);
-    data.put_bytes(&burn_ref);
+    data.put_bytes(&bound(chain_id, amount, asset, destination, burn_ref));
 
     let mut leaf = Encoder::new();
     leaf.put_bytes(b"qtv/native");
@@ -257,10 +284,10 @@ fn the_feed_opens_a_vault_exit_from_a_watched_burn() {
 
     let exit = desk.exit(opened[0]).unwrap();
     assert_eq!(exit.state, ExitState::Pending);
-    assert_eq!(exit.statement.burn_ref, BURN_REF);
+    assert_eq!(exit.statement.burn_ref, bref(BURN_REF));
     assert_eq!(exit.statement.amount, AMOUNT);
     assert_eq!(desk.locked_collateral(VAULT), REQUIRED);
-    assert!(desk.is_consumed(&BURN_REF));
+    assert!(desk.is_consumed(&bref(BURN_REF)));
 }
 
 #[test]
@@ -283,7 +310,7 @@ fn a_burn_that_hits_a_thin_vault_is_retried_not_dropped() {
         "the proven burn is queued, not dropped past the cursor"
     );
     assert!(
-        !desk.is_consumed(&BURN_REF),
+        !desk.is_consumed(&bref(BURN_REF)),
         "a thin-vault failure does not consume the burn ref"
     );
 
@@ -297,7 +324,7 @@ fn a_burn_that_hits_a_thin_vault_is_retried_not_dropped() {
         "the queued burn opens once the vault has collateral"
     );
     assert_eq!(feed.pending_len(), 0, "the retry queue drains on success");
-    assert!(desk.is_consumed(&BURN_REF));
+    assert!(desk.is_consumed(&bref(BURN_REF)));
 }
 
 #[test]
@@ -322,7 +349,7 @@ fn a_burn_for_another_destination_is_dead_lettered_not_re_queued_forever() {
         0,
         "a permanent failure is not re-queued every poll"
     );
-    assert!(!desk.is_consumed(&BURN_REF));
+    assert!(!desk.is_consumed(&bound(CHAIN_ID + 1, AMOUNT, ASSET, BENEFICIARY, BURN_REF)));
     let letters = desk.dead_letters();
     assert_eq!(
         letters.len(),
@@ -330,7 +357,10 @@ fn a_burn_for_another_destination_is_dead_lettered_not_re_queued_forever() {
         "the refused burn is recorded, not discarded"
     );
     assert_eq!(letters[0].reason, DeadReason::WrongDestination);
-    assert_eq!(letters[0].burn_ref, BURN_REF);
+    assert_eq!(
+        letters[0].burn_ref,
+        bound(CHAIN_ID + 1, AMOUNT, ASSET, BENEFICIARY, BURN_REF)
+    );
     assert_eq!(letters[0].height, HEIGHT);
 }
 
@@ -406,7 +436,7 @@ fn a_dead_lettered_burn_survives_a_restart_and_opens_on_retry_once_it_is_served(
         .retry_dead_letters(&node, &mut desk, 21)
         .expect("the retry drives");
     assert_eq!(opened.len(), 1, "the retried burn opens its exit");
-    assert!(desk.is_consumed(&BURN_REF));
+    assert!(desk.is_consumed(&bref(BURN_REF)));
     assert_eq!(desk.locked_collateral(VAULT), REQUIRED);
     assert!(
         desk.dead_letters().is_empty(),
@@ -433,7 +463,7 @@ fn a_gated_off_feed_opens_nothing() {
     assert!(!feed.is_enabled());
     assert_eq!(feed.drive(&node, &mut desk, 10), Err(FeedError::Disabled));
     assert_eq!(desk.locked_collateral(VAULT), 0);
-    assert!(!desk.is_consumed(&BURN_REF));
+    assert!(!desk.is_consumed(&bref(BURN_REF)));
 }
 
 #[test]
@@ -478,7 +508,7 @@ fn a_pending_exit_survives_a_restart_through_the_journal() {
         REQUIRED,
         "the collateral is re-locked"
     );
-    assert!(desk.is_consumed(&BURN_REF));
+    assert!(desk.is_consumed(&bref(BURN_REF)));
     assert!(desk.slashable(deadline + GRACE).is_empty());
     assert_eq!(
         desk.slashable(deadline + GRACE + 1),
@@ -513,7 +543,7 @@ fn a_journal_with_a_duplicate_open_is_refused_not_double_paid() {
             amount: AMOUNT,
             holder: HOLDER,
             destination: BENEFICIARY,
-            burn_ref: BURN_REF,
+            burn_ref: bref(BURN_REF),
             finalized_height: HEIGHT,
             vault_id: VAULT,
             locked: REQUIRED,
@@ -578,7 +608,7 @@ fn a_slashed_exit_is_not_reopened_after_a_restart() {
         ExitState::Slashed,
         "a terminal exit is not resurrected as pending"
     );
-    assert!(desk.is_consumed(&BURN_REF));
+    assert!(desk.is_consumed(&bref(BURN_REF)));
     assert!(
         desk.slashable(u64::MAX).is_empty(),
         "a slashed exit is never paid out a second time after a restart"

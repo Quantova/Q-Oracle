@@ -40,6 +40,7 @@ pub enum ExitError {
     BadInclusion,
     NotABurnLeaf,
     LeafDecode,
+    BurnRefUnbound,
     PersistFailed,
     LedgerFull,
     ExitsDisabled,

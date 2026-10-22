@@ -63,6 +63,33 @@ fn member_configs(members: &[Attester]) -> Vec<MemberConfig> {
         .collect()
 }
 
+fn nonce_of(tag: &[u8; 32]) -> u64 {
+    u64::from_le_bytes(tag[..8].try_into().unwrap())
+}
+
+fn bound(
+    chain_id: u64,
+    amount: u128,
+    asset: [u8; 16],
+    destination: [u8; 32],
+    tag: [u8; 32],
+) -> [u8; 32] {
+    let mut e = Encoder::new();
+    e.put_bytes(b"qtv/bridge/burn-ref/v1");
+    e.put_u64(chain_id);
+    e.put_bytes(&asset);
+    e.put_bytes(&HOLDER);
+    e.put_u128(amount);
+    e.put_bytes(&destination);
+    e.put_u64(nonce_of(&tag));
+    e.put_u64(1);
+    qtv_crypto::sha3::sha3_256(&e.into_bytes())
+}
+
+fn bref(tag: [u8; 32]) -> [u8; 32] {
+    bound(CHAIN_ID, AMOUNT, ASSET, BENEFICIARY, tag)
+}
+
 fn burn_leaf(amount: u128, asset: [u8; 16], destination: [u8; 32], burn_ref: [u8; 32]) -> Vec<u8> {
     burn_leaf_on(CHAIN_ID, amount, asset, destination, burn_ref)
 }
@@ -80,9 +107,9 @@ fn burn_leaf_on(
     data.put_u128(amount);
     data.put_bytes(&destination);
     data.put_u64(chain_id);
-    data.put_u64(0);
+    data.put_u64(nonce_of(&burn_ref));
     data.put_u64(1);
-    data.put_bytes(&burn_ref);
+    data.put_bytes(&bound(chain_id, amount, asset, destination, burn_ref));
 
     let mut leaf = Encoder::new();
     leaf.put_bytes(b"qtv/native");
@@ -416,7 +443,7 @@ fn opening_an_exit_locks_the_required_collateral() {
     assert_eq!(desk.exit(id).unwrap().statement.amount, AMOUNT);
     assert_eq!(desk.exit(id).unwrap().statement.holder, HOLDER);
     assert_eq!(desk.exit(id).unwrap().statement.destination, BENEFICIARY);
-    assert!(desk.is_consumed(&BURN_REF));
+    assert!(desk.is_consumed(&bref(BURN_REF)));
 }
 
 #[test]
@@ -432,7 +459,7 @@ fn a_thin_vault_is_refused_and_does_not_consume_the_burn() {
             need: REQUIRED
         })
     );
-    assert!(!desk.is_consumed(&BURN_REF));
+    assert!(!desk.is_consumed(&bref(BURN_REF)));
 }
 
 #[test]
@@ -447,7 +474,7 @@ fn an_exit_with_no_collateralized_vault_is_refused() {
             need: REQUIRED
         })
     );
-    assert!(!desk.is_consumed(&BURN_REF));
+    assert!(!desk.is_consumed(&bref(BURN_REF)));
 }
 
 #[test]
@@ -463,7 +490,7 @@ fn settling_within_the_window_against_a_bitcoin_payout_releases_the_collateral()
     let watcher = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF,
+        &bref(BURN_REF),
     )));
     let release = desk.settle(id, &watcher).unwrap();
     assert_eq!(release.released, REQUIRED);
@@ -489,7 +516,7 @@ fn a_payout_confirmed_after_the_window_still_settles_an_unslashed_exit() {
     let watcher = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF,
+        &bref(BURN_REF),
     )));
     assert_eq!(
         desk.close_overdue(id, &[&watcher], deadline + GRACE + 1),
@@ -523,7 +550,7 @@ fn settle_refuses_when_the_watcher_cannot_prove_a_covering_payout() {
     let watcher = bitcoin_watcher(release_around(release_tx(
         &[0x66; 32],
         AMOUNT as u64,
-        &BURN_REF,
+        &bref(BURN_REF),
     )));
     assert_eq!(desk.settle(id, &watcher), Err(ExitError::PayoutUnproven));
     assert_eq!(
@@ -548,7 +575,7 @@ fn a_burn_for_another_destination_chain_cannot_open_an_exit() {
             expected: CHAIN_ID
         })
     );
-    assert!(!desk.is_consumed(&BURN_REF));
+    assert!(!desk.is_consumed(&bref(BURN_REF)));
     assert_eq!(desk.locked_collateral(1), 0);
 }
 
@@ -589,7 +616,7 @@ fn a_mainnet_burn_is_matched_on_the_64_bit_chain_id_and_acked_under_the_bridge_d
     let watcher = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF,
+        &bound(MAINNET_CHAIN_ID, AMOUNT, ASSET, BENEFICIARY, BURN_REF),
     )));
     desk.settle(id, &watcher).unwrap();
     let decision = desk.decision(id).expect("a settled exit has a decision");
@@ -704,7 +731,7 @@ fn a_forged_header_cannot_open_an_exit() {
     let mut proof = proof_of(&members, &beacon, BURN_REF);
     proof.header_bytes[45] ^= 0xff;
     assert_eq!(desk.open_exit(&proof, 10), Err(ExitError::HeaderMismatch));
-    assert!(!desk.is_consumed(&BURN_REF));
+    assert!(!desk.is_consumed(&bref(BURN_REF)));
     assert_eq!(desk.locked_collateral(1), 0);
 }
 
@@ -723,7 +750,7 @@ fn an_exit_bound_to_one_burn_cannot_settle_against_a_payout_for_another() {
     let payout_for_b = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF_B,
+        &bref(BURN_REF_B),
     )));
     assert_eq!(
         desk.settle(id_a, &payout_for_b),
@@ -740,7 +767,7 @@ fn an_exit_bound_to_one_burn_cannot_settle_against_a_payout_for_another() {
     let payout_for_a = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF,
+        &bref(BURN_REF),
     )));
     let release = desk.settle(id_a, &payout_for_a).unwrap();
     assert_eq!(release.released, REQUIRED);
@@ -771,7 +798,7 @@ fn collateral_is_conserved_across_a_settle_and_a_slash() {
     let payout_for_a = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF,
+        &bref(BURN_REF),
     )));
     let release = desk.settle(id_a, &payout_for_a).unwrap();
     assert_eq!(release.released, REQUIRED);
@@ -840,7 +867,7 @@ fn an_unfinalized_burn_cannot_open_an_exit() {
     let mut desk = desk();
     desk.register_vault(1, 2_000);
     assert_eq!(desk.open_exit(&proof, 10), Err(ExitError::NotFinalized));
-    assert!(!desk.is_consumed(&BURN_REF));
+    assert!(!desk.is_consumed(&bref(BURN_REF)));
     assert_eq!(desk.locked_collateral(1), 0);
 }
 
@@ -880,7 +907,7 @@ fn the_settle_sweep_order_takes_an_exit_off_the_slash_list() {
     let watcher = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF,
+        &bref(BURN_REF),
     )));
 
     for pending in desk.settleable() {
@@ -901,7 +928,7 @@ fn a_settled_exit_is_never_offered_for_settling_again() {
     let watcher = bitcoin_watcher(release_around(release_tx(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF,
+        &bref(BURN_REF),
     )));
     for pending in desk.settleable() {
         desk.settle(pending, &watcher).unwrap();
@@ -949,7 +976,7 @@ fn a_payout_with_vault_change_settles_its_exit_and_never_a_second_one() {
     let watcher = bitcoin_watcher(release_around(release_tx_with_change(
         &BENEFICIARY,
         AMOUNT as u64,
-        &BURN_REF,
+        &bref(BURN_REF),
     )));
 
     desk.settle(id_a, &watcher)
