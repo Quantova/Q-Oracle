@@ -6,12 +6,16 @@ use std::collections::BTreeSet;
 use crate::errors::ExitError;
 use crate::store::ReplayStore;
 
-pub const LEDGER_VERSION: u8 = 1;
+pub const LEDGER_VERSION: u8 = 2;
 pub const MAX_LEDGER_ENTRIES: u32 = 4_000_000;
 
 const MAGIC: [u8; 4] = *b"QXLG";
 const HEADER_LEN: usize = 5;
-const FRAME_LEN: usize = 36;
+const TAG_LEN: usize = 32;
+const FRAME_LEN: usize = 32 + TAG_LEN;
+const LEGACY_VERSION: u8 = 1;
+const LEGACY_TAG_LEN: usize = 4;
+const LEGACY_FRAME_LEN: usize = 32 + LEGACY_TAG_LEN;
 
 fn header() -> [u8; HEADER_LEN] {
     let mut out = [0u8; HEADER_LEN];
@@ -20,9 +24,8 @@ fn header() -> [u8; HEADER_LEN] {
     out
 }
 
-fn tag_of(burn_ref: &[u8; 32]) -> [u8; 4] {
-    let digest = crate::state_mac::state_tag(b"replay-ledger", burn_ref);
-    [digest[0], digest[1], digest[2], digest[3]]
+fn tag_of(burn_ref: &[u8; 32]) -> [u8; TAG_LEN] {
+    crate::state_mac::state_tag(b"replay-ledger", burn_ref)
 }
 
 fn frame_of(burn_ref: &[u8; 32]) -> [u8; FRAME_LEN] {
@@ -33,21 +36,26 @@ fn frame_of(burn_ref: &[u8; 32]) -> [u8; FRAME_LEN] {
 }
 
 fn load_frames(bytes: &[u8]) -> Result<(BTreeSet<[u8; 32]>, bool), ExitError> {
-    if bytes.len() < HEADER_LEN || bytes[..4] != MAGIC || bytes[4] != LEDGER_VERSION {
+    if bytes.len() < HEADER_LEN || bytes[..4] != MAGIC {
         return Err(ExitError::PersistFailed);
     }
+    let (frame_len, tag_len) = match bytes[4] {
+        LEDGER_VERSION => (FRAME_LEN, TAG_LEN),
+        LEGACY_VERSION => (LEGACY_FRAME_LEN, LEGACY_TAG_LEN),
+        _ => return Err(ExitError::PersistFailed),
+    };
     let body = &bytes[HEADER_LEN..];
-    let whole = body.len() / FRAME_LEN;
-    let torn = body.len() % FRAME_LEN != 0;
+    let whole = body.len() / frame_len;
+    let torn = body.len() % frame_len != 0 || bytes[4] != LEDGER_VERSION;
     if whole as u64 > MAX_LEDGER_ENTRIES as u64 {
         return Err(ExitError::PersistFailed);
     }
     let mut set = BTreeSet::new();
     for i in 0..whole {
-        let chunk = &body[i * FRAME_LEN..(i + 1) * FRAME_LEN];
+        let chunk = &body[i * frame_len..(i + 1) * frame_len];
         let mut burn_ref = [0u8; 32];
         burn_ref.copy_from_slice(&chunk[..32]);
-        if chunk[32..] != tag_of(&burn_ref)[..] {
+        if chunk[32..] != tag_of(&burn_ref)[..tag_len] {
             return Err(ExitError::PersistFailed);
         }
         set.insert(burn_ref);

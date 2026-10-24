@@ -4,13 +4,17 @@
 use crate::errors::ExitError;
 use crate::store::ReplayStore;
 
-pub const JOURNAL_VERSION: u8 = 1;
+pub const JOURNAL_VERSION: u8 = 2;
 pub const MAX_JOURNAL_ENTRIES: u32 = 8_000_000;
 
 const MAGIC: [u8; 4] = *b"QXEJ";
 const HEADER_LEN: usize = 5;
 const BODY_LEN: usize = 177;
-const FRAME_LEN: usize = 1 + 4 + BODY_LEN + 4;
+const TAG_LEN: usize = 32;
+const FRAME_LEN: usize = 1 + 4 + BODY_LEN + TAG_LEN;
+const LEGACY_VERSION: u8 = 1;
+const LEGACY_TAG_LEN: usize = 4;
+const LEGACY_FRAME_LEN: usize = 1 + 4 + BODY_LEN + LEGACY_TAG_LEN;
 
 const KIND_OPEN: u8 = 1;
 const KIND_SETTLE: u8 = 2;
@@ -119,9 +123,8 @@ fn header() -> [u8; HEADER_LEN] {
     out
 }
 
-fn tag_of(preimage: &[u8]) -> [u8; 4] {
-    let digest = crate::state_mac::state_tag(b"exit-journal", preimage);
-    [digest[0], digest[1], digest[2], digest[3]]
+fn tag_of(preimage: &[u8]) -> [u8; TAG_LEN] {
+    crate::state_mac::state_tag(b"exit-journal", preimage)
 }
 
 fn frame_of(event: &ExitEvent) -> [u8; FRAME_LEN] {
@@ -198,7 +201,9 @@ fn arr32(b: &[u8], off: usize) -> [u8; 32] {
 }
 
 fn decode_frame(frame: &[u8]) -> Result<ExitEvent, ExitError> {
-    if frame[1 + 4 + BODY_LEN..] != tag_of(&frame[..1 + 4 + BODY_LEN])[..] {
+    if frame[1 + 4 + BODY_LEN..]
+        != tag_of(&frame[..1 + 4 + BODY_LEN])[..frame.len() - (1 + 4 + BODY_LEN)]
+    {
         return Err(ExitError::PersistFailed);
     }
     let index = u32_at(frame, 1);
@@ -241,18 +246,23 @@ fn decode_frame(frame: &[u8]) -> Result<ExitEvent, ExitError> {
 }
 
 fn load_frames(bytes: &[u8]) -> Result<(Vec<ExitEvent>, bool), ExitError> {
-    if bytes.len() < HEADER_LEN || bytes[..4] != MAGIC || bytes[4] != JOURNAL_VERSION {
+    if bytes.len() < HEADER_LEN || bytes[..4] != MAGIC {
         return Err(ExitError::PersistFailed);
     }
+    let frame_len = match bytes[4] {
+        JOURNAL_VERSION => FRAME_LEN,
+        LEGACY_VERSION => LEGACY_FRAME_LEN,
+        _ => return Err(ExitError::PersistFailed),
+    };
     let body = &bytes[HEADER_LEN..];
-    let whole = body.len() / FRAME_LEN;
-    let torn = body.len() % FRAME_LEN != 0;
+    let whole = body.len() / frame_len;
+    let torn = body.len() % frame_len != 0 || bytes[4] != JOURNAL_VERSION;
     if whole as u64 > MAX_JOURNAL_ENTRIES as u64 {
         return Err(ExitError::PersistFailed);
     }
     let mut events = Vec::with_capacity(whole);
     for i in 0..whole {
-        let frame = &body[i * FRAME_LEN..(i + 1) * FRAME_LEN];
+        let frame = &body[i * frame_len..(i + 1) * frame_len];
         events.push(decode_frame(frame)?);
     }
     Ok((events, torn))
