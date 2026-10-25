@@ -53,6 +53,10 @@ impl ProofOfBurn {
             return Err(ExitError::NotFinalized);
         }
 
+        if (self.certificate.attesters().len() as u64) < anchor.tau() {
+            return Err(ExitError::NotFinalized);
+        }
+
         if !verify_inclusion(header.event_root(), &self.leaf, &self.inclusion) {
             return Err(ExitError::BadInclusion);
         }

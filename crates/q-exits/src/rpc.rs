@@ -220,6 +220,7 @@ pub fn decode_certified_head(
             anchor.tau(),
         )
         .is_verified()
+        || (certificate.attesters().len() as u64) < anchor.tau()
     {
         return Err(BurnWatchError::Rpc(
             "the head certificate does not verify against the pinned committee".to_string(),
