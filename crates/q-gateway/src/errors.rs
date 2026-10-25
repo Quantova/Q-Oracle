@@ -56,6 +56,10 @@ pub enum GatewayError {
         until: u64,
         max: u64,
     },
+    FreezeInPast {
+        until: u64,
+        now: u64,
+    },
     NotFrozen,
     WatchdogWithoutClock,
     WatchdogExpired {

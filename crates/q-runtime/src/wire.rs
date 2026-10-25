@@ -2090,6 +2090,11 @@ fn gateway_err_json(e: &GatewayError) -> Json {
             "freeze_window_too_wide",
             vec![("until", Json::Int(*until)), ("max", Json::Int(*max))],
         ),
+        GatewayError::FreezeInPast { until, now } => tagged(
+            "gateway",
+            "freeze_in_past",
+            vec![("until", Json::Int(*until)), ("now", Json::Int(*now))],
+        ),
         GatewayError::NotFrozen => tagged("gateway", "not_frozen", Vec::new()),
         GatewayError::WatchdogWithoutClock => {
             tagged("gateway", "watchdog_without_clock", Vec::new())
@@ -2201,6 +2206,10 @@ fn gateway_err_from(j: &Json) -> Result<GatewayError, WireError> {
         }),
         "watchdog_without_clock" => Ok(GatewayError::WatchdogWithoutClock),
         "not_frozen" => Ok(GatewayError::NotFrozen),
+        "freeze_in_past" => Ok(GatewayError::FreezeInPast {
+            until: as_u64(field(j, "until")?, "until")?,
+            now: as_u64(field(j, "now")?, "now")?,
+        }),
         "freeze_window_too_wide" => Ok(GatewayError::FreezeWindowTooWide {
             until: as_u64(field(j, "until")?, "until")?,
             max: as_u64(field(j, "max")?, "max")?,
