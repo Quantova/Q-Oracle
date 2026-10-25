@@ -827,6 +827,12 @@ pub fn run<A: ToSocketAddrs>(addr: A, snapshot: Option<PathBuf>) -> std::io::Res
              restart and an accepted attestation could mint twice; refusing to serve",
         ));
     };
+    if let Some(problem) = q_exits::state_mac::state_key_file_problem(&path) {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("{problem}; refusing to serve"),
+        ));
+    }
     let first_boot = snapshot_is_first_boot(
         &path,
         std::env::var(INIT_SNAPSHOT_ENV).as_deref() == Ok("1"),
