@@ -102,6 +102,10 @@ impl QuantovaAnchor {
         self.chain_id
     }
 
+    pub fn genesis(&self) -> [u8; 32] {
+        self.genesis
+    }
+
     pub fn binding(&self) -> ChainBinding {
         ChainBinding::new(self.chain_id, self.genesis)
     }

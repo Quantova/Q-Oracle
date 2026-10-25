@@ -71,8 +71,9 @@ fn bound(
     tag: [u8; 32],
 ) -> [u8; 32] {
     let mut e = Encoder::new();
-    e.put_bytes(b"qtv/bridge/burn-ref/v1");
+    e.put_bytes(b"qtv/bridge/burn-ref/v2");
     e.put_u64(chain_id);
+    e.put_bytes(&[0u8; 32]);
     e.put_bytes(&asset);
     e.put_bytes(&HOLDER);
     e.put_u128(amount);
