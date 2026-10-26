@@ -872,8 +872,7 @@ impl Gateway {
         }
         let message = freeze_message_for_era(until_height, self.dest_chain_id, &self.era);
         let accepted = self.quorum_met(&message, FREEZE_DOMAIN, sigs)?;
-        let lifted = self.frozen_until != 0 && self.lifted_freeze == self.frozen_until;
-        if lifted || until_height > self.frozen_until {
+        if until_height > self.frozen_until {
             self.frozen_until = until_height;
             self.lifted_freeze = 0;
             self.log_admin(FREEZE_DOMAIN, message, accepted);
