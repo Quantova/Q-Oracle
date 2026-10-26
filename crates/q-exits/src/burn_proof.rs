@@ -94,6 +94,11 @@ fn parse_burn_leaf(
     let contract = outer.get_bytes().map_err(|_| ExitError::LeafDecode)?;
     let selector = outer.get_bytes().map_err(|_| ExitError::LeafDecode)?;
     let data = outer.get_bytes().map_err(|_| ExitError::LeafDecode)?;
+    let _tx = if outer.remaining() > 0 {
+        outer.get_bytes().map_err(|_| ExitError::LeafDecode)?
+    } else {
+        &[][..]
+    };
     outer.finish().map_err(|_| ExitError::LeafDecode)?;
 
     if contract != NATIVE_EVENT_SOURCE || selector != EVENT_BRIDGE_BURN {
