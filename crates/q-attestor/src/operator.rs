@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::collections::BTreeMap;
+use std::fs::{File, TryLockError};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use q_airlock::SignerSig;
 use q_codec::{attest_context, BridgeFact};
@@ -87,6 +89,7 @@ pub struct DivergenceJournal {
     anchor: PathBuf,
     seq: u64,
     head: [u8; 32],
+    lock: OnceLock<File>,
 }
 
 pub struct JournalImage {
@@ -150,7 +153,37 @@ impl DivergenceJournal {
             anchor: anchor.into(),
             seq: 0,
             head: [0u8; 32],
+            lock: OnceLock::new(),
         }
+    }
+
+    pub fn claim(&self) -> io::Result<()> {
+        if self.lock.get().is_some() {
+            return Ok(());
+        }
+        let mut lock = self.path.clone().into_os_string();
+        lock.push(".lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(PathBuf::from(lock))?;
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    ErrorKind::AddrInUse,
+                    format!(
+                        "another live operator holds the divergence journal at {}; two operators \
+                         sharing one journal could each sign a different history and equivocate",
+                        self.path.display()
+                    ),
+                ))
+            }
+            Err(TryLockError::Error(e)) => return Err(e),
+        }
+        let _ = self.lock.set(file);
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
@@ -253,6 +286,7 @@ impl DivergenceJournal {
     }
 
     pub fn load(&mut self) -> io::Result<Vec<DivergenceRecord>> {
+        self.claim()?;
         let anchor = match read_optional(&self.anchor)? {
             Some(bytes) => Some(DivergenceJournal::decode_anchor(&bytes).ok_or_else(|| {
                 self.refuse(format!(
@@ -521,6 +555,29 @@ mod tests {
         let journal = DivergenceJournal::new(path);
         let _ = std::fs::remove_file(journal.anchor_path());
         journal
+    }
+
+    #[test]
+    fn a_second_live_owner_of_the_journal_is_refused() {
+        let path =
+            std::env::temp_dir().join(format!("q-attestor-owner-{}.qdiv", std::process::id()));
+        for suffix in ["", ".head", ".lock"] {
+            let mut p = path.clone().into_os_string();
+            p.push(suffix);
+            let _ = std::fs::remove_file(PathBuf::from(p));
+        }
+        let mut first = DivergenceJournal::new(path.clone());
+        first.load().expect("the first owner claims the journal");
+        let mut second = DivergenceJournal::new(path.clone());
+        let err = second
+            .load()
+            .expect_err("a second live owner of the same journal must be refused");
+        assert_eq!(err.kind(), ErrorKind::AddrInUse);
+        drop(first);
+        let mut third = DivergenceJournal::new(path.clone());
+        third
+            .load()
+            .expect("reopening the journal after the first owner shuts down succeeds");
     }
 
     fn op() -> Operator<SoftSigner> {
