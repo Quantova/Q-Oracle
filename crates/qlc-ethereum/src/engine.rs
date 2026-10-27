@@ -427,7 +427,7 @@ fn verify_historical<'a>(
         return Err(EthError::BadAncestry);
     };
     if block.slot >= finalized.slot
-        || finalized.slot - block.slot > crate::beacon::SLOTS_PER_HISTORICAL_ROOT
+        || finalized.slot - block.slot >= crate::beacon::SLOTS_PER_HISTORICAL_ROOT
     {
         return Err(EthError::BadAncestry);
     }
@@ -1421,6 +1421,43 @@ mod tests {
             ..finalized
         };
         assert!(verify_historical(&store, &far, &ancestry, &branch).is_err());
+    }
+
+    #[test]
+    fn a_deposit_block_exactly_one_historical_buffer_back_is_refused() {
+        let (current, _) = committee(0x21);
+        let store = committee_store(current);
+        let block = BeaconBlockHeader {
+            slot: 1_000,
+            proposer_index: 7,
+            parent_root: [0x11; 32],
+            state_root: [0x12; 32],
+            body_root: [0x13; 32],
+        };
+        let finalized_slot = block.slot + crate::beacon::SLOTS_PER_HISTORICAL_ROOT;
+        let electra = store.config.is_electra_at_slot(finalized_slot);
+        let (index, depth) = crate::beacon::block_root_layout(electra, block.slot);
+        let branch: Vec<[u8; 32]> = (0..depth as u8).map(|i| [i; 32]).collect();
+        let mut root = block.hash_tree_root();
+        for (i, sibling) in branch.iter().enumerate() {
+            root = if (index >> i) & 1 == 1 {
+                ssz::hash_pair(sibling, &root)
+            } else {
+                ssz::hash_pair(&root, sibling)
+            };
+        }
+        let finalized = BeaconBlockHeader {
+            slot: finalized_slot,
+            proposer_index: 8,
+            parent_root: [0x21; 32],
+            state_root: root,
+            body_root: [0x23; 32],
+        };
+        let ancestry = vec![block];
+        assert!(
+            verify_historical(&store, &finalized, &ancestry, &branch).is_err(),
+            "a block exactly one historical buffer back collides in the ring and must be refused"
+        );
     }
 
     fn committee_store(current: SyncCommittee) -> LightClientStore {
