@@ -1409,14 +1409,10 @@ impl Gateway {
         self.audit_seq = state.audit_seq;
         self.audit_head = state.audit_head;
         for (asset_id, escrowed) in state.escrowed {
-            self.escrowed.entry(asset_id).or_insert(escrowed);
+            self.escrowed.insert(asset_id, escrowed);
         }
         for (asset_id, at_height) in state.reserve_reported_at {
-            let last = self
-                .reserve_reported_at
-                .entry(asset_id)
-                .or_insert(at_height);
-            *last = (*last).max(at_height);
+            self.reserve_reported_at.insert(asset_id, at_height);
         }
         self.admin_records.clear();
         for (source_chain, saved) in state.corridors {
@@ -1760,6 +1756,26 @@ mod tests {
             fresh.minted_assets_without_a_cap(),
             vec![asset],
             "a restored counter with no cap must be reported"
+        );
+    }
+
+    #[test]
+    fn a_restored_escrow_overrides_a_seeded_amount() {
+        let mut gw = Gateway::new(9000, 0x2a, OperatorSet::new(1), 1_000_000);
+        let asset = [0xb2u8; 16];
+        gw.register_asset_cap(asset, 1_000_000_000);
+        gw.advance_to(100);
+        gw.set_escrow(asset, 500);
+        let snapshot = gw.encode_guard();
+
+        let mut fresh = Gateway::new(9000, 0x2a, OperatorSet::new(1), 1_000_000);
+        fresh.register_asset_cap(asset, 1_000_000_000);
+        fresh.set_escrow(asset, 0);
+        fresh.rehydrate_guard(&snapshot).expect("rehydrates");
+        assert_eq!(
+            fresh.escrow_of(&asset),
+            Some(500),
+            "a restored authenticated escrow is authoritative over a seeded amount, not blocked by it"
         );
     }
     use q_codec::{AssetId, Recipient, SourceRef, FACT_VERSION};

@@ -815,7 +815,9 @@ pub(crate) fn reserves_cover(
 pub(crate) fn apply_reserves(state: &SharedState, reserves: &[([u8; 16], u128)]) {
     let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
     for (asset, escrowed) in reserves {
-        guard.gateway.set_escrow(*asset, *escrowed);
+        if guard.gateway.reserve_reported_at(asset).is_none() {
+            guard.gateway.set_escrow(*asset, *escrowed);
+        }
     }
 }
 
