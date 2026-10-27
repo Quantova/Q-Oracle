@@ -15,7 +15,7 @@ name = "q-oracle"
 path = "src/main.rs"
 
 [dependencies]
-libc = "=0.2.189"
+libc = "=0.2.191"
 q-qbridge = { path = "../q-qbridge" }
 q-exits = { path = "../q-exits" }
 q-federated = { workspace = true }
