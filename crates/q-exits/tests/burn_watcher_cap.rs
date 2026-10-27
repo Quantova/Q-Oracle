@@ -154,6 +154,82 @@ fn burns_beyond_the_poll_budget_are_deferred_not_dropped() {
     );
 }
 
+struct FlakyAt {
+    head: u64,
+    counts: Vec<usize>,
+    fail: u64,
+}
+
+impl QuantovaBurnSource for FlakyAt {
+    fn finalized_height(&self) -> Result<u64, BurnWatchError> {
+        Ok(self.head)
+    }
+
+    fn finalized_block(&self, height: u64) -> Result<Option<FinalizedBlock>, BurnWatchError> {
+        if height == self.fail {
+            return Err(BurnWatchError::Rpc(
+                "the node dropped the block".to_string(),
+            ));
+        }
+        let idx = height as usize;
+        if idx == 0 || idx > self.counts.len() {
+            return Ok(None);
+        }
+        let base = idx * 1_000_000;
+        let events: Vec<Vec<u8>> = (0..self.counts[idx - 1])
+            .map(|n| burn_leaf(ref_of(base + n)))
+            .collect();
+        let header = Header::new(
+            height,
+            [0u8; 32],
+            [0x01; 32],
+            [0u8; 32],
+            event_root(&events),
+            [0u8; 32],
+            "qtv1proposer".to_string(),
+            1,
+        );
+        Ok(Some(FinalizedBlock {
+            header_bytes: to_bytes(&header),
+            certificate: certificate(height),
+            events,
+        }))
+    }
+}
+
+#[test]
+fn a_read_prefix_survives_a_later_block_error_and_the_cursor_holds_before_the_gap() {
+    let flaky = FlakyAt {
+        head: 2,
+        counts: vec![1, 1],
+        fail: 2,
+    };
+    let mut watcher = BurnWatcher::new(0);
+    let prefix = watcher
+        .poll(&flaky)
+        .expect("the prefix read before the failing block is delivered not dropped");
+    assert_eq!(prefix.len(), 1, "the burn from block one is delivered");
+    assert_eq!(
+        watcher.scanned_through(),
+        1,
+        "the cursor holds at the last good block and never passes the failing height"
+    );
+
+    let healed = Blocks {
+        head: 2,
+        counts: vec![1, 1],
+    };
+    let rest = watcher
+        .poll(&healed)
+        .expect("the healed node serves the deferred block");
+    assert_eq!(
+        rest.len(),
+        1,
+        "block two is read on retry so nothing was skipped"
+    );
+    assert_eq!(watcher.scanned_through(), 2);
+}
+
 #[test]
 fn a_finalized_height_the_node_cannot_serve_is_retried_not_skipped() {
     let short = Blocks {

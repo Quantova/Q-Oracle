@@ -110,11 +110,21 @@ impl BurnWatcher {
         }
         let mut assembled = Vec::new();
         for height in heights.into_iter().take(MAX_HEIGHTS_PER_POLL as usize) {
-            let Some(block) = source.finalized_block(height)? else {
-                break;
+            let block = match source.finalized_block(height) {
+                Ok(Some(block)) => block,
+                Ok(None) => break,
+                Err(e) => {
+                    if assembled.is_empty() {
+                        return Err(e);
+                    }
+                    break;
+                }
             };
             if !served_matches_header(&block, height) {
-                return Err(BurnWatchError::EventRootMismatch(height));
+                if assembled.is_empty() {
+                    return Err(BurnWatchError::EventRootMismatch(height));
+                }
+                break;
             }
             assembled.extend((0..block.events.len()).filter_map(|index| assemble(&block, index)));
             self.scanned_through = height;
