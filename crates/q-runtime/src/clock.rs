@@ -175,9 +175,10 @@ impl<H: ChainHead> ChainClock<H> {
                 .epoch_moved
                 .is_none_or(|at| now.duration_since(at) >= min_epoch_gap());
             let first_epoch = self.first_boot.map_or(0, |(_, e)| e);
-            if (self.fresh && self.epoch_moved.is_none() && epoch > current && epoch <= first_epoch)
-                || (epoch == current.saturating_add(1) && spaced)
-            {
+            let first_boot_catch_up =
+                self.fresh && self.epoch_moved.is_none() && epoch > current && epoch <= first_epoch;
+            let established = !self.fresh || self.epoch_moved.is_some();
+            if first_boot_catch_up || (established && epoch > current && spaced) {
                 guard.gateway.advance_epoch_to(epoch);
                 self.epoch_moved = Some(now);
             }
@@ -244,7 +245,7 @@ pub fn spawn_clock<H: ChainHead + Send + 'static>(state: SharedState, head: H) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boot::{boot_configured, shared};
+    use crate::boot::{apply_reserves, boot_configured, shared};
     use std::cell::RefCell;
 
     struct Scripted(RefCell<Vec<(u64, Option<u64>)>>);
@@ -329,23 +330,48 @@ mod tests {
     }
 
     #[test]
-    fn a_restarted_clock_takes_one_epoch_step_at_a_time() {
+    fn a_restarted_clock_catches_up_across_several_epochs_and_resets_the_counters() {
+        let asset = [0xa1; 16];
         let state = shared(boot_configured());
-        state.write().unwrap().gateway.advance_to(5_000);
+        {
+            let mut guard = state.write().unwrap();
+            guard.gateway.register_corridor(1, 6);
+            guard.gateway.register_asset_cap(asset, 1_000_000_000);
+            guard.gateway.advance_to(10_000);
+        }
+        apply_reserves(&state, &[(asset, 10_000)]);
+        {
+            let mut guard = state.write().unwrap();
+            guard
+                .gateway
+                .admit_trustless(asset, [1; 32], 1_000, 1)
+                .unwrap();
+            assert_eq!(guard.gateway.current_epoch(), 0);
+            assert_eq!(guard.gateway.epoch_minted(), 1_000);
+        }
         let mut clock = ChainClock::new(Scripted(RefCell::new(vec![
-            (5_001, Some(4)),
-            (5_002, Some(1)),
-            (5_003, Some(2)),
+            (10_001, Some(5)),
+            (10_002, Some(6)),
         ])));
         clock.tick(&state).unwrap();
-        assert_eq!(state.read().unwrap().gateway.current_epoch(), 0);
-        clock.tick(&state).unwrap();
-        assert_eq!(state.read().unwrap().gateway.current_epoch(), 1);
+        {
+            let guard = state.read().unwrap();
+            assert_eq!(
+                guard.gateway.current_epoch(),
+                5,
+                "the local epoch catches up to the reported epoch in one tick"
+            );
+            assert_eq!(
+                guard.gateway.epoch_minted(),
+                0,
+                "the per epoch mint counters reset across the whole jump"
+            );
+        }
         clock.tick(&state).unwrap();
         assert_eq!(
             state.read().unwrap().gateway.current_epoch(),
-            1,
-            "a second step inside the gap is refused"
+            5,
+            "a further step inside the gap is still rate limited"
         );
     }
 
