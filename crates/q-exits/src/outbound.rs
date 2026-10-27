@@ -187,7 +187,7 @@ pub fn verify_ack_quorum(
     era: &[u8; 32],
     threshold: usize,
 ) -> Result<usize, ExitAckError> {
-    let floor = EXIT_ACK_QUORUM_MIN.max(operators.len().saturating_mul(2).div_ceil(3));
+    let floor = EXIT_ACK_QUORUM_MIN.max(operators.len().saturating_mul(2) / 3 + 1);
     if threshold < floor {
         return Err(ExitAckError::ThinThreshold { threshold, floor });
     }
@@ -508,12 +508,12 @@ mod tests {
     fn a_distinct_signer_quorum_over_the_ack_verifies() {
         let chain_id = 0x0123_4567_89AB_CDEFu64;
         let decision = ExitDecision::settle(&statement(), 9000);
-        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let signers: Vec<_> = (1..=4).map(operator).collect();
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let envelope = envelope_signed_by(&decision, chain_id, &signers);
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
-            Ok(3)
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 3),
+            Ok(4)
         );
     }
 
@@ -521,10 +521,10 @@ mod tests {
     fn an_unusable_entry_does_not_spend_its_operator() {
         let chain_id = 0x0123_4567_89AB_CDEFu64;
         let decision = ExitDecision::settle(&statement(), 9000);
-        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let signers: Vec<_> = (1..=4).map(operator).collect();
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let mut envelope = envelope_signed_by(&decision, chain_id, &signers);
-        envelope.signatures.remove(2);
+        envelope.signatures.remove(3);
         envelope.signatures.insert(
             0,
             SignerSig {
@@ -533,8 +533,8 @@ mod tests {
             },
         );
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
-            Ok(2),
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 3),
+            Ok(3),
             "an entry that cannot be used must not consume the operator it names, \
              or a caller holding no key vetoes the quorum"
         );
@@ -544,10 +544,10 @@ mod tests {
     fn an_identifier_outside_the_set_does_not_starve_the_signatures_behind_it() {
         let chain_id = 0x0123_4567_89AB_CDEFu64;
         let decision = ExitDecision::settle(&statement(), 9000);
-        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let signers: Vec<_> = (1..=4).map(operator).collect();
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let mut envelope = envelope_signed_by(&decision, chain_id, &signers);
-        envelope.signatures.remove(2);
+        envelope.signatures.remove(3);
         envelope.signatures.insert(
             0,
             SignerSig {
@@ -556,8 +556,8 @@ mod tests {
             },
         );
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
-            Ok(2),
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 3),
+            Ok(3),
             "an unknown identifier buys nothing and costs the genuine signatures nothing"
         );
     }
@@ -566,7 +566,7 @@ mod tests {
     fn a_signature_list_longer_than_the_operator_set_is_refused() {
         let chain_id = 0x0123_4567_89AB_CDEFu64;
         let decision = ExitDecision::settle(&statement(), 9000);
-        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let signers: Vec<_> = (1..=4).map(operator).collect();
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let mut envelope = envelope_signed_by(&decision, chain_id, &signers);
         envelope.signatures.push(SignerSig {
@@ -574,7 +574,7 @@ mod tests {
             signature: Vec::new(),
         });
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 3),
             Err(ExitAckError::Malformed),
             "one operator holds one seat, so a longer list is malformed and bounds the work"
         );
@@ -611,7 +611,7 @@ mod tests {
             verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 1),
             Err(ExitAckError::ThinThreshold {
                 threshold: 1,
-                floor: 2
+                floor: 3
             })
         );
     }
@@ -627,12 +627,20 @@ mod tests {
             verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
             Err(ExitAckError::ThinThreshold {
                 threshold: 2,
-                floor: 4
+                floor: 5
             }),
             "two acks cannot settle against a six operator set"
         );
         assert_eq!(
             verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 4),
+            Err(ExitAckError::ThinThreshold {
+                threshold: 4,
+                floor: 5
+            }),
+            "exactly two thirds cannot settle against a six operator set, a strict supermajority is required"
+        );
+        assert_eq!(
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 5),
             Ok(6)
         );
     }
@@ -641,12 +649,12 @@ mod tests {
     fn a_quorum_short_of_the_threshold_is_rejected() {
         let chain_id = 9000;
         let decision = ExitDecision::settle(&statement(), 9000);
-        let signers: Vec<_> = (1..=3).map(operator).collect();
+        let signers: Vec<_> = (1..=4).map(operator).collect();
         let operators: Vec<AckOperator> = signers.iter().map(|(op, _)| op.clone()).collect();
         let envelope = envelope_signed_by(&decision, chain_id, &signers[0..1]);
         assert_eq!(
-            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 2),
-            Err(ExitAckError::BelowThreshold { got: 1, need: 2 })
+            verify_ack_quorum(&envelope, &operators, chain_id, &TEST_ERA, 3),
+            Err(ExitAckError::BelowThreshold { got: 1, need: 3 })
         );
     }
 }
