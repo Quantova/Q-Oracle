@@ -16,9 +16,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.4.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
+checksum = "86e055fa6e3e40ad6187ba25b6855eeb635d5271f8e0f0e1e9a5826b8d75bea0"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -26,9 +26,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.9"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "glob"
@@ -38,9 +38,9 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "hermit-abi"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
+checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "libc"
@@ -279,7 +279,7 @@ source = "git+https://github.com/Quantova/Q-Lightclient.git?rev=b2842ae74c8df3b8
 [[package]]
 name = "qtv-account"
 version = "0.1.0"
-source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=806cdd956e277cfed818ef30311ecec0b84b003c#806cdd956e277cfed818ef30311ecec0b84b003c"
+source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=e349230bdd653f7436964a3c6de65af367d638be#e349230bdd653f7436964a3c6de65af367d638be"
 dependencies = [
  "qtv-crypto",
  "qtv-idfmt",
@@ -307,7 +307,7 @@ dependencies = [
 [[package]]
 name = "qtv-block"
 version = "0.1.0"
-source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=806cdd956e277cfed818ef30311ecec0b84b003c#806cdd956e277cfed818ef30311ecec0b84b003c"
+source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=e349230bdd653f7436964a3c6de65af367d638be#e349230bdd653f7436964a3c6de65af367d638be"
 dependencies = [
  "qtv-codec",
  "qtv-crypto",
@@ -318,7 +318,7 @@ dependencies = [
 [[package]]
 name = "qtv-codec"
 version = "0.1.0"
-source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=806cdd956e277cfed818ef30311ecec0b84b003c#806cdd956e277cfed818ef30311ecec0b84b003c"
+source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=e349230bdd653f7436964a3c6de65af367d638be#e349230bdd653f7436964a3c6de65af367d638be"
 
 [[package]]
 name = "qtv-crypto"
@@ -328,7 +328,7 @@ source = "git+https://github.com/Quantova/Q-Crypto.git?rev=04e5ae26a089df4e4cc8f
 [[package]]
 name = "qtv-idfmt"
 version = "0.1.0"
-source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=806cdd956e277cfed818ef30311ecec0b84b003c#806cdd956e277cfed818ef30311ecec0b84b003c"
+source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=e349230bdd653f7436964a3c6de65af367d638be#e349230bdd653f7436964a3c6de65af367d638be"
 
 [[package]]
 name = "qtv-sampler"
@@ -350,7 +350,7 @@ dependencies = [
 [[package]]
 name = "qtv-state"
 version = "0.1.0"
-source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=806cdd956e277cfed818ef30311ecec0b84b003c#806cdd956e277cfed818ef30311ecec0b84b003c"
+source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=e349230bdd653f7436964a3c6de65af367d638be#e349230bdd653f7436964a3c6de65af367d638be"
 dependencies = [
  "qtv-codec",
  "qtv-crypto",
@@ -359,7 +359,7 @@ dependencies = [
 [[package]]
 name = "qtv-tx"
 version = "0.1.0"
-source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=806cdd956e277cfed818ef30311ecec0b84b003c#806cdd956e277cfed818ef30311ecec0b84b003c"
+source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=e349230bdd653f7436964a3c6de65af367d638be#e349230bdd653f7436964a3c6de65af367d638be"
 dependencies = [
  "qtv-account",
  "qtv-codec",
@@ -370,7 +370,7 @@ dependencies = [
 [[package]]
 name = "qtv-wipe"
 version = "0.1.0"
-source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=806cdd956e277cfed818ef30311ecec0b84b003c#806cdd956e277cfed818ef30311ecec0b84b003c"
+source = "git+https://github.com/Quantova/Quantova-Chain.git?rev=e349230bdd653f7436964a3c6de65af367d638be#e349230bdd653f7436964a3c6de65af367d638be"
 
 [[package]]
 name = "quote"
@@ -409,15 +409,15 @@ dependencies = [
 
 [[package]]
 name = "unicode-ident"
-version = "1.0.24"
+version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "zeroize"
-version = "1.9.0"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 dependencies = [
  "zeroize_derive",
 ]
