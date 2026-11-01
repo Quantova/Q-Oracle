@@ -29,7 +29,7 @@ license = "Apache-2.0 OR MIT"
 rust-version = "1.89"
 
 [workspace.dependencies]
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "04e5ae26a089df4e4cc8f20f3973b7cbbee594e3" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "8dc50cf6eaa8bd521c0d203df5cb7fbf5b51e905" }
 qlc-bitcoin = { path = "crates/qlc-bitcoin" }
 qlc-ethereum = { path = "crates/qlc-ethereum" }
 qlc-cosmos = { path = "crates/qlc-cosmos" }
@@ -41,8 +41,8 @@ qlc-airlock = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2
 qtv-block = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
 qtv-codec = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
 qtv-state = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
-qtv-attest = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "223e012417d804d2e953445c38c2b87d0bff6b34" }
-qtv-sampler = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "223e012417d804d2e953445c38c2b87d0bff6b34" }
+qtv-attest = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "f00f4cf53e38a1c818dcf716d92897eebb3b31c2" }
+qtv-sampler = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "f00f4cf53e38a1c818dcf716d92897eebb3b31c2" }
 q-codec = { path = "crates/q-codec" }
 q-airlock = { path = "crates/q-airlock" }
 q-attestor = { path = "crates/q-attestor" }
