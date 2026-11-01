@@ -33,14 +33,14 @@ qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "8dc50cf6
 qlc-bitcoin = { path = "crates/qlc-bitcoin" }
 qlc-ethereum = { path = "crates/qlc-ethereum" }
 qlc-cosmos = { path = "crates/qlc-cosmos" }
-qtv-stark = { git = "https://github.com/Quantova/q-prover.git", rev = "c7c29419faf2f5aa4583631a235a3fe764d3475c" }
+qtv-stark = { git = "https://github.com/Quantova/q-prover.git", rev = "a2fb6f3fd0a07751637b540d96dfa2f4219701d3" }
 qlc-core = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
 qlc-stark = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
 qlc-registry = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
 qlc-airlock = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
-qtv-block = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
-qtv-codec = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
-qtv-state = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "e349230bdd653f7436964a3c6de65af367d638be" }
+qtv-block = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "92ecb7bd3802ff116d557440b9bbb7c88b86c845" }
+qtv-codec = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "92ecb7bd3802ff116d557440b9bbb7c88b86c845" }
+qtv-state = { git = "https://github.com/Quantova/Quantova-Chain.git", rev = "92ecb7bd3802ff116d557440b9bbb7c88b86c845" }
 qtv-attest = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "26cf4bf0dceee67cb2868b3f2afe1089ac69bc57" }
 qtv-sampler = { git = "https://github.com/Quantova/QRC-CONSENSUS.git", rev = "26cf4bf0dceee67cb2868b3f2afe1089ac69bc57" }
 q-codec = { path = "crates/q-codec" }
