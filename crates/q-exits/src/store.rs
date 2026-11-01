@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use std::fs::{self, File};
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, ErrorKind, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 pub struct ReplayStore {
@@ -68,6 +68,22 @@ impl ReplayStore {
         let mut file = opts.open(&self.path)?;
         file.lock()?;
         file.write_all(bytes)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    pub fn write_header(&self, header: &[u8]) -> io::Result<()> {
+        let mut file = fs::OpenOptions::new().write(true).open(&self.path)?;
+        file.lock()?;
+        let len = file.metadata()?.len();
+        if len < header.len() as u64 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "the record file is shorter than its header",
+            ));
+        }
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(header)?;
         file.sync_all()?;
         Ok(())
     }

@@ -4,17 +4,20 @@
 use crate::errors::ExitError;
 use crate::store::ReplayStore;
 
-pub const JOURNAL_VERSION: u8 = 2;
+pub const JOURNAL_VERSION: u8 = 3;
 pub const MAX_JOURNAL_ENTRIES: u32 = 8_000_000;
 
 const MAGIC: [u8; 4] = *b"QXEJ";
-const HEADER_LEN: usize = 5;
+const COUNT_LEN: usize = 8;
+const HEAD_LEN: usize = 32;
+const HEADER_LEN: usize = 5 + COUNT_LEN + HEAD_LEN;
 const BODY_LEN: usize = 177;
 const TAG_LEN: usize = 32;
-const FRAME_LEN: usize = 1 + 4 + BODY_LEN + TAG_LEN;
-const LEGACY_VERSION: u8 = 1;
-const LEGACY_TAG_LEN: usize = 4;
-const LEGACY_FRAME_LEN: usize = 1 + 4 + BODY_LEN + LEGACY_TAG_LEN;
+const FRAME_META: usize = 1 + 4 + BODY_LEN;
+const FRAME_LEN: usize = FRAME_META + TAG_LEN;
+
+const DOMAIN: &[u8] = b"exit-journal";
+const GENESIS_DOMAIN: &[u8] = b"exit-journal-genesis";
 
 const KIND_OPEN: u8 = 1;
 const KIND_SETTLE: u8 = 2;
@@ -116,19 +119,32 @@ pub enum ExitEvent {
     DeadLetter { index: u32, letter: DeadLetter },
 }
 
-fn header() -> [u8; HEADER_LEN] {
+fn genesis_tag() -> [u8; TAG_LEN] {
+    let mut seed = [0u8; 5];
+    seed[..4].copy_from_slice(&MAGIC);
+    seed[4] = JOURNAL_VERSION;
+    crate::state_mac::state_tag(GENESIS_DOMAIN, &seed)
+}
+
+fn chain_tag(prev: &[u8; TAG_LEN], seq: u64, meta: &[u8]) -> [u8; TAG_LEN] {
+    let mut preimage = Vec::with_capacity(TAG_LEN + COUNT_LEN + meta.len());
+    preimage.extend_from_slice(prev);
+    preimage.extend_from_slice(&seq.to_le_bytes());
+    preimage.extend_from_slice(meta);
+    crate::state_mac::state_tag(DOMAIN, &preimage)
+}
+
+fn header(count: u64, head: &[u8; TAG_LEN]) -> [u8; HEADER_LEN] {
     let mut out = [0u8; HEADER_LEN];
     out[..4].copy_from_slice(&MAGIC);
     out[4] = JOURNAL_VERSION;
+    out[5..13].copy_from_slice(&count.to_le_bytes());
+    out[13..].copy_from_slice(head);
     out
 }
 
-fn tag_of(preimage: &[u8]) -> [u8; TAG_LEN] {
-    crate::state_mac::state_tag(b"exit-journal", preimage)
-}
-
-fn frame_of(event: &ExitEvent) -> [u8; FRAME_LEN] {
-    let mut out = [0u8; FRAME_LEN];
+fn body_of(event: &ExitEvent) -> [u8; FRAME_META] {
+    let mut out = [0u8; FRAME_META];
     match event {
         ExitEvent::Open { index, exit } => {
             out[0] = KIND_OPEN;
@@ -167,8 +183,15 @@ fn frame_of(event: &ExitEvent) -> [u8; FRAME_LEN] {
             b[73..81].copy_from_slice(&letter.recorded_at.to_le_bytes());
         }
     }
-    let tag = tag_of(&out[..1 + 4 + BODY_LEN]);
-    out[1 + 4 + BODY_LEN..].copy_from_slice(&tag);
+    out
+}
+
+fn frame_of(event: &ExitEvent, seq: u64, prev: &[u8; TAG_LEN]) -> [u8; FRAME_LEN] {
+    let meta = body_of(event);
+    let tag = chain_tag(prev, seq, &meta);
+    let mut out = [0u8; FRAME_LEN];
+    out[..FRAME_META].copy_from_slice(&meta);
+    out[FRAME_META..].copy_from_slice(&tag);
     out
 }
 
@@ -200,10 +223,11 @@ fn arr32(b: &[u8], off: usize) -> [u8; 32] {
     w
 }
 
-fn decode_frame(frame: &[u8]) -> Result<ExitEvent, ExitError> {
-    if frame[1 + 4 + BODY_LEN..]
-        != tag_of(&frame[..1 + 4 + BODY_LEN])[..frame.len() - (1 + 4 + BODY_LEN)]
-    {
+fn decode_frame(frame: &[u8], seq: u64, prev: &[u8; TAG_LEN]) -> Result<ExitEvent, ExitError> {
+    if frame.len() != FRAME_LEN {
+        return Err(ExitError::PersistFailed);
+    }
+    if frame[FRAME_META..] != chain_tag(prev, seq, &frame[..FRAME_META]) {
         return Err(ExitError::PersistFailed);
     }
     let index = u32_at(frame, 1);
@@ -245,27 +269,33 @@ fn decode_frame(frame: &[u8]) -> Result<ExitEvent, ExitError> {
     }
 }
 
-fn load_frames(bytes: &[u8]) -> Result<(Vec<ExitEvent>, bool), ExitError> {
-    if bytes.len() < HEADER_LEN || bytes[..4] != MAGIC {
+fn load_frames(bytes: &[u8]) -> Result<(Vec<ExitEvent>, bool, [u8; TAG_LEN]), ExitError> {
+    if bytes.len() < HEADER_LEN || bytes[..4] != MAGIC || bytes[4] != JOURNAL_VERSION {
         return Err(ExitError::PersistFailed);
     }
-    let frame_len = match bytes[4] {
-        JOURNAL_VERSION => FRAME_LEN,
-        LEGACY_VERSION => LEGACY_FRAME_LEN,
-        _ => return Err(ExitError::PersistFailed),
-    };
+    let count = u64_at(bytes, 5);
+    let head_expected = arr32(bytes, 13);
     let body = &bytes[HEADER_LEN..];
-    let whole = body.len() / frame_len;
-    let torn = body.len() % frame_len != 0 || bytes[4] != JOURNAL_VERSION;
-    if whole as u64 > MAX_JOURNAL_ENTRIES as u64 {
+    let whole = (body.len() / FRAME_LEN) as u64;
+    let remainder = body.len() % FRAME_LEN != 0;
+    if whole > MAX_JOURNAL_ENTRIES as u64 {
         return Err(ExitError::PersistFailed);
     }
-    let mut events = Vec::with_capacity(whole);
-    for i in 0..whole {
-        let frame = &body[i * frame_len..(i + 1) * frame_len];
-        events.push(decode_frame(frame)?);
+    if count > whole {
+        return Err(ExitError::PersistFailed);
     }
-    Ok((events, torn))
+    let mut events = Vec::with_capacity(count as usize);
+    let mut prev = genesis_tag();
+    for i in 0..count as usize {
+        let frame = &body[i * FRAME_LEN..(i + 1) * FRAME_LEN];
+        events.push(decode_frame(frame, i as u64, &prev)?);
+        prev = arr32(frame, FRAME_META);
+    }
+    if prev != head_expected {
+        return Err(ExitError::PersistFailed);
+    }
+    let torn = remainder || whole > count;
+    Ok((events, torn, prev))
 }
 
 pub trait ExitJournal {
@@ -302,23 +332,26 @@ pub struct PersistentJournal {
     events: Vec<ExitEvent>,
     store: ReplayStore,
     poisoned: bool,
+    head: [u8; TAG_LEN],
 }
 
 impl PersistentJournal {
     pub fn open(store: ReplayStore) -> Result<PersistentJournal, ExitError> {
-        let (events, torn) = match store.load().map_err(|_| ExitError::PersistFailed)? {
+        let (events, torn, head) = match store.load().map_err(|_| ExitError::PersistFailed)? {
             Some(bytes) => load_frames(&bytes)?,
             None => {
+                let head = genesis_tag();
                 store
-                    .save(&header())
+                    .save(&header(0, &head))
                     .map_err(|_| ExitError::PersistFailed)?;
-                (Vec::new(), false)
+                (Vec::new(), false, head)
             }
         };
         let journal = PersistentJournal {
             events,
             store,
             poisoned: false,
+            head,
         };
         if torn {
             journal.compact()?;
@@ -327,11 +360,16 @@ impl PersistentJournal {
     }
 
     fn compact(&self) -> Result<(), ExitError> {
-        let mut out = Vec::with_capacity(HEADER_LEN + self.events.len() * FRAME_LEN);
-        out.extend_from_slice(&header());
-        for event in &self.events {
-            out.extend_from_slice(&frame_of(event));
+        let mut prev = genesis_tag();
+        let mut frames = Vec::with_capacity(self.events.len() * FRAME_LEN);
+        for (i, event) in self.events.iter().enumerate() {
+            let frame = frame_of(event, i as u64, &prev);
+            prev = arr32(&frame, FRAME_META);
+            frames.extend_from_slice(&frame);
         }
+        let mut out = Vec::with_capacity(HEADER_LEN + frames.len());
+        out.extend_from_slice(&header(self.events.len() as u64, &prev));
+        out.extend_from_slice(&frames);
         self.store.save(&out).map_err(|_| ExitError::PersistFailed)
     }
 }
@@ -344,9 +382,17 @@ impl ExitJournal for PersistentJournal {
         if self.events.len() >= MAX_JOURNAL_ENTRIES as usize {
             return Err(ExitError::LedgerFull);
         }
-        match self.store.append_frame(&frame_of(event), HEADER_LEN as u64) {
+        let seq = self.events.len() as u64;
+        let frame = frame_of(event, seq, &self.head);
+        let new_head = arr32(&frame, FRAME_META);
+        let appended = self
+            .store
+            .append_frame(&frame, HEADER_LEN as u64)
+            .and_then(|()| self.store.write_header(&header(seq + 1, &new_head)));
+        match appended {
             Ok(()) => {
                 self.events.push(event.clone());
+                self.head = new_head;
                 Ok(())
             }
             Err(_) => {
@@ -413,7 +459,9 @@ mod tests {
             index: 1,
             exit: an_exit(),
         };
-        ReplayStore::new(&path).append(&frame_of(&stray)).unwrap();
+        ReplayStore::new(&path)
+            .append(&frame_of(&stray, 99, &[0u8; TAG_LEN]))
+            .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
         assert_eq!(journal.append(&stray), Err(ExitError::PersistFailed));
         assert_eq!(
@@ -422,8 +470,9 @@ mod tests {
                 .events()
                 .len(),
             1,
-            "the half written frame is gone once the append is refused"
+            "the uncommitted frame is gone once the append is refused"
         );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         journal.append(&stray).unwrap();
         let reopened = PersistentJournal::open(ReplayStore::new(&path)).unwrap();
         assert_eq!(reopened.events(), &[first, stray]);
@@ -432,6 +481,7 @@ mod tests {
 
     #[test]
     fn every_event_round_trips_through_a_frame() {
+        let prev = genesis_tag();
         for event in [
             ExitEvent::Open {
                 index: 0,
@@ -453,27 +503,35 @@ mod tests {
                 },
             },
         ] {
-            let frame = frame_of(&event);
-            assert_eq!(decode_frame(&frame).unwrap(), event);
+            let frame = frame_of(&event, 0, &prev);
+            assert_eq!(decode_frame(&frame, 0, &prev).unwrap(), event);
         }
     }
 
     #[test]
     fn a_dead_letter_with_an_unknown_reason_fails_closed() {
-        let mut frame = frame_of(&ExitEvent::DeadLetter {
-            index: 0,
-            letter: DeadLetter {
-                height: 1,
-                leaf_digest: [0x44; 32],
-                burn_ref: [0x11; 32],
-                reason: DeadReason::Refused,
-                recorded_at: 1,
+        let prev = genesis_tag();
+        let mut frame = frame_of(
+            &ExitEvent::DeadLetter {
+                index: 0,
+                letter: DeadLetter {
+                    height: 1,
+                    leaf_digest: [0x44; 32],
+                    burn_ref: [0x11; 32],
+                    reason: DeadReason::Refused,
+                    recorded_at: 1,
+                },
             },
-        });
+            0,
+            &prev,
+        );
         frame[5 + 72] = 0xee;
-        let tag = tag_of(&frame[..1 + 4 + BODY_LEN]);
-        frame[1 + 4 + BODY_LEN..].copy_from_slice(&tag);
-        assert_eq!(decode_frame(&frame), Err(ExitError::PersistFailed));
+        let tag = chain_tag(&prev, 0, &frame[..FRAME_META]);
+        frame[FRAME_META..].copy_from_slice(&tag);
+        assert_eq!(
+            decode_frame(&frame, 0, &prev),
+            Err(ExitError::PersistFailed)
+        );
     }
 
     #[test]
