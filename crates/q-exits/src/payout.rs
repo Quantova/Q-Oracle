@@ -165,6 +165,13 @@ impl BitcoinReleaseProof {
         beneficiary: &[u8; 32],
         amount: u128,
     ) -> Result<VerifiedPayout, PayoutProofError> {
+        if params.requires_pinned_checkpoint
+            && !qlc_bitcoin::checkpoint_is_pinned(params.network, checkpoint)
+        {
+            return Err(PayoutProofError::Spv(
+                qlc_bitcoin::SpvError::CheckpointNotArmed,
+            ));
+        }
         let pinned = checkpoint
             .height
             .checked_sub(self.start_height)
