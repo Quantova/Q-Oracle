@@ -29,11 +29,11 @@ license = "Apache-2.0 OR MIT"
 rust-version = "1.89"
 
 [workspace.dependencies]
-qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "8dc50cf6eaa8bd521c0d203df5cb7fbf5b51e905" }
+qtv-crypto = { git = "https://github.com/Quantova/Q-Crypto.git", rev = "38f41dede65ed1918e89402c61b711defe16ae26" }
 qlc-bitcoin = { path = "crates/qlc-bitcoin" }
 qlc-ethereum = { path = "crates/qlc-ethereum" }
 qlc-cosmos = { path = "crates/qlc-cosmos" }
-qtv-stark = { git = "https://github.com/Quantova/q-prover.git", rev = "a2fb6f3fd0a07751637b540d96dfa2f4219701d3" }
+qtv-stark = { git = "https://github.com/Quantova/q-prover.git", rev = "c8a88e7a95b598ceefc2a57e934ba7e0e67adfbc" }
 qlc-core = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
 qlc-stark = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
 qlc-registry = { git = "https://github.com/Quantova/Q-Lightclient.git", rev = "b2842ae74c8df3b872b72fe9b17e49036b600980" }
