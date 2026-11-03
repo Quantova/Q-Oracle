@@ -1408,12 +1408,8 @@ impl Gateway {
         self.global_resumed_at = state.global_resumed_at;
         self.audit_seq = state.audit_seq;
         self.audit_head = state.audit_head;
-        for (asset_id, escrowed) in state.escrowed {
-            self.escrowed.insert(asset_id, escrowed);
-        }
-        for (asset_id, at_height) in state.reserve_reported_at {
-            self.reserve_reported_at.insert(asset_id, at_height);
-        }
+        self.escrowed = state.escrowed;
+        self.reserve_reported_at = state.reserve_reported_at;
         self.admin_records.clear();
         for (source_chain, saved) in state.corridors {
             if let Some(current) = self.corridors.get_mut(&source_chain) {
