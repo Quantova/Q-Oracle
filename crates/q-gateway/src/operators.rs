@@ -141,6 +141,9 @@ pub fn verified_quorum(
     sigs: &[SignerSig],
     set: &OperatorSet,
 ) -> Vec<SignerSig> {
+    if sigs.len() > set.size() {
+        return Vec::new();
+    }
     let mut distinct: BTreeSet<u32> = BTreeSet::new();
     let mut attempted: BTreeSet<(u32, Vec<u8>)> = BTreeSet::new();
     let mut accepted = Vec::new();
